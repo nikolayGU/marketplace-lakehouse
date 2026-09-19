@@ -14,3 +14,4 @@ airflow/logs/
 docs/HANDOFF.local.md
 .idea/
 .vscode/
+.claude/settings.local.json

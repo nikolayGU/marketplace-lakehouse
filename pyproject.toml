@@ -19,6 +19,7 @@ dev = [
     "pydantic-settings>=2.10",
     "psycopg[binary]>=3.2",
     "prometheus-client>=0.22",
+    "pre-commit>=4.3",
 ]
 
 [tool.ruff]
@@ -32,6 +33,8 @@ select = ["E", "F", "I", "B", "UP", "N", "SIM", "RUF"]
 python_version = "3.12"
 strict = true
 ignore_missing_imports = true
+# mypy fails on a directory without .py files; add oltp, streaming, airflow/dags as they appear.
+files = ["scripts", "tests"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -48,6 +48,7 @@ Requirements: Windows 11 with WSL2 + Docker Desktop (or any Linux with Docker), 
 
 ```bash
 make secrets                 # generates .env from .env.example
+make hooks                   # installs pre-commit hooks (ruff, yamllint, gitleaks)
 make data                    # downloads the Olist dataset into data/raw (Kaggle CLI or manual)
 make up PROFILE=core         # postgres x2, kafka, connect, minio, spark-bronze, replayer
 make up PROFILE=query        # trino

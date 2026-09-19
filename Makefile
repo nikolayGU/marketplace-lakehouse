@@ -8,8 +8,11 @@ help: ## list targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-24s %s\n", $$1, $$2}'
 
 # ---------------------------------------------------------------- setup
-secrets: ## create .env from .env.example with generated passwords
-	@test -f .env && echo ".env exists, not overwriting" || python scripts/make_env.py
+secrets: ## create .env from .env.example with generated passwords (never overwrites)
+	uv run python scripts/make_env.py
+
+hooks: ## install pre-commit hooks into .git
+	uv run pre-commit install
 
 data: ## download Olist dataset into data/raw (needs kaggle cli or manual download)
 	python scripts/fetch_data.py
@@ -62,9 +65,9 @@ chaos-%: ## run a failure scenario: make chaos-spark-kill
 	bash scripts/chaos/$*.sh
 
 # ---------------------------------------------------------------- quality
-lint: ## ruff, mypy, yamllint, sqlfluff, hadolint, compose config
+lint: ## ruff, mypy, yamllint, sqlfluff, compose config
 	uv run ruff check . && uv run ruff format --check .
-	uv run mypy oltp streaming airflow/dags tests
+	uv run mypy
 	uv run yamllint -c .yamllint docker observability airflow .github
 	uv run sqlfluff lint dbt/models oltp/migrations
 	$(COMPOSE) --profile '*' config -q
@@ -75,4 +78,4 @@ test: ## unit tests
 dbt-parse: ## dbt parse without a warehouse
 	cd dbt && uv run dbt parse --profiles-dir . --target ci
 
-.PHONY: help secrets data up down status logs nuke replay replay-status psql trino kafka-topics kafka-groups connector-status iceberg-demo lint test dbt-parse
+.PHONY: help secrets hooks data up down status logs nuke replay replay-status psql trino kafka-topics kafka-groups connector-status iceberg-demo lint test dbt-parse

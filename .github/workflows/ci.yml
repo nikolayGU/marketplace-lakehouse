@@ -15,7 +15,7 @@ jobs:
           python-version: "3.12"
       - run: uv sync --group dev
       - run: uv run ruff check . && uv run ruff format --check .
-      - run: uv run mypy oltp streaming airflow/dags tests
+      - run: uv run mypy
       - run: uv run yamllint -c .yamllint docker observability airflow .github
       - run: uv run sqlfluff lint dbt/models oltp/migrations
       - run: uv run pytest tests/unit -q
@@ -48,4 +48,4 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  # smoke: manual/nightly, boots `core`, replays 60 s, asserts bronze rows via trino cli. Week 5.
+# smoke: manual/nightly, boots `core`, replays 60 s, asserts bronze rows via trino cli. Week 5.

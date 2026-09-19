@@ -288,7 +288,8 @@ services:
     environment:
       TRINO_XMX: ${TRINO_XMX}
     volumes:
-      - ./trino/etc:/etc/trino:ro   # TODO(W1): config.properties, jvm.config (uses TRINO_XMX), catalog/lake.properties (jdbc first, rest later)
+      # TODO(W1): config.properties, jvm.config (uses TRINO_XMX), catalog/lake.properties (jdbc first, rest later)
+      - ./trino/etc:/etc/trino:ro
     ports:
       - "${BIND_IP}:8080:8080"
     healthcheck:
