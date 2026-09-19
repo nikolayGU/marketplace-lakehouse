@@ -1,0 +1,27 @@
+{
+  "name": "shop-connector",
+  "config": {
+    "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
+    "tasks.max": "1",
+    "database.hostname": "postgres-oltp",
+    "database.port": "5432",
+    "database.user": "${DEBEZIUM_USER}",
+    "database.password": "${DEBEZIUM_PASSWORD}",
+    "database.dbname": "${OLTP_DB}",
+    "topic.prefix": "oltp",
+    "plugin.name": "pgoutput",
+    "publication.name": "shop_publication",
+    "slot.name": "shop_slot",
+    "schema.include.list": "shop",
+    "table.include.list": "shop.customers,shop.sellers,shop.products,shop.orders,shop.order_items,shop.payments,shop.reviews",
+    "snapshot.mode": "initial",
+    "heartbeat.interval.ms": "10000",
+    "tombstones.on.delete": "false",
+    "decimal.handling.mode": "double",
+    "time.precision.mode": "connect",
+    "key.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "key.converter.schemas.enable": "false",
+    "value.converter.schemas.enable": "false"
+  }
+}

@@ -1,0 +1,16 @@
+.env
+data/raw/
+data/checkpoints/
+*.zip
+__pycache__/
+.venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+dbt/target/
+dbt/dbt_packages/
+dbt/logs/
+airflow/logs/
+docs/HANDOFF.local.md
+.idea/
+.vscode/

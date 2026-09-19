@@ -1,0 +1,78 @@
+.DEFAULT_GOAL := help
+COMPOSE := docker compose --env-file .env -f docker/compose.yaml
+PROFILE ?= core
+comma := ,
+PROFILE_FLAGS = $(foreach p,$(subst $(comma), ,$(PROFILE)),--profile $(p))
+
+help: ## list targets
+	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-24s %s\n", $$1, $$2}'
+
+# ---------------------------------------------------------------- setup
+secrets: ## create .env from .env.example with generated passwords
+	@test -f .env && echo ".env exists, not overwriting" || python scripts/make_env.py
+
+data: ## download Olist dataset into data/raw (needs kaggle cli or manual download)
+	python scripts/fetch_data.py
+
+# ---------------------------------------------------------------- lifecycle
+up: ## start profiles: make up PROFILE=core,query
+	$(COMPOSE) $(PROFILE_FLAGS) up -d --build
+
+down: ## stop profiles (volumes kept): make down PROFILE=bi
+	$(COMPOSE) $(PROFILE_FLAGS) down
+
+status: ## compose ps with health
+	$(COMPOSE) --profile '*' ps
+
+logs: ## follow logs: make logs S=spark-bronze
+	$(COMPOSE) logs -f --tail=200 $(S)
+
+nuke: ## destroy everything including volumes, checkpoints and data (asks first)
+	@read -p "This deletes all volumes and checkpoints. Type 'yes' to continue: " a && [ "$$a" = "yes" ]
+	$(COMPOSE) --profile '*' down -v --remove-orphans
+
+# ---------------------------------------------------------------- operate
+replay: ## register debezium connector and start the replayer
+	bash connect/register.sh
+	$(COMPOSE) exec oltp-replayer python -m replayer start
+
+replay-status: ## replayer position and virtual clock
+	curl -s http://127.0.0.1:8000/status
+
+psql: ## psql into the source database
+	$(COMPOSE) exec postgres-oltp psql -U $${OLTP_USER:-shop} -d $${OLTP_DB:-shop}
+
+trino: ## trino cli, catalog lake
+	$(COMPOSE) exec trino trino --catalog lake
+
+kafka-topics: ## topics with partitions
+	$(COMPOSE) exec kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --describe
+
+kafka-groups: ## consumer groups and lag
+	$(COMPOSE) exec kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --all-groups --describe
+
+connector-status: ## debezium connector state
+	curl -s http://127.0.0.1:8083/connectors/shop-connector/status | python -m json.tool
+
+iceberg-demo: ## snapshots, time travel, files before/after compaction
+	bash scripts/iceberg/demo.sh
+
+# ---------------------------------------------------------------- chaos (week 2+)
+chaos-%: ## run a failure scenario: make chaos-spark-kill
+	bash scripts/chaos/$*.sh
+
+# ---------------------------------------------------------------- quality
+lint: ## ruff, mypy, yamllint, sqlfluff, hadolint, compose config
+	uv run ruff check . && uv run ruff format --check .
+	uv run mypy oltp streaming airflow/dags tests
+	uv run yamllint -c .yamllint docker observability airflow .github
+	uv run sqlfluff lint dbt/models oltp/migrations
+	$(COMPOSE) --profile '*' config -q
+
+test: ## unit tests
+	uv run pytest tests/unit -q
+
+dbt-parse: ## dbt parse without a warehouse
+	cd dbt && uv run dbt parse --profiles-dir . --target ci
+
+.PHONY: help secrets data up down status logs nuke replay replay-status psql trino kafka-topics kafka-groups connector-status iceberg-demo lint test dbt-parse

@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "cdc-envelope",
+  "title": "Debezium PostgreSQL envelope as consumed by bronze_cdc_ingest",
+  "type": "object",
+  "required": ["op", "ts_ms", "source"],
+  "properties": {
+    "op": {"enum": ["c", "u", "d", "r"]},
+    "ts_ms": {"type": "integer"},
+    "before": {"type": ["object", "null"]},
+    "after": {"type": ["object", "null"]},
+    "source": {
+      "type": "object",
+      "required": ["lsn", "table", "schema", "ts_ms"],
+      "properties": {
+        "lsn": {"type": "integer"},
+        "txId": {"type": ["integer", "null"]},
+        "table": {"type": "string"},
+        "schema": {"type": "string"},
+        "ts_ms": {"type": "integer"},
+        "snapshot": {"type": ["string", "boolean", "null"]}
+      }
+    }
+  }
+}
