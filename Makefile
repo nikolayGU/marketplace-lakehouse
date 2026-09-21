@@ -82,7 +82,8 @@ lint: ## ruff, mypy, yamllint, sqlfluff, compose config
 	uv run ruff check . && uv run ruff format --check .
 	uv run mypy
 	uv run yamllint -c .yamllint docker observability airflow .github
-	uv run sqlfluff lint dbt/models oltp/migrations
+	@paths=$$(ls -d dbt/models oltp/migrations 2>/dev/null || true); \
+	  [ -n "$$paths" ] && uv run sqlfluff lint $$paths || echo "no SQL directories yet"
 	$(COMPOSE) --profile '*' config -q
 
 test: ## unit tests

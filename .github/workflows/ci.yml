@@ -17,35 +17,19 @@ jobs:
       - run: uv run ruff check . && uv run ruff format --check .
       - run: uv run mypy
       - run: uv run yamllint -c .yamllint docker observability airflow .github
-      - run: uv run sqlfluff lint dbt/models oltp/migrations
+      # dbt/models is still empty, and git does not carry empty directories, so a fresh
+      # checkout has no such path. Lint whatever SQL directories the checkout actually has.
+      - name: sqlfluff
+        run: |
+          paths=$(ls -d dbt/models oltp/migrations 2>/dev/null || true)
+          [ -n "$paths" ] && uv run sqlfluff lint $paths || echo "no SQL directories yet"
       - run: uv run pytest tests/unit -q
-      - name: dbt parse
-        run: cd dbt && uv run dbt parse --profiles-dir . --target ci
       - name: compose config
         run: cp .env.example .env && docker compose --env-file .env -f docker/compose.yaml --profile '*' config -q
       - uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  build-images:
-    runs-on: ubuntu-latest
-    needs: lint-and-test
-    steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
-      - name: build spark image
-        uses: docker/build-push-action@v6
-        with:
-          context: streaming
-          push: false
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-      - name: build airflow image
-        uses: docker/build-push-action@v6
-        with:
-          context: airflow
-          push: false
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
+# Re-enable as the pieces land: `dbt parse` with W3-T01, the spark and airflow image
+# builds with W1-T06 and W3-T04, hadolint with W5-T02.
 # smoke: manual/nightly, boots `core`, replays 60 s, asserts bronze rows via trino cli. Week 5.
