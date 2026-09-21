@@ -14,8 +14,14 @@ secrets: ## create .env from .env.example with generated passwords (never overwr
 hooks: ## install pre-commit hooks into .git
 	uv run pre-commit install
 
-data: ## download Olist dataset into data/raw (needs kaggle cli or manual download)
-	python scripts/fetch_data.py
+data: ## download Olist dataset into data/raw
+	uv run python scripts/fetch_data.py
+
+migrate: ## apply oltp/migrations to the source database
+	PYTHONPATH=oltp uv run python -m replayer.migrations
+
+load: ## bulk-load data/raw into schema shop
+	PYTHONPATH=oltp uv run python -m replayer.load
 
 # ---------------------------------------------------------------- lifecycle
 up: ## start profiles: make up PROFILE=core,query
@@ -78,4 +84,4 @@ test: ## unit tests
 dbt-parse: ## dbt parse without a warehouse
 	cd dbt && uv run dbt parse --profiles-dir . --target ci
 
-.PHONY: help secrets hooks data up down status logs nuke replay replay-status psql trino kafka-topics kafka-groups connector-status iceberg-demo lint test dbt-parse
+.PHONY: help secrets hooks data migrate load up down status logs nuke replay replay-status psql trino kafka-topics kafka-groups connector-status iceberg-demo lint test dbt-parse

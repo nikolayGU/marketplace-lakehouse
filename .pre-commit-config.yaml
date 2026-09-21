@@ -2,8 +2,12 @@ repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
     hooks:
+      # data/sample is a byte-faithful slice of the source dataset: review comments carry
+      # trailing spaces and these hooks would silently rewrite the data.
       - id: trailing-whitespace
+        exclude: ^data/sample/
       - id: end-of-file-fixer
+        exclude: ^data/sample/
       - id: check-yaml
       - id: check-json
       - id: check-added-large-files

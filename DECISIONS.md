@@ -22,6 +22,7 @@ superseded. Longer reasoning lives in `docs/planning/00-mini-architecture-review
 | ADR-015 | Removed: ClickHouse, k8s, Terraform, Ansible, Loki, Alertmanager delivery, Cosmos | accepted |
 | ADR-016 | Compose profiles and the rule "never all profiles at once" as the RAM strategy | accepted |
 | ADR-017 | Stateful windowed job `orders_per_minute` (watermark, state, update mode) is mandatory, not optional | accepted |
+| ADR-018 | `REPLICA IDENTITY FULL` on all `shop` tables so CDC `before` carries the whole previous row | accepted |
 
 ## ADR-001 Real data via Olist replay
 
@@ -89,3 +90,24 @@ exposes `spark_streaming_input_rows_total`, `spark_streaming_batch_duration_seco
 `spark_streaming_kafka_lag` (latest broker offset minus processed offset) via
 `prometheus_client` on the driver's HTTP port. Consequences: ~60 lines of Python, a real
 "how do you monitor a Spark stream" answer.
+
+## ADR-018 REPLICA IDENTITY FULL on the source tables
+
+Context: Debezium fills the `before` field of an event from whatever Postgres wrote into the
+WAL for the old row, and that is governed by the table's replica identity. The Debezium
+PostgreSQL documentation is explicit: with `REPLICA IDENTITY DEFAULT`, "UPDATE and DELETE events
+contain the previous values for the primary key columns of a table", while with
+`REPLICA IDENTITY FULL` they "contain the previous values of all columns in the table".
+
+Decision: set `REPLICA IDENTITY FULL` on all seven `shop` tables in `001_schema.sql`.
+
+Rationale: half the point of this project is being able to open one UPDATE envelope and say what
+changed, which the Kafka gate asks for directly. With DEFAULT, a status change from `shipped` to
+`delivered` produces a `before` holding only `order_id`, and the question cannot be answered from
+the event at all. Soft deletes in silver would survive on DEFAULT, since they only need the key,
+but late-event ordering and any "what did this row look like before" query would not.
+
+Consequences: every UPDATE writes the whole old row into the WAL, so WAL volume and replication
+slot pressure grow. At this scale (100k orders, 24 h Kafka retention, one laptop) that is cheap,
+and slot lag is monitored anyway (`SlotWalRetainedHigh`, W4-T05). If WAL growth ever becomes the
+bottleneck, the fallback is FULL on `orders` alone and DEFAULT elsewhere.

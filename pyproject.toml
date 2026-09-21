@@ -20,6 +20,7 @@ dev = [
     "psycopg[binary]>=3.2",
     "prometheus-client>=0.22",
     "pre-commit>=4.3",
+    "kaggle>=2.2.4",
 ]
 
 [tool.ruff]
@@ -33,8 +34,12 @@ select = ["E", "F", "I", "B", "UP", "N", "SIM", "RUF"]
 python_version = "3.12"
 strict = true
 ignore_missing_imports = true
-# mypy fails on a directory without .py files; add oltp, streaming, airflow/dags as they appear.
-files = ["scripts", "tests"]
+# mypy fails on a directory without .py files; add streaming and airflow/dags as they appear.
+files = ["scripts", "tests", "oltp"]
+# `replayer` is a top-level package inside oltp/, which is what the container sees too.
+mypy_path = "oltp"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# `replayer` lives in oltp/, same as inside the container image.
+pythonpath = ["oltp", "."]
