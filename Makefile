@@ -20,8 +20,15 @@ data: ## download Olist dataset into data/raw
 migrate: ## apply oltp/migrations to the source database
 	PYTHONPATH=oltp uv run python -m replayer.migrations
 
-load: ## bulk-load data/raw into schema shop
-	PYTHONPATH=oltp uv run python -m replayer.load
+replay-load: ## shift dates, load the initial share, build the replay schedule
+	PYTHONPATH=oltp uv run python -m replayer load
+
+replay-start: ## run the replayer locally against 127.0.0.1 (ctrl-c to stop)
+	PYTHONPATH=oltp uv run python -m replayer start
+
+replay-reset: ## DESTRUCTIVE: empty shop and drop replay staging (asks first)
+	@read -p "This empties every shop table. Type 'yes' to continue: " a && [ "$$a" = "yes" ]
+	PYTHONPATH=oltp uv run python -m replayer reset --yes
 
 # ---------------------------------------------------------------- lifecycle
 up: ## start profiles: make up PROFILE=core,query
@@ -46,7 +53,7 @@ replay: ## register debezium connector and start the replayer
 	$(COMPOSE) exec oltp-replayer python -m replayer start
 
 replay-status: ## replayer position and virtual clock
-	curl -s http://127.0.0.1:8000/status
+	PYTHONPATH=oltp uv run python -m replayer status
 
 psql: ## psql into the source database
 	$(COMPOSE) exec postgres-oltp psql -U $${OLTP_USER:-shop} -d $${OLTP_DB:-shop}
@@ -84,4 +91,4 @@ test: ## unit tests
 dbt-parse: ## dbt parse without a warehouse
 	cd dbt && uv run dbt parse --profiles-dir . --target ci
 
-.PHONY: help secrets hooks data migrate load up down status logs nuke replay replay-status psql trino kafka-topics kafka-groups connector-status iceberg-demo lint test dbt-parse
+.PHONY: help secrets hooks data migrate replay-load replay-start replay-reset up down status logs nuke replay replay-status psql trino kafka-topics kafka-groups connector-status iceberg-demo lint test dbt-parse

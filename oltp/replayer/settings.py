@@ -5,7 +5,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    """Source database connection.
+    """Source database connection and replay knobs.
 
     Inside compose the DSN arrives ready-made as OLTP_DSN. Run from the repo root there is no
     such variable, so it is assembled from the same pieces `make secrets` wrote into `.env`.
@@ -19,6 +19,21 @@ class Settings(BaseSettings):
     oltp_db: str = "shop"
     oltp_host: str = Field(default="127.0.0.1", validation_alias="BIND_IP")
     oltp_port: int = 5432
+
+    # Virtual seconds per real second. 2880 replays one day of history every 30 seconds.
+    replay_speed: float = 2880.0
+    # Share of the history bulk-loaded before the clock starts; the rest is replayed.
+    replay_initial_share: float = 0.8
+    # Share of delivery updates held back by replay_late_delay_seconds of real time.
+    replay_late_ratio: float = 0.0
+    replay_late_delay_seconds: int = 300
+    # Share of updates emitted twice, byte for byte, to exercise dedup downstream.
+    replay_duplicate_ratio: float = 0.0
+    replay_schema_evolution_at: str = ""
+
+    http_port: int = 8000
+    # How many due events one pass of the loop claims. Bounds memory and transaction size.
+    replay_batch_size: int = 500
 
     @property
     def dsn(self) -> str:

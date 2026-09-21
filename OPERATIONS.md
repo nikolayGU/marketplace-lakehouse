@@ -42,6 +42,18 @@ docker compose --env-file .env -f docker/compose.yaml --profile core \
 
 ## Daily commands
 
+First run, source side:
+
+```
+make data            # download Olist into data/raw
+make migrate         # create schema shop
+make replay-load     # shift dates onto today, load the initial share, build the schedule
+make replay-start    # play the rest on the virtual clock (REPLAY_SPEED, default 1 day / 30 s)
+```
+
+`replay-load` refuses to touch non-empty tables. Starting over means `make replay-reset`, which
+empties every `shop` table and drops staging; it asks before doing it.
+
 ```
 make status          # docker compose ps with health
 make logs S=spark-bronze

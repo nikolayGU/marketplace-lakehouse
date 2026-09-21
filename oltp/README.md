@@ -8,9 +8,25 @@ Source system: PostgreSQL schema `shop` and the replayer that feeds it.
 - `migrations/`: numbered SQL migrations (`001_schema.sql`; `002_orders_sales_channel.sql` comes
   with the schema-evolution scenario). Applied by `make migrate`, tracked in
   `public.schema_migrations`, which sits outside `shop` so it never reaches CDC.
-- `replayer/`: Python package. `migrations` applies the SQL above; `load` bulk-loads the CSVs
-  with COPY into empty tables. `start` (virtual clock, shifted dates, `shop.replay_state`) and
-  `status` arrive with W1-T04.
+- `replayer/`: Python package, `python -m replayer <command>`.
+
+| Command | Does |
+|---|---|
+| `migrate` | applies `migrations/`, tracked in `public.schema_migrations` |
+| `load` | shifts every timestamp onto today's calendar, bulk-loads the first `REPLAY_INITIAL_SHARE` of history into `shop`, stages the rest and materialises the event schedule |
+| `start` | walks the schedule on the virtual clock, writing real INSERT, UPDATE and DELETE |
+| `status` | prints the replay position |
+| `reset` | destructive: empties `shop` and drops staging, needs `--yes` |
+
+State lives in schema `replay`, not `shop`: the CDC publication covers `shop` wholesale, and
+the replayer's own bookkeeping has no business in the change stream. `replay.schedule` holds one
+row per thing that must happen, with `emitted_at` as the resume point, so a restart continues
+instead of reloading. `replay.orders` and friends stage the history that has not played yet.
+
+Each replayed order walks its real lifecycle: inserted as `created` with its items and payments,
+then updated to `approved`, `shipped`, `delivered` at the source timestamps, then to whatever
+status the dataset actually ends on. Cancelled-before-shipping orders have their items deleted,
+and a thin deterministic slice of reviews is withdrawn, so silver sees genuine deletes.
 
 Tables: customers, sellers, products, orders, order_items, payments, reviews.
 Knobs: `REPLAY_SPEED`, `REPLAY_INITIAL_SHARE`, `REPLAY_LATE_RATIO`, `REPLAY_LATE_DELAY_SECONDS`,
