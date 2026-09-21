@@ -8,7 +8,7 @@ superseded. Longer reasoning lives in `docs/planning/00-mini-architecture-review
 | ADR-001 | Real data via Olist replay, not synthetic generators | accepted |
 | ADR-002 | Two PostgreSQL instances: `postgres-oltp` (CDC source) and `postgres-meta` | accepted |
 | ADR-003 | Kafka 4 KRaft, single broker, RF=1, 3 partitions per topic, retention 24h | accepted |
-| ADR-004 | Object storage: pin last community MinIO image; fallback RustFS or Garage | proposed |
+| ADR-004 | Object storage: MinIO, last community release pulled from quay.io (Docker Hub repo removed) | accepted |
 | ADR-005 | JDBC catalog in `postgres-meta` first; REST catalog (Lakekeeper) as should-have after the vertical slice | accepted |
 | ADR-006 | Spark 3.5 + Iceberg 1.11 runtime in `local[2]`, no standalone cluster | accepted |
 | ADR-007 | Bronze append-only streaming (at-least-once contract, idempotent epoch commit to be verified); silver via AvailableNow + foreachBatch MERGE is the no-duplicates guarantee | accepted |
@@ -34,11 +34,23 @@ license must be checked before shipping a sample.
 
 ## ADR-004 Object storage
 
-Context: MinIO stopped publishing community images to Docker Hub / Quay in October 2025 and
-removed the web console earlier. Decision: pin the last community tag if it still pulls and
-manage it with `mc`; otherwise switch to RustFS or Garage (both S3-compatible; Spark and Trino
-use S3A/S3 either way). The skill being demonstrated is "S3-compatible object storage", not a
-vendor. To be closed in week 1 after `docker compose pull`.
+Context: MinIO stopped publishing community images and removed the web console. Checked on
+2026-09-21: the Docker Hub repository `minio/minio` is gone (the registry denies access and the
+Hub API returns 404 for the repository), but `quay.io/minio/minio` still serves the last
+community release `RELEASE.2025-09-07T16-13-09Z` (2025-09-07), and quay additionally carries
+`.hotfix.*` rebuilds of that same release into 2026.
+
+Decision: keep MinIO, pull it and `mc` from quay.io, pin the plain community release rather than
+a hotfix tag, and administer it with `mc` since there is no console. RustFS and Garage stay as
+the documented fallback (both were checked and their images pull), but they are not needed: the
+skill being demonstrated is "S3-compatible object storage", not a vendor, so a working pinned
+image wins over a migration.
+
+Consequences: one non-Docker-Hub registry in `compose.yaml`; the image is frozen at the
+2025-09-07 release and will not receive upstream fixes, which is acceptable for a laptop project
+with no data worth protecting and a documented fallback. Verified: bucket `lakehouse` with
+`warehouse` and `checkpoints` prefixes is created by `minio-init`, and the service reports
+healthy on `/minio/health/live`.
 
 ## ADR-005 Catalog: JDBC first, REST as should-have
 

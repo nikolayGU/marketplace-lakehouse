@@ -196,14 +196,24 @@ oltp_replayer ──▶ postgres-oltp ──▶ kafka-connect ──▶ kafka �
 
 ## 5. Компоненты, версии, образы
 
-Версии проверены 19.09.2026 по официальным источникам. Всё равно первая задача недели 1: `docker compose pull` и фиксация того, что реально скачалось, в `DECISIONS.md`.
+Версии проверены 19.09.2026 по официальным источникам. Профиль `core` скачан и запущен 21.09.2026 (W1-T02), реально подтянулись:
+
+| Образ | Digest |
+|---|---|
+| `postgres:17` | `sha256:f4c66b820c6f974249089d3d16d86a3698eae11e8746eb6644b2271031e91232` |
+| `apache/kafka:4.3.1` | `sha256:77e3df9054047a88b520d0cc46e16696d3b22022e1d580aeccd2632df6532837` |
+| `quay.io/debezium/connect:3.5` | `sha256:8ba4d73ded691f245d8a8ed66900e21a0878a22b2557cc354b9428743b17ab0f` |
+| `quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z` | `sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e` |
+| `quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z` | `sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727` |
+
+Образы core занимают 4.4 GB. Единственная правка тегов: MinIO и `mc` переехали с Docker Hub на quay.io, см. ADR-004. Остальные профили не скачивались.
 
 | Сервис | Образ / версия | Заметка |
 |---|---|---|
 | postgres-oltp, postgres-meta | `postgres:17` | 18 вышел в сентябре 2025; 17 безопаснее для Debezium и экспортеров. Проверить поддержку 18 в Debezium 3.5 и при желании поднять |
-| kafka | `apache/kafka:4.3.1` | KRaft, single node, `KAFKA_HEAP_OPTS=-Xmx768m` |
+| kafka | `apache/kafka:4.3.1` | KRaft, single node, `KAFKA_HEAP_OPTS=-Xmx768m`. Образ по умолчанию пишет в `/tmp/kraft-combined-logs`, поэтому `KAFKA_LOG_DIRS` явно указывает на смонтированный том |
 | kafka-connect | `quay.io/debezium/connect:3.5` | Docker Hub `debezium/connect` заморожен на 2.7, образы только на quay.io |
-| minio | последний community-тег `minio/minio:RELEASE.2025-xx` | Проверить pull; консоли нет, admin через `mc`. Fallback: RustFS или Garage. ADR-004 |
+| minio | `quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z` | На Docker Hub репозиторий удалён, quay.io отдаёт последний community-релиз. Консоли нет, admin через `mc`. ADR-004 |
 | iceberg catalog | JDBC catalog в `postgres-meta` (W1); `quay.io/lakekeeper/catalog:v0.13.1` (should-have) | Spark: `org.apache.iceberg.jdbc.JdbcCatalog` + postgres driver jar. Trino: `iceberg.catalog.type=jdbc`, драйвер в `plugin/iceberg` (проверить, бандлится ли). Переход на REST через `register_table` |
 | spark | `apache/spark:3.5.9` + `iceberg-spark-runtime-3.5_2.12:1.11.0` + `spark-sql-kafka-0-10` | Spark 4.x runtime появился только с Iceberg 1.10, моложе; 3.5 безопаснее. ADR-006 |
 | trino | `trinodb/trino:483` | Iceberg connector, `iceberg.catalog.type=rest` |
@@ -219,7 +229,22 @@ Python: 3.12, `uv`, `ruff`, `mypy`, `pytest`, `pydantic-settings`, `psycopg`, `p
 
 ## 6. RAM-бюджет
 
-Лимиты в `compose.yaml` (`deploy.resources.limits.memory`), ожидаемое реальное потребление ниже. Замерить `docker stats` в неделе 1 и поправить таблицу.
+Лимиты в `compose.yaml` (`deploy.resources.limits.memory`), ожидаемое реальное потребление ниже.
+
+Замер 21.09.2026 (W1-T02), пять инфраструктурных сервисов core, простой без трафика, через 3 минуты после старта:
+
+| Сервис | Лимит | Реально | Доля лимита |
+|---|---|---|---|
+| kafka | 1.25 GB | 308 MB | 24% |
+| kafka-connect | 1.5 GB | 1005 MB | 65% |
+| minio | 512 MB | 82 MB | 16% |
+| postgres-oltp | 768 MB | 35 MB | 5% |
+| postgres-meta | 512 MB | 38 MB | 7% |
+| **Итого** | **4.5 GB** | **1.47 GB** | **33%** |
+
+kafka-connect на простое занимает 65% лимита, но это не рабочий набор: G1 закоммитил 771 MB кучи при `used` 322 MB и metaspace 58 MB. Потолок при полностью закоммиченной куче примерно 1.28 GB, то есть в лимит 1.5 GB укладывается. Проверяется на snapshot в W1-T05: если контейнер поймает OOM-kill, снижать `CONNECT_HEAP` до `-Xmx768m`, а не поднимать лимит.
+
+spark-bronze и oltp-replayer ещё не собраны (W1-T04, W1-T06), поэтому итог по core неполный.
 
 | Сервис | Лимит | Профиль |
 |---|---|---|

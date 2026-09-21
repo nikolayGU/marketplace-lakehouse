@@ -12,6 +12,15 @@
 
 Never start `orchestrate` and `bi` together. Never start all profiles.
 
+Week 1, in progress: `core` also declares `spark-bronze` (W1-T06) and `oltp-replayer` (W1-T04),
+whose images are not written yet, so `make up PROFILE=core` fails at the build step. Until both
+land, start the infrastructure half explicitly:
+
+```
+docker compose --env-file .env -f docker/compose.yaml --profile core \
+  up -d postgres-oltp postgres-meta kafka minio minio-init kafka-connect
+```
+
 ## Ports (all on 127.0.0.1)
 
 | Service | Port |
