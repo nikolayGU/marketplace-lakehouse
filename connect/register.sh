@@ -22,9 +22,15 @@ print(" ".join(prefix + "." + n for n in names))
 ' "$root/connect/shop-connector.json")
 
 # Debezium publishes heartbeats to <heartbeat.topics.prefix>.<topic.prefix>; the prefix defaults
-# to __debezium-heartbeat. Without the topic the heartbeat producer fails against a broker that
-# will not auto-create it.
-topics="$tables __debezium-heartbeat.oltp"
+# to __debezium-heartbeat. It also publishes every row of the signaling table, snapshot
+# watermarks included, like any captured table. Without these topics the producer blocks and the
+# whole change stream stalls, because the broker will not auto-create them.
+signal_topic=$(python3 -c '
+import json, sys
+config = json.load(open(sys.argv[1]))["config"]
+print(config["topic.prefix"] + "." + config["signal.data.collection"])
+' "$root/connect/shop-connector.json")
+topics="$tables __debezium-heartbeat.oltp $signal_topic"
 
 for topic in $topics; do
   "${compose[@]}" exec -T kafka /opt/kafka/bin/kafka-topics.sh \

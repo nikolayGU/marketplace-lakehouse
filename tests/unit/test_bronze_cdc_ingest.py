@@ -41,6 +41,11 @@ def test_envelope_reads_only_fields_the_contract_requires() -> None:
     contract = json.loads(CONTRACT.read_text())
     json_to_spark = {"string": StringType(), "integer": LongType()}
 
+    def spark_type(spec: dict[str, Any]) -> Any:
+        kinds = spec["type"] if isinstance(spec["type"], list) else [spec["type"]]
+        [kind] = [k for k in kinds if k != "null"]
+        return json_to_spark[kind]
+
     for field in ENVELOPE.fields:
         if field.name in ("before", "after"):
             continue
@@ -48,11 +53,11 @@ def test_envelope_reads_only_fields_the_contract_requires() -> None:
         if isinstance(field.dataType, StructType):
             for nested in field.dataType.fields:
                 assert nested.name in spec["required"]
-                assert json_to_spark[spec["properties"][nested.name]["type"]] == nested.dataType
+                assert spark_type(spec["properties"][nested.name]) == nested.dataType
         else:
             assert field.name in contract["required"]
             if "type" in spec:
-                assert json_to_spark[spec["type"]] == field.dataType
+                assert spark_type(spec) == field.dataType
 
 
 @pytest.fixture(scope="module")
@@ -141,6 +146,17 @@ def test_json_without_op_is_kept_raw(spark: SparkSession) -> None:
 
     assert row.op is None
     assert row.raw == '{"hello": "world"}'
+
+
+@needs_java
+def test_incremental_snapshot_read_has_null_lsn(spark: SparkSession) -> None:
+    event = json.loads(envelope("r", None, {"order_id": "o1"}))
+    event["source"]["lsn"] = None
+    event["source"]["snapshot"] = "incremental"
+
+    [row] = bronze(spark, kafka_row(json.dumps(event).encode()))
+
+    assert (row.op, row.lsn, row.raw) == ("r", None, None)
 
 
 @needs_java

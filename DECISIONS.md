@@ -23,6 +23,7 @@ superseded. Longer reasoning lives in `docs/planning/00-mini-architecture-review
 | ADR-016 | Compose profiles and the rule "never all profiles at once" as the RAM strategy | accepted |
 | ADR-017 | Stateful windowed job `orders_per_minute` (watermark, state, update mode) is mandatory, not optional | accepted |
 | ADR-018 | `REPLICA IDENTITY FULL` on all `shop` tables so CDC `before` carries the whole previous row | accepted |
+| ADR-019 | Debezium signal table `cdc.debezium_signal` for incremental snapshots, the recovery path when Kafka retention outlives a consumer outage | accepted |
 
 ## ADR-001 Real data via Olist replay
 
@@ -126,3 +127,33 @@ Consequences: every UPDATE writes the whole old row into the WAL, so WAL volume 
 slot pressure grow. At this scale (100k orders, 24 h Kafka retention, one laptop) that is cheap,
 and slot lag is monitored anyway (`SlotWalRetainedHigh`, W4-T05). If WAL growth ever becomes the
 bottleneck, the fallback is FULL on `orders` alone and DEFAULT elsewhere.
+
+## ADR-019 Incremental snapshots through a signal table
+
+Context: on 2026-09-22 the stack had run 26 hours with nothing consuming Kafka. Retention (24 h)
+had deleted the initial snapshot and the first part of the replay before bronze existed, so
+bronze could only ever see changes from that day on, and silver could never match Postgres.
+Re-running the initial snapshot means dropping the replication slot and the connector offsets,
+which is destructive and also loses whatever the slot holds.
+
+Decision: give the connector a signaling table and use Debezium incremental snapshots. The table
+is `cdc.debezium_signal` (migration 002), in its own schema and added to `shop_publication`
+explicitly. `make cdc-snapshot [TABLES=...]` inserts an `execute-snapshot` row; the connector
+re-reads the tables in primary-key chunks of 1024 while streaming continues, and resolves
+collisions with rows changed during a chunk through open/close watermarks it writes into the
+same table.
+
+Verified by running it, not by the docs, which say neither:
+- Debezium publishes the signal table like any captured table, watermarks included, to
+  `oltp.cdc.debezium_signal`. With broker auto-creation off the producer blocked and the whole
+  change stream stalled until the topic existed; `register.sh` now creates it. The separate
+  schema keeps those rows out of bronze.
+- Incremental snapshot events carry `op = "r"`, `source.snapshot = "incremental"` and
+  `source.lsn = null`. The envelope contract now allows a null `lsn`, and silver's LSN guard
+  (W2-T02) must treat null as older than any streamed change, otherwise a snapshot row either
+  never lands or overwrites a newer state.
+
+Consequences: recovery from "consumer was down longer than retention" is one command with no
+blast radius. The connector role needs `insert` on one table in the source database, and every
+snapshot writes a pair of watermark rows per chunk there, which nothing cleans up yet. Bronze
+receives the snapshotted rows as extra events, which it is allowed to by contract (ADR-007).

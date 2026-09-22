@@ -5,7 +5,8 @@ Source system: PostgreSQL schema `shop` and the replayer that feeds it.
 - `init/`: `01-debezium.sh`, run once by the container on an empty data directory: schema `shop`,
   the `debezium` role with REPLICATION, and publication `shop_publication`. The publication is
   declared `for tables in schema shop`, so migrations can add tables without touching it.
-- `migrations/`: numbered SQL migrations (`001_schema.sql`; `002_orders_sales_channel.sql` comes
+- `migrations/`: numbered SQL migrations (`001_schema.sql`, `002_debezium_signal.sql` for
+  ADR-019; `003_orders_sales_channel.sql` comes
   with the schema-evolution scenario). Applied by `make migrate`, tracked in
   `public.schema_migrations`, which sits outside `shop` so it never reaches CDC.
 - `replayer/`: Python package, `python -m replayer <command>`.

@@ -67,6 +67,9 @@ kafka-topics: ## topics with partitions
 kafka-groups: ## consumer groups and lag
 	$(COMPOSE) exec kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --all-groups --describe
 
+cdc-snapshot: ## incremental snapshot via signal table: make cdc-snapshot [TABLES="shop.orders shop.sellers"]
+	bash connect/snapshot.sh $(TABLES)
+
 connector-status: ## debezium connector state
 	curl -s http://127.0.0.1:8083/connectors/shop-connector/status | python -m json.tool
 
@@ -92,4 +95,4 @@ test: ## unit tests
 dbt-parse: ## dbt parse without a warehouse
 	cd dbt && uv run dbt parse --profiles-dir . --target ci
 
-.PHONY: help secrets hooks data migrate replay-load replay-start replay-reset up down status logs nuke replay replay-status psql trino kafka-topics kafka-groups connector-status iceberg-demo lint test dbt-parse
+.PHONY: help secrets hooks data migrate replay-load replay-start replay-reset up down status logs nuke replay replay-status psql trino kafka-topics kafka-groups cdc-snapshot connector-status iceberg-demo lint test dbt-parse

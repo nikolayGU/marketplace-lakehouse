@@ -16,6 +16,7 @@
     "table.include.list": "shop.customers,shop.sellers,shop.products,shop.orders,shop.order_items,shop.payments,shop.reviews",
     "snapshot.mode": "initial",
     "heartbeat.interval.ms": "10000",
+    "signal.data.collection": "cdc.debezium_signal",
     "tombstones.on.delete": "false",
     "decimal.handling.mode": "double",
     "time.precision.mode": "connect",

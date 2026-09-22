@@ -13,7 +13,7 @@
       "type": "object",
       "required": ["lsn", "table", "schema", "ts_ms"],
       "properties": {
-        "lsn": {"type": "integer"},
+        "lsn": {"type": ["integer", "null"], "description": "null on incremental snapshot reads (ADR-019)"},
         "txId": {"type": ["integer", "null"]},
         "table": {"type": "string"},
         "schema": {"type": "string"},

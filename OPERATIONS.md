@@ -82,6 +82,10 @@ which happens on an empty topic too.
   the log). Recovery is a decision, not a restart: see the Kafka gate.
 - Unhealthy means no progress or idle event for 120 s: the query is stuck, typically on MinIO
   or `postgres-meta`. The container keeps running; look at `make logs S=spark-bronze`.
+- Consumer down longer than retention, or bronze started after the history left Kafka:
+  `make cdc-snapshot` (all tables) or `make cdc-snapshot TABLES="shop.orders"` re-reads the
+  source into the topics without touching the slot (ADR-019). Done on 2026-09-22 for all seven
+  tables after the initial snapshot had expired.
 - Resetting bronze means deleting both the checkpoint prefix and the table, which is on the
   blast-radius list.
 
