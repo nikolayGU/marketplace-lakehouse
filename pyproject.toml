@@ -30,16 +30,20 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "N", "SIM", "RUF"]
 
+[tool.ruff.lint.per-file-ignores]
+# PySpark idioms: `functions as F`, and listener callbacks whose camelCase names Spark dictates.
+"streaming/**" = ["N802", "N812"]
+
 [tool.mypy]
 python_version = "3.12"
 strict = true
 ignore_missing_imports = true
 # mypy fails on a directory without .py files; add streaming and airflow/dags as they appear.
-files = ["scripts", "tests", "oltp"]
-# `replayer` is a top-level package inside oltp/, which is what the container sees too.
-mypy_path = "oltp"
+files = ["scripts", "tests", "oltp", "streaming"]
+# `replayer` and `spark_jobs` are top-level packages, which is what their containers see too.
+mypy_path = "oltp:streaming"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# `replayer` lives in oltp/, same as inside the container image.
-pythonpath = ["oltp", "."]
+# `replayer` lives in oltp/ and `spark_jobs` in streaming/, same as inside the images.
+pythonpath = ["oltp", "streaming", "."]

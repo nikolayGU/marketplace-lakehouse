@@ -82,6 +82,21 @@ result is recorded here. Either way, the no-duplicates guarantee lives in silver
 (`MERGE` keyed by primary key with an LSN guard) and `bronze_duplicate_ratio` is a monitored
 metric, not an assumption.
 
+## ADR-008 Bronze keeps the payload as JSON text
+
+Context: seven source tables change shape independently, and a schema change must not stop
+ingestion. Decision: `lake.bronze.cdc_events` has one fixed schema for all tables. It parses only
+what routing and dedup need: `op`, `lsn`, `ts_ms` (Debezium processing time), `source_ts_ms`
+(source commit time), plus Kafka coordinates `topic`, `kafka_partition`, `kafka_offset`,
+`kafka_ts` and the key. `before` and `after` stay as JSON text. `source_table` comes from the
+topic name, not the payload, so an event that does not parse still lands in its table's
+partition. `raw` holds the original value only when the envelope did not yield an `op`; silver
+sends those rows to quarantine. Partitioned by `(source_table, days(ingest_ts))`, format v2.
+
+Consequences: bronze never fails on content, `ALTER TABLE` in the source is invisible here, and
+typing lives in one place (silver, from `contracts/`). The cost is a JSON parse per row in
+silver and no column pruning inside `after`.
+
 ## ADR-013 Spark metrics
 
 Context: Spark stores Kafka offsets in its checkpoint and does not commit to a consumer group,

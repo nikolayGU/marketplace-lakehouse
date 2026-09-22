@@ -207,7 +207,7 @@ services:
     <<: *common
     build:
       context: ../streaming
-      dockerfile: Dockerfile   # apache/spark:3.5.9 + iceberg-spark-runtime-3.5_2.12:1.11.0 + kafka + s3a
+      dockerfile: Dockerfile   # apache/spark:3.5.9-java17-python3 + iceberg 1.11.0 + kafka + s3a
     image: lakehouse/spark:dev
     profiles: [core]
     depends_on:
@@ -217,7 +217,7 @@ services:
         condition: service_healthy
       minio-init:
         condition: service_completed_successfully
-    command: ["bronze_cdc_ingest"]   # TODO(W1): entrypoint runs spark-submit with job name
+    command: ["bronze_cdc_ingest"]   # run-job.sh spark-submits spark_jobs/<name>.py
     environment:
       SPARK_MASTER: ${SPARK_MASTER}
       SPARK_DRIVER_MEMORY: ${SPARK_DRIVER_MEMORY}
@@ -227,6 +227,7 @@ services:
       CATALOG_JDBC_USER: ${META_USER}
       CATALOG_JDBC_PASSWORD: ${META_PASSWORD}
       CATALOG_WAREHOUSE: s3a://${S3_BUCKET}/warehouse
+      CHECKPOINT_ROOT: s3a://${S3_BUCKET}/checkpoints
       LAKEKEEPER_URI: ${LAKEKEEPER_URI}
       LAKEKEEPER_WAREHOUSE: ${LAKEKEEPER_WAREHOUSE}
       S3_ENDPOINT: ${S3_ENDPOINT}
@@ -239,7 +240,13 @@ services:
       - "${BIND_IP}:4040:4040"
       - "${BIND_IP}:4041:4041"
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:4041/metrics | grep -q spark_streaming_last_batch_timestamp"]
+      # Healthy while the query reported progress or idleness in the last 120 s. Idle events come
+      # every 10-20 s on a quiet topic; a query stuck in commit retries stops them.
+      test:
+        - CMD-SHELL
+        - >-
+          curl -sf http://localhost:4041/metrics | awk -v now=$$(date +%s)
+          '/^spark_streaming_last_batch_timestamp/ && now - $$2 < 120 {ok=1} END {exit !ok}'
       interval: 30s
       timeout: 5s
       retries: 5

@@ -12,13 +12,11 @@
 
 Never start `orchestrate` and `bi` together. Never start all profiles.
 
-Week 1, in progress: `core` also declares `spark-bronze` (W1-T06) and `oltp-replayer` (W1-T04),
-whose images are not written yet, so `make up PROFILE=core` fails at the build step. Until both
-land, start the infrastructure half explicitly:
+Both images in `core` (`lakehouse/replayer:dev`, `lakehouse/spark:dev`) are built by
+`make up`. To work on one service without the replayer playing, start it by name:
 
 ```
-docker compose --env-file .env -f docker/compose.yaml --profile core \
-  up -d postgres-oltp postgres-meta kafka minio minio-init kafka-connect
+docker compose --env-file .env -f docker/compose.yaml --profile core up -d spark-bronze
 ```
 
 ## Ports (all on 127.0.0.1)
@@ -64,6 +62,34 @@ make kafka-groups    # consumer groups and lag (connect only; Spark lag is in Gr
 make connector-status
 make replay-status   # replayer position and virtual clock
 make iceberg-demo    # snapshots, time travel, files before/after compaction
+```
+
+## Bronze ingest
+
+`spark-bronze` runs `spark_jobs/bronze_cdc_ingest.py`: every `oltp.shop.*` topic into
+`lake.bronze.cdc_events`, one micro-batch per `BRONZE_TRIGGER_SECONDS`, checkpoint at
+`s3a://lakehouse/checkpoints/bronze_cdc_ingest`. It turns healthy after its first progress event,
+which happens on an empty topic too.
+
+- A crash or OOM kill makes Docker restart it (`unless-stopped`), and the job resumes from the
+  checkpoint (`Resuming at batch N` in the log). A manual `docker kill` or `docker stop` does not:
+  start it with `docker start lakehouse-spark-bronze-1`. Verified on 2026-09-22: resumed at
+  batch 6, same `queryId`, no duplicate or missing offsets.
+- `startingOffsets=earliest` applies only to a fresh checkpoint. If the job is down longer than
+  Kafka retention (24 h), offsets it never read are gone and `failOnDataLoss=true` fails the
+  query instead of silently skipping them. Docker then restarts it and it fails the same way,
+  so the symptom is a restart loop (`RestartCount` growing, `OffsetOutOfRange` or "data loss" in
+  the log). Recovery is a decision, not a restart: see the Kafka gate.
+- Unhealthy means no progress or idle event for 120 s: the query is stuck, typically on MinIO
+  or `postgres-meta`. The container keeps running; look at `make logs S=spark-bronze`.
+- Resetting bronze means deleting both the checkpoint prefix and the table, which is on the
+  blast-radius list.
+
+Check it:
+
+```
+curl -s 127.0.0.1:4041/metrics | grep ^spark_streaming   # input rows, last batch, duration
+make logs S=spark-bronze
 ```
 
 ## Failure scenarios

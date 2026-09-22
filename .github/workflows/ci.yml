@@ -29,10 +29,13 @@ jobs:
       - run: uv run pytest tests/unit -q
       - name: compose config
         run: cp .env.example .env && docker compose --env-file .env -f docker/compose.yaml --profile '*' config -q
+      # No layer cache yet (W5-T02); the jar layer is ~400 MB from Maven Central.
+      - name: build spark image
+        run: docker build -t lakehouse/spark:ci streaming
       - uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-# Re-enable as the pieces land: `dbt parse` with W3-T01, the spark and airflow image
-# builds with W1-T06 and W3-T04, hadolint with W5-T02.
+# Re-enable as the pieces land: `dbt parse` with W3-T01, the airflow image build with W3-T04,
+# hadolint with W5-T02.
 # smoke: manual/nightly, boots `core`, replays 60 s, asserts bronze rows via trino cli. Week 5.

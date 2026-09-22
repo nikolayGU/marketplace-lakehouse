@@ -244,7 +244,7 @@ Python: 3.12, `uv`, `ruff`, `mypy`, `pytest`, `pydantic-settings`, `psycopg`, `p
 
 kafka-connect на простое занимает 65% лимита, но это не рабочий набор: G1 закоммитил 771 MB кучи при `used` 322 MB и metaspace 58 MB. Потолок при полностью закоммиченной куче примерно 1.28 GB, то есть в лимит 1.5 GB укладывается. Проверяется на snapshot в W1-T05: если контейнер поймает OOM-kill, снижать `CONNECT_HEAP` до `-Xmx768m`, а не поднимать лимит.
 
-spark-bronze и oltp-replayer ещё не собраны (W1-T04, W1-T06), поэтому итог по core неполный.
+Замер 22.09.2026 (W1-T06), под нагрузкой реплея: spark-bronze 985 MB из лимита 2.5 GB (38%), образ `lakehouse/spark:dev` 2.5 GB на диске. Одновременно kafka 534 MB, kafka-connect 664 MB, postgres-oltp 386 MB, minio 150 MB, postgres-meta 42 MB. oltp-replayer в замер не вошёл, он запускался с хоста.
 
 | Сервис | Лимит | Профиль |
 |---|---|---|
