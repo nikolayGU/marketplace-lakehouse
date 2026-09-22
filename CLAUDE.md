@@ -67,6 +67,18 @@ Marketplace Lakehouse (mini): учебная, но production-like Data Platform
 - Без канцелярита и без формулировок «важно отметить», «данный», «в рамках». Коротко, как staff-инженер коллеге.
 - В репо нет имён владельца, названий работодателей, упоминаний, что текст писал AI.
 
+## Плагины агента
+
+Стоят на уровне проекта (`.claude/settings.json`), обоснование и полный список триггеров в `docs/planning/03-agent-tooling.md`. Правила этого файла выше любого skill.
+
+- Версия, флаг, конфиг или API Spark, Iceberg, Kafka, Debezium, Trino, dbt, Airflow, MinIO: сначала `context7` (документация нужной версии), не память.
+- Задача с выбором реализации: `superpowers:brainstorming`, затем `superpowers:writing-plans`. Спеки и планы в `docs/planning/` на русском, не в `docs/superpowers/`, и без коммита до «ок».
+- Разобраться в существующем коде или спроектировать изменение: агенты `feature-dev:code-explorer`, `feature-dev:code-architect`.
+- Баг или падение job: `superpowers:systematic-debugging` до правок. Код с тестами: `superpowers:test-driven-development`, первым тест на отказ.
+- Дифф готов: `/code-review`, для Python и Spark ещё `pr-review-toolkit:silent-failure-hunter` и `pr-test-analyzer`, перед коммитом `/security-review`. Перед «готово»: `superpowers:verification-before-completion`.
+- Конец недели или правила разошлись с практикой: `/revise-claude-md`, правки только с «ок».
+- Из `superpowers` не применяются: коммит после каждого шага, worktrees, `finishing-a-development-branch` (merge, push, PR).
+
 ## Когда не уверен
 
 - Проверить документацию или запустить и посмотреть вывод.
