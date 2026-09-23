@@ -98,11 +98,11 @@ make logs S=spark-bronze
 
 ## Query
 
-`trino` (profile `query`) reads the same JDBC catalog as Spark: `docker/trino/etc/catalog/lake.properties`
-points at `iceberg_catalog` in `postgres-meta` and at MinIO through the native S3 file system,
-which accepts the `s3a://` paths Spark writes. The PostgreSQL driver ships in the image's
-Iceberg plugin. Heap is `TRINO_XMX`, passed to the launcher as `-J-Xmx...`; the query memory
-limits in `config.properties` are sized to fit 2g as well.
+`trino` (profile `query`) reads the same JDBC catalog as Spark:
+`docker/trino/etc/catalog/lake.properties` points at `iceberg_catalog` in `postgres-meta` and at
+MinIO through the native S3 file system, which accepts the `s3a://` paths Spark writes. The
+PostgreSQL driver ships in the image's Iceberg plugin. Heap is `TRINO_XMX`, passed to the
+launcher as `-J-Xmx...`; the query memory limits in `config.properties` fit 2g as well.
 
 Start it without the replayer and check it:
 
@@ -112,8 +112,12 @@ make trino           # trino> select source_table, count(*) from bronze.cdc_even
 ```
 
 Healthy means the image's `health-check` saw `"starting": false` on `/v1/info`, about 40 s
-after start. Trino only reads what Spark committed: a bronze micro-batch shows up after its
-Iceberg commit, not when Kafka receives the event.
+after start. It does not prove the catalog works, because the JDBC connection opens on the
+first query: run one. The config is bind-mounted, so after editing `docker/trino/etc` restart
+the container (`docker compose ... restart trino`); `up -d` does not notice file changes.
+
+Trino only reads what Spark committed: a bronze micro-batch shows up after its Iceberg commit,
+not when Kafka receives the event.
 
 ## Failure scenarios
 

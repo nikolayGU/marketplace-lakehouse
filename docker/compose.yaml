@@ -301,7 +301,7 @@ services:
       minio:
         condition: service_healthy
     # jvm.config cannot read the environment, so the heap goes to the launcher as a JVM option.
-    command: ["/usr/lib/trino/bin/run-trino", "-J-Xmx${TRINO_XMX}"]
+    command: ["/usr/lib/trino/bin/run-trino", "-J-Xmx${TRINO_XMX:?TRINO_XMX must be set}"]
     environment:
       CATALOG_DB: ${CATALOG_DB}
       META_USER: ${META_USER}

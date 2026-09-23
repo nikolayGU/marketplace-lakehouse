@@ -69,8 +69,16 @@ exercise about what a catalog actually stores.
 Verified on 2026-09-23 (W1-T07): `trinodb/trino:483` ships `postgresql-42.7.13.jar` in
 `plugin/iceberg`, so Trino needs no custom image. `iceberg.jdbc-catalog.catalog-name` must be
 `lake`, the Spark catalog name, because JdbcCatalog keys every table row by it; with any other
-value Trino sees an empty catalog. The native S3 file system reads the `s3a://` locations Spark
-records in the metadata.
+value Trino sees an empty catalog. The native S3 file system (`fs.s3.enabled`; the older
+`fs.native-s3.enabled` still works but logs a replacement warning) reads the `s3a://` locations
+Spark records in the metadata.
+
+Side effect, found after the fact: Spark's JdbcCatalog creates `iceberg_tables` in the V0 layout,
+while Trino defaults to `iceberg.jdbc-catalog.schema-version=V1` and on its first query ran
+`ALTER TABLE iceberg_tables ADD COLUMN iceberg_type` in `iceberg_catalog`. The change is
+additive, Iceberg detects the column and switches Spark to V1 on its next start, and V1 is what
+lets Trino create views, which dbt needs in week 3. Pinning V0 would avoid the DDL but refuse
+`CREATE VIEW`, so V1 stays.
 
 ## ADR-007 Bronze streaming append, silver batch MERGE
 
