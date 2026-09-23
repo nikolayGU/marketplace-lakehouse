@@ -29,6 +29,8 @@ RUN pip install --no-cache-dir \
 
 COPY run-job.sh /opt/app/run-job.sh
 COPY spark_jobs/ /opt/app/spark_jobs/
+# contracts/ is outside this build context; compose and CI pass it as the named context `contracts`.
+COPY --from=contracts silver/ /opt/app/contracts/silver/
 
 ENV PYTHONPATH=/opt/app \
     PYTHONUNBUFFERED=1 \

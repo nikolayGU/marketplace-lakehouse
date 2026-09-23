@@ -31,7 +31,7 @@ jobs:
         run: cp .env.example .env && docker compose --env-file .env -f docker/compose.yaml --profile '*' config -q
       # No layer cache yet (W5-T02); the jar layer is ~400 MB from Maven Central.
       - name: build spark image
-        run: docker build -t lakehouse/spark:ci streaming
+        run: docker build --build-context contracts=contracts -t lakehouse/spark:ci streaming
       - uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

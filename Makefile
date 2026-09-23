@@ -67,6 +67,9 @@ kafka-topics: ## topics with partitions
 kafka-groups: ## consumer groups and lag
 	$(COMPOSE) exec kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --all-groups --describe
 
+silver: ## merge everything bronze committed since the last run into silver, then exit
+	$(COMPOSE) --profile core run --rm --no-deps spark-silver
+
 cdc-snapshot: ## incremental snapshot via signal table: make cdc-snapshot [TABLES="shop.orders shop.sellers"]
 	bash connect/snapshot.sh $(TABLES)
 
@@ -92,7 +95,7 @@ lint: ## ruff, mypy, yamllint, sqlfluff, compose config
 test: ## unit tests (Spark ones skip on a host without Java)
 	uv run pytest tests/unit -q
 
-SPARK_TESTS := test_bronze_cdc_ingest.py test_contracts.py test_envelope.py
+SPARK_TESTS := test_bronze_cdc_ingest.py test_contracts.py test_envelope.py test_silver_upsert.py
 
 test-spark: ## the Spark unit tests, inside lakehouse/spark:dev because the host has no JVM
 	docker run --rm --user root --entrypoint bash -v "$(CURDIR)":/repo:ro \
@@ -103,4 +106,4 @@ test-spark: ## the Spark unit tests, inside lakehouse/spark:dev because the host
 dbt-parse: ## dbt parse without a warehouse
 	cd dbt && uv run dbt parse --profiles-dir . --target ci
 
-.PHONY: help secrets hooks data migrate replay-load replay-start replay-reset up down status logs nuke replay replay-status psql trino kafka-topics kafka-groups cdc-snapshot connector-status iceberg-demo lint test test-spark dbt-parse
+.PHONY: help secrets hooks data migrate replay-load replay-start replay-reset up down status logs nuke replay replay-status silver psql trino kafka-topics kafka-groups cdc-snapshot connector-status iceberg-demo lint test test-spark dbt-parse

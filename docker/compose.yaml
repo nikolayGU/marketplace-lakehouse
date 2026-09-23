@@ -208,6 +208,8 @@ services:
     build:
       context: ../streaming
       dockerfile: Dockerfile   # apache/spark:3.5.9-java17-python3 + iceberg 1.11.0 + kafka + s3a
+      additional_contexts:
+        contracts: ../contracts
     image: lakehouse/spark:dev
     profiles: [core]
     depends_on:
@@ -255,6 +257,42 @@ services:
       resources:
         limits:
           memory: 2560M
+    networks: [lake]
+
+  # One-shot: AvailableNow reads what bronze committed since the last run, merges it, exits.
+  # `make silver` runs it by hand; Airflow schedules it from week 3. The exit code is the health
+  # signal and a restart policy would loop it, so it has neither (same as minio-init).
+  spark-silver:
+    image: lakehouse/spark:dev   # built by spark-bronze
+    profiles: [jobs]
+    depends_on:
+      postgres-meta:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    command: ["silver_upsert"]
+    environment:
+      SPARK_MASTER: ${SPARK_MASTER}
+      SPARK_DRIVER_MEMORY: ${SPARK_DRIVER_MEMORY}
+      CATALOG_TYPE: ${CATALOG_TYPE}
+      CATALOG_JDBC_URL: jdbc:postgresql://postgres-meta:5432/${CATALOG_DB}
+      CATALOG_JDBC_USER: ${META_USER}
+      CATALOG_JDBC_PASSWORD: ${META_PASSWORD}
+      CATALOG_WAREHOUSE: s3a://${S3_BUCKET}/warehouse
+      CHECKPOINT_ROOT: s3a://${S3_BUCKET}/checkpoints
+      S3_ENDPOINT: ${S3_ENDPOINT}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
+    ports:
+      - "${BIND_IP}:4042:4040"   # Spark UI while the run lasts
+    restart: "no"
+    healthcheck:
+      disable: true
+    logging: *logging
+    deploy:
+      resources:
+        limits:
+          memory: 2048M
     networks: [lake]
 
   oltp-replayer:

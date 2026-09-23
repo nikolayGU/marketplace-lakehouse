@@ -12,7 +12,10 @@ Spark image and jobs.
 - `spark_jobs/bronze_cdc_ingest.py`: Kafka `oltp.shop.*` -> `lake.bronze.cdc_events`, append,
   20 s trigger, checkpoint `s3a://lakehouse/checkpoints/bronze_cdc_ingest`. Columns: ADR-008.
 - `spark_jobs/silver_upsert.py`: Iceberg streaming read from bronze, `Trigger.AvailableNow`,
-  `foreachBatch` -> dedup -> quarantine -> `MERGE INTO silver.<table>`. Launched by Airflow.
+  `foreachBatch` -> parse with `contracts/silver` -> newest event per key -> `MERGE INTO
+  lake.silver.<table>`. `make silver` runs it; Airflow schedules it from week 3.
+- `spark_jobs/contracts.py`: loads `contracts/silver/*.json` (baked into the image at
+  `/opt/app/contracts/silver` through the named build context `contracts`).
 - `spark_jobs/orders_per_minute.py` (mandatory, week 5): 1-minute window, 5-minute watermark,
   `update` mode, upsert into `silver.orders_per_minute`; makes late-event handling observable.
 - `spark_jobs/metrics.py`: `StreamingQueryListener` exposing Prometheus metrics on

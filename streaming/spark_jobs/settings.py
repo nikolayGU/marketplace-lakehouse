@@ -30,3 +30,9 @@ class Settings(BaseSettings):
     bronze_max_offsets_per_trigger: int = 20000
 
     metrics_port: int = 4041
+
+    contracts_dir: str = "/opt/app/contracts/silver"
+    # Soft cap per micro-batch: the first run reads all of bronze in several batches.
+    silver_max_rows_per_batch: int = 200000
+    # local[2] has two cores; the default 200 would write up to 200 small files per MERGE.
+    silver_shuffle_partitions: int = 4

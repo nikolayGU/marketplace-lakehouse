@@ -31,6 +31,7 @@ docker compose --env-file .env -f docker/compose.yaml --profile core up -d spark
 | lakekeeper (profile `rest`) | 8181 |
 | spark-bronze UI | 4040 |
 | spark-bronze metrics | 4041 |
+| spark-silver UI (while `make silver` runs) | 4042 |
 | trino | 8080 |
 | airflow api-server | 8090 |
 | prometheus | 9090 |
@@ -94,6 +95,36 @@ Check it:
 ```
 curl -s 127.0.0.1:4041/metrics | grep ^spark_streaming   # input rows, last batch, duration
 make logs S=spark-bronze
+```
+
+## Silver upsert
+
+`make silver` runs `spark_jobs/silver_upsert.py` once in the `spark-silver` container (profile
+`jobs`, needs `core` up): an Iceberg streaming read of `lake.bronze.cdc_events` with
+`Trigger.AvailableNow`, checkpoint `s3a://lakehouse/checkpoints/silver_upsert`. It reads every
+bronze snapshot committed since the previous run in micro-batches of about 200 000 rows
+(`silver_max_rows_per_batch` in `spark_jobs/settings.py`), merges each into the seven
+`lake.silver.<table>` tables and exits. Airflow takes over scheduling in week 3.
+
+- Per table and batch: parse `after` (`before` for a delete) with `contracts/silver/<table>.json`,
+  drop invalid events (unknown op, null key, a NOT NULL column that came out null), keep the
+  newest event per primary key, `MERGE` guarded by `_last_lsn`. Invalid events are counted in the
+  log (`invalid ... events skipped`); W2-T04 sends them to `silver.quarantine` instead.
+- Soft delete: `_is_deleted = true` keeps the last values. Live rows are `where not _is_deleted`.
+- A rerun with nothing new in bronze does nothing. A crash mid-run replays the unfinished batch,
+  and the replay changes nothing that the first attempt already merged.
+- The job refuses to start if a silver table and its contract disagree on columns: add the
+  column to the contract and `ALTER TABLE ... ADD COLUMN`, in that order.
+- Resetting silver means dropping the tables and deleting the checkpoint prefix: blast radius.
+
+First run on 2026-09-23: the whole bronze (518 461 events) in 51 s, 3 batches; live rows equal
+`count(*)` in Postgres for all seven tables, 3 order items soft-deleted.
+
+Check it:
+
+```
+make silver
+make trino   # select count(*) from silver.orders where not _is_deleted;  -- = shop.orders
 ```
 
 ## Query

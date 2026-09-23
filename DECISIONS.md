@@ -13,7 +13,7 @@ superseded. Longer reasoning lives in `docs/planning/00-mini-architecture-review
 | ADR-006 | Spark 3.5 + Iceberg 1.11 runtime in `local[2]`, no standalone cluster | accepted |
 | ADR-007 | Bronze append-only streaming (at-least-once contract, idempotent epoch commit to be verified); silver via AvailableNow + foreachBatch MERGE is the no-duplicates guarantee | accepted |
 | ADR-008 | Bronze keeps payload as JSON string; typed schema applied in silver from contracts | accepted |
-| ADR-009 | Soft deletes in silver (`_deleted`), filtered in dbt | accepted |
+| ADR-009 | Soft deletes in silver (`_is_deleted`; Iceberg reserves `_deleted`), filtered in dbt | accepted |
 | ADR-010 | `silver.orders` merge-on-read, other silver tables copy-on-write | proposed, measure in week 2 |
 | ADR-011 | Airflow 3 LocalExecutor, batch only, BashOperator for dbt (no Cosmos) | accepted |
 | ADR-012 | No Schema Registry until week 6; JSON envelopes + JSON Schema contracts | accepted |
@@ -25,6 +25,7 @@ superseded. Longer reasoning lives in `docs/planning/00-mini-architecture-review
 | ADR-018 | `REPLICA IDENTITY FULL` on all `shop` tables so CDC `before` carries the whole previous row | accepted |
 | ADR-019 | Debezium signal table `cdc.debezium_signal` for incremental snapshots, the recovery path when Kafka retention outlives a consumer outage | accepted |
 | ADR-020 | Silver contracts as JSON Schema per table; naive source timestamps become `timestamp_ntz` at millisecond precision | proposed, owner to confirm |
+| ADR-021 | Silver upsert: one AvailableNow job, newest event per key, MERGE guarded by `_last_lsn`, idempotent on replay | accepted |
 
 ## ADR-001 Real data via Olist replay
 
@@ -168,6 +169,14 @@ Verified by running it, not by the docs, which say neither:
   (W2-T02) must treat null as older than any streamed change, otherwise a snapshot row either
   never lands or overwrites a newer state.
 
+Silver (W2-T02) implements that as: inside a batch the newest event per key is the highest LSN,
+null last; a target row with a null `_last_lsn` is replaced by any later event. The limit, which
+the owner should weigh before relying on this path for a real gap: once silver holds a streamed
+LSN for a key, no snapshot read can change that row again. After an outage that lost events,
+keys changed during the gap stay stale until their next change. Making snapshot reads
+comparable would need a position in bronze (the envelope's `source.sequence` carries one for
+incremental reads), which is a bronze contract change and is not done.
+
 Consequences: recovery from "consumer was down longer than retention" is one command with no
 blast radius. The connector role needs `insert` on one table in the source database, and every
 snapshot writes a pair of watermark rows per chunk there, which nothing cleans up yet. Bronze
@@ -193,3 +202,28 @@ up to the millisecond. The microseconds are gone already in Kafka, because `conn
 milliseconds, so a silver timestamp can differ from Postgres by less than 1 ms; reconciliation
 compares counts and keys, not timestamps. Changing a column type in the source is a contract
 change here and an Iceberg type promotion in silver.
+
+## ADR-021 Silver upsert: one AvailableNow job, idempotent MERGE per table
+
+Context: ADR-007 fixes the shape (streaming read of bronze, `foreachBatch`, `MERGE`), not the
+details. `foreachBatch` is at-least-once: Spark re-runs a batch whose commit it did not record,
+and Iceberg's epoch dedup covers the streaming sink only, not a `MERGE` issued inside the batch.
+Spark's MERGE fails when several source rows match one target row, and silently inserts all of
+them when they match none.
+
+Decision: one job reads all of bronze and, per table present in the batch, parses with the
+contract, drops invalid events, keeps one row per key (highest LSN, null last, then Debezium time,
+then Kafka offset), and merges with `when matched and (t._last_lsn is null or s._last_lsn >
+t._last_lsn)`. A delete updates only `_is_deleted`, `_last_lsn`, `_updated_at`. Silver tables are
+format v2, copy-on-write for now (layout is W2-T03, ADR-010). Shuffle partitions are 4, not 200.
+The soft-delete column is `_is_deleted` because Iceberg reserves `_deleted` for a metadata column
+and refuses a table that uses it.
+
+Consequences: a replayed batch is a no-op, verified by a test that merges the same batch twice
+and by rerunning the job on unchanged bronze. Two known limits, both from Iceberg 1.11:
+- The AvailableNow prepare step starts from the snapshot the query first saw
+  (apache/iceberg#18000, open). Expiring that bronze snapshot makes every later run fail, so
+  `expire_snapshots` on bronze (W5-T05) must not run until this is solved, for example with
+  `async-micro-batch-planning-enabled` (untested) or a checkpoint reset.
+- The same step walks every retained bronze snapshot on each run (apache/iceberg#16940), and
+  bronze commits every 20 s while the replayer plays; run time has to be watched.
