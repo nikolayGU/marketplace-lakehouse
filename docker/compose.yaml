@@ -295,15 +295,29 @@ services:
     <<: *common
     image: trinodb/trino:483
     profiles: [query]
+    depends_on:
+      postgres-meta:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    # jvm.config cannot read the environment, so the heap goes to the launcher as a JVM option.
+    command: ["/usr/lib/trino/bin/run-trino", "-J-Xmx${TRINO_XMX}"]
     environment:
-      TRINO_XMX: ${TRINO_XMX}
+      CATALOG_DB: ${CATALOG_DB}
+      META_USER: ${META_USER}
+      META_PASSWORD: ${META_PASSWORD}
+      S3_ENDPOINT: ${S3_ENDPOINT}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
+      S3_BUCKET: ${S3_BUCKET}
     volumes:
-      # TODO(W1): config.properties, jvm.config (uses TRINO_XMX), catalog/lake.properties (jdbc first, rest later)
+      # catalog/lake.properties reads the JDBC catalog in postgres-meta, the one Spark writes.
       - ./trino/etc:/etc/trino:ro
     ports:
       - "${BIND_IP}:8080:8080"
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8080/v1/info | grep -q '\"starting\":false'"]
+      # Ships with the image: /v1/info answers and reports "starting": false.
+      test: ["CMD-SHELL", "/usr/lib/trino/bin/health-check"]
       interval: 15s
       timeout: 5s
       retries: 10

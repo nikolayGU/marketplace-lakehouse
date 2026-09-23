@@ -96,6 +96,25 @@ curl -s 127.0.0.1:4041/metrics | grep ^spark_streaming   # input rows, last batc
 make logs S=spark-bronze
 ```
 
+## Query
+
+`trino` (profile `query`) reads the same JDBC catalog as Spark: `docker/trino/etc/catalog/lake.properties`
+points at `iceberg_catalog` in `postgres-meta` and at MinIO through the native S3 file system,
+which accepts the `s3a://` paths Spark writes. The PostgreSQL driver ships in the image's
+Iceberg plugin. Heap is `TRINO_XMX`, passed to the launcher as `-J-Xmx...`; the query memory
+limits in `config.properties` are sized to fit 2g as well.
+
+Start it without the replayer and check it:
+
+```
+docker compose --env-file .env -f docker/compose.yaml --profile core --profile query up -d trino
+make trino           # trino> select source_table, count(*) from bronze.cdc_events group by 1;
+```
+
+Healthy means the image's `health-check` saw `"starting": false` on `/v1/info`, about 40 s
+after start. Trino only reads what Spark committed: a bronze micro-batch shows up after its
+Iceberg commit, not when Kafka receives the event.
+
 ## Failure scenarios
 
 Each scenario is a `make chaos-<name>` target plus a written answer to five questions:

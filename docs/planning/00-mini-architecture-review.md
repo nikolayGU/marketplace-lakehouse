@@ -214,9 +214,9 @@ oltp_replayer ──▶ postgres-oltp ──▶ kafka-connect ──▶ kafka �
 | kafka | `apache/kafka:4.3.1` | KRaft, single node, `KAFKA_HEAP_OPTS=-Xmx768m`. Образ по умолчанию пишет в `/tmp/kraft-combined-logs`, поэтому `KAFKA_LOG_DIRS` явно указывает на смонтированный том |
 | kafka-connect | `quay.io/debezium/connect:3.5` | Docker Hub `debezium/connect` заморожен на 2.7, образы только на quay.io |
 | minio | `quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z` | На Docker Hub репозиторий удалён, quay.io отдаёт последний community-релиз. Консоли нет, admin через `mc`. ADR-004 |
-| iceberg catalog | JDBC catalog в `postgres-meta` (W1); `quay.io/lakekeeper/catalog:v0.13.1` (should-have) | Spark: `org.apache.iceberg.jdbc.JdbcCatalog` + postgres driver jar. Trino: `iceberg.catalog.type=jdbc`, драйвер в `plugin/iceberg` (проверить, бандлится ли). Переход на REST через `register_table` |
+| iceberg catalog | JDBC catalog в `postgres-meta` (W1); `quay.io/lakekeeper/catalog:v0.13.1` (should-have) | Spark: `org.apache.iceberg.jdbc.JdbcCatalog` + postgres driver jar. Trino: `iceberg.catalog.type=jdbc`, драйвер `postgresql-42.7.13` уже лежит в `plugin/iceberg` образа 483 (проверено 23.09, W1-T07). Переход на REST через `register_table` |
 | spark | `apache/spark:3.5.9` + `iceberg-spark-runtime-3.5_2.12:1.11.0` + `spark-sql-kafka-0-10` | Spark 4.x runtime появился только с Iceberg 1.10, моложе; 3.5 безопаснее. ADR-006 |
-| trino | `trinodb/trino:483` | Iceberg connector, `iceberg.catalog.type=rest` |
+| trino | `trinodb/trino:483` | Iceberg connector, `iceberg.catalog.type=jdbc` (W1), `rest` после W2-T09 |
 | dbt | `dbt-core 1.10.x` + `dbt-trino 1.10.3` | Стратегии `append`, `merge`, `delete+insert` |
 | airflow | `apache/airflow:3.3.2` | LocalExecutor; api-server + scheduler + dag-processor |
 | prometheus, grafana | `prom/prometheus:v3.14.0`, `grafana/grafana:13.2.2` | |
@@ -243,6 +243,8 @@ Python: 3.12, `uv`, `ruff`, `mypy`, `pytest`, `pydantic-settings`, `psycopg`, `p
 | **Итого** | **4.5 GB** | **1.47 GB** | **33%** |
 
 kafka-connect на простое занимает 65% лимита, но это не рабочий набор: G1 закоммитил 771 MB кучи при `used` 322 MB и metaspace 58 MB. Потолок при полностью закоммиченной куче примерно 1.28 GB, то есть в лимит 1.5 GB укладывается. Проверяется на snapshot в W1-T05: если контейнер поймает OOM-kill, снижать `CONNECT_HEAP` до `-Xmx768m`, а не поднимать лимит.
+
+Замер 23.09.2026 (W1-T07), core без реплеера плюс trino после запроса по bronze: trino 1.1 GB из лимита 3.5 GB (31%) при `Xmx` 2.5 GB, остальные core-сервисы в пределах замера W1-T06.
 
 Замер 22.09.2026 (W1-T06), под нагрузкой реплея: spark-bronze 985 MB из лимита 2.5 GB (38%), образ `lakehouse/spark:dev` 2.5 GB на диске. Одновременно kafka 534 MB, kafka-connect 664 MB, postgres-oltp 386 MB, minio 150 MB, postgres-meta 42 MB. oltp-replayer в замер не вошёл, он запускался с хоста.
 
@@ -332,6 +334,6 @@ Schema evolution: bronze не ломается, потому что `after` эт
 
 1. Лицензия Olist: проверить на Kaggle перед тем, как класть сэмпл в публичный репо. Если нельзя, сэмпл генерируется из полного датасета локально, а в git лежит только скрипт.
 2. MinIO vs RustFS/Garage: решить после `docker pull` в W1. Ключевое слово в вакансиях «S3», а не «MinIO».
-5. Trino JDBC catalog: бандлится ли postgres-драйвер в `plugin/iceberg` образа 483. Если нет, положить jar в образ (одна строка Dockerfile) или сразу идти в REST.
+5. ~~Trino JDBC catalog: бандлится ли postgres-драйвер в `plugin/iceberg` образа 483.~~ Закрыто 23.09 (W1-T07): бандлится, свой образ Trino не нужен.
 3. Название репозитория: `de-lakehouse-mini` или доменное, например `marketplace-lakehouse`. Доменное лучше читается в портфолио.
 4. Язык docs: README и публичные документы на английском, planning-документы на русском. Подтвердить.

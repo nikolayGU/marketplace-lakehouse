@@ -66,6 +66,12 @@ the image). Add Lakekeeper in week 2 (W2-T09) with a 3-hour cap and migrate tabl
 Consequences: zero new services in week 1; the JDBC to REST migration is itself a learning
 exercise about what a catalog actually stores.
 
+Verified on 2026-09-23 (W1-T07): `trinodb/trino:483` ships `postgresql-42.7.13.jar` in
+`plugin/iceberg`, so Trino needs no custom image. `iceberg.jdbc-catalog.catalog-name` must be
+`lake`, the Spark catalog name, because JdbcCatalog keys every table row by it; with any other
+value Trino sees an empty catalog. The native S3 file system reads the `s3a://` locations Spark
+records in the metadata.
+
 ## ADR-007 Bronze streaming append, silver batch MERGE
 
 Context: Iceberg's Spark streaming sink is append-oriented; MERGE INTO driven directly from a
