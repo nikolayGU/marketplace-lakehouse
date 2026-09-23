@@ -34,6 +34,7 @@
 
 - ADR-020 (контракты silver, `timestamp_ntz` с точностью до миллисекунды) записан как proposed.
 - ADR-019, дополнение: incremental snapshot не может исправить строку silver, у которой уже есть streamed LSN. Для восстановления после реального провала в Kafka нужна позиция snapshot-чтения в bronze (`source.sequence`), это изменение контракта bronze.
+- ADR-021: порядок событий по одному ключу держится на `lsn`, это верно только при одном писателе (как у реплеера). При конкурентных DELETE и повторном INSERT того же ключа нужен `source.sequence`, которого нет в bronze. Тот же `sequence` закрыл бы и пункт выше про snapshot. Предлагаю одно решение на оба: добавить `sequence` в bronze как новую колонку (ADD COLUMN, без переписывания), но это изменение контракта bronze.
 - ADR-021: apache/iceberg#18000. `expire_snapshots` на bronze (W5-T05) сломает AvailableNow-чтение silver. Решить до W5.
 - В Docker остались два анонимных тома от одноразовых контейнеров исследования (не проектные данные). Удаление тома в списке blast radius, поэтому не удалены: `docker volume rm 24fddd5f9b3da04014cbf027b837239460bb1cd4c0ac4b425f927bd7f71f88e2 179eb31fb74b947039c3e78e8d9cecf3380fbe6ee0b32db240ee1ee52333924d`.
 

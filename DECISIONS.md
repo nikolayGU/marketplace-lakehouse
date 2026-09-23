@@ -227,3 +227,9 @@ and by rerunning the job on unchanged bronze. Two known limits, both from Iceber
   `async-micro-batch-planning-enabled` (untested) or a checkpoint reset.
 - The same step walks every retained bronze snapshot on each run (apache/iceberg#16940), and
   bronze commits every 20 s while the replayer plays; run time has to be watched.
+- LSN is the start of the change's WAL record, not its commit position. Per key it only grows
+  with a single writer, which is what the replayer is (checked on 1 561 same-key pairs in Kafka:
+  none decreasing). With concurrent writers a re-insert of a key that another transaction just
+  deleted can commit later with a lower LSN, and the guard would keep the row deleted. The sound
+  order is Debezium's `source.sequence` (`[last commit LSN, LSN]`), which bronze does not store;
+  adding it is a bronze contract change for the owner to decide.
