@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "silver/sellers",
+  "title": "shop.sellers row as Debezium sends it in before/after, typed into silver.sellers",
+  "type": "object",
+  "x-source-table": "shop.sellers",
+  "x-primary-key": ["seller_id"],
+  "required": ["seller_id", "seller_zip_code_prefix", "seller_city", "seller_state"],
+  "properties": {
+    "seller_id": {"type": "string", "x-silver-type": "string"},
+    "seller_zip_code_prefix": {"type": "string", "x-silver-type": "string", "description": "text: zip prefixes keep their leading zeros"},
+    "seller_city": {"type": "string", "x-silver-type": "string"},
+    "seller_state": {"type": "string", "x-silver-type": "string"}
+  }
+}

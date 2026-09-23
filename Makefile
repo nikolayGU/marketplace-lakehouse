@@ -89,10 +89,18 @@ lint: ## ruff, mypy, yamllint, sqlfluff, compose config
 	  [ -n "$$paths" ] && uv run sqlfluff lint $$paths || echo "no SQL directories yet"
 	$(COMPOSE) --profile '*' config -q
 
-test: ## unit tests
+test: ## unit tests (Spark ones skip on a host without Java)
 	uv run pytest tests/unit -q
+
+SPARK_TESTS := test_bronze_cdc_ingest.py test_contracts.py test_envelope.py
+
+test-spark: ## the Spark unit tests, inside lakehouse/spark:dev because the host has no JVM
+	docker run --rm --user root --entrypoint bash -v "$(CURDIR)":/repo:ro \
+	  -e PYTHONPATH=/opt/spark/python:/opt/spark/python/lib/py4j-0.10.9.7-src.zip:/repo/streaming \
+	  lakehouse/spark:dev -c 'pip install -q pytest jsonschema && cd /repo/tests/unit && \
+	  python3 -m pytest -q -p no:cacheprovider --rootdir=/tmp $(SPARK_TESTS)'
 
 dbt-parse: ## dbt parse without a warehouse
 	cd dbt && uv run dbt parse --profiles-dir . --target ci
 
-.PHONY: help secrets hooks data migrate replay-load replay-start replay-reset up down status logs nuke replay replay-status psql trino kafka-topics kafka-groups cdc-snapshot connector-status iceberg-demo lint test dbt-parse
+.PHONY: help secrets hooks data migrate replay-load replay-start replay-reset up down status logs nuke replay replay-status psql trino kafka-topics kafka-groups cdc-snapshot connector-status iceberg-demo lint test test-spark dbt-parse

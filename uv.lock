@@ -818,6 +818,7 @@ source = { virtual = "." }
 dev = [
     { name = "dbt-core" },
     { name = "dbt-trino" },
+    { name = "jsonschema" },
     { name = "kaggle" },
     { name = "mypy" },
     { name = "pre-commit" },
@@ -838,6 +839,7 @@ dev = [
 dev = [
     { name = "dbt-core", specifier = ">=1.10,<1.11" },
     { name = "dbt-trino", specifier = ">=1.10,<1.11" },
+    { name = "jsonschema", specifier = ">=4.23" },
     { name = "kaggle", specifier = ">=2.2.4" },
     { name = "mypy", specifier = ">=1.17" },
     { name = "pre-commit", specifier = ">=4.3" },

@@ -1,0 +1,41 @@
+{
+  "key": {
+    "order_id": "order-2"
+  },
+  "value": {
+    "before": null,
+    "after": {
+      "order_id": "order-2",
+      "customer_id": "customer-2",
+      "order_status": "delivered",
+      "order_purchase_timestamp": 1782111448898,
+      "order_approved_at": 1782112279898,
+      "order_delivered_carrier_date": 1782114981898,
+      "order_delivered_customer_date": 1782531181898,
+      "order_estimated_delivery_date": 1782777861898
+    },
+    "source": {
+      "version": "3.5.2.Final",
+      "connector": "postgresql",
+      "name": "oltp",
+      "ts_ms": 1790001000000,
+      "snapshot": "true",
+      "db": "shop",
+      "sequence": "[\"987654320\",\"987654320\"]",
+      "ts_us": 1790001000000000,
+      "ts_ns": 1790001000000000000,
+      "schema": "shop",
+      "table": "orders",
+      "txId": 812,
+      "lsn": 987654320,
+      "xmin": null,
+      "origin": null,
+      "origin_lsn": null
+    },
+    "transaction": null,
+    "op": "r",
+    "ts_ms": 1790001000100,
+    "ts_us": 1790001000100000,
+    "ts_ns": 1790001000100000000
+  }
+}

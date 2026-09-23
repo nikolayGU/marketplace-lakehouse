@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "silver/reviews",
+  "title": "shop.reviews row as Debezium sends it in before/after, typed into silver.reviews",
+  "description": "review_id repeats across orders in the source, so the key is the pair",
+  "type": "object",
+  "x-source-table": "shop.reviews",
+  "x-primary-key": ["review_id", "order_id"],
+  "required": ["review_id", "order_id", "review_score", "review_creation_date", "review_answer_timestamp"],
+  "properties": {
+    "review_id": {"type": "string", "x-silver-type": "string"},
+    "order_id": {"type": "string", "x-silver-type": "string"},
+    "review_score": {"type": "integer", "x-silver-type": "int", "minimum": 1, "maximum": 5},
+    "review_comment_title": {"type": ["string", "null"], "x-silver-type": "string"},
+    "review_comment_message": {"type": ["string", "null"], "x-silver-type": "string"},
+    "review_creation_date": {"type": "integer", "x-silver-type": "timestamp_ntz"},
+    "review_answer_timestamp": {"type": "integer", "x-silver-type": "timestamp_ntz"}
+  }
+}

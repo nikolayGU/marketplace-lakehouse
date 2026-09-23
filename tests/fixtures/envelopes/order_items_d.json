@@ -1,0 +1,41 @@
+{
+  "key": {
+    "order_id": "order-1",
+    "order_item_id": 1
+  },
+  "value": {
+    "before": {
+      "order_id": "order-1",
+      "order_item_id": 1,
+      "product_id": "product-1",
+      "seller_id": "seller-1",
+      "shipping_limit_date": 1782670471898,
+      "price": 99.9,
+      "freight_value": 39.98
+    },
+    "after": null,
+    "source": {
+      "version": "3.5.2.Final",
+      "connector": "postgresql",
+      "name": "oltp",
+      "ts_ms": 1790105098068,
+      "snapshot": "false",
+      "db": "shop",
+      "sequence": "[\"1110586632\",\"1110641816\"]",
+      "ts_us": 1790105098068000,
+      "ts_ns": 1790105098068000000,
+      "schema": "shop",
+      "table": "order_items",
+      "txId": 6772,
+      "lsn": 1110641816,
+      "xmin": null,
+      "origin": null,
+      "origin_lsn": null
+    },
+    "transaction": null,
+    "op": "d",
+    "ts_ms": 1790105098477,
+    "ts_us": 1790105098477000,
+    "ts_ns": 1790105098477000000
+  }
+}

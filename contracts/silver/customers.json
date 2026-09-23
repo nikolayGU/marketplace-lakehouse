@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "silver/customers",
+  "title": "shop.customers row as Debezium sends it in before/after, typed into silver.customers",
+  "type": "object",
+  "x-source-table": "shop.customers",
+  "x-primary-key": ["customer_id"],
+  "required": ["customer_id", "customer_unique_id", "customer_zip_code_prefix", "customer_city", "customer_state"],
+  "properties": {
+    "customer_id": {"type": "string", "x-silver-type": "string"},
+    "customer_unique_id": {"type": "string", "x-silver-type": "string"},
+    "customer_zip_code_prefix": {"type": "string", "x-silver-type": "string", "description": "text: zip prefixes keep their leading zeros"},
+    "customer_city": {"type": "string", "x-silver-type": "string"},
+    "customer_state": {"type": "string", "x-silver-type": "string"}
+  }
+}

@@ -21,6 +21,7 @@ dev = [
     "prometheus-client>=0.22",
     "pre-commit>=4.3",
     "kaggle>=2.2.4",
+    "jsonschema>=4.23",
 ]
 
 [tool.ruff]

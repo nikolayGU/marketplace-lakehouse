@@ -1,0 +1,39 @@
+{
+  "key": {
+    "order_id": "order-1",
+    "payment_sequential": 1
+  },
+  "value": {
+    "before": null,
+    "after": {
+      "order_id": "order-1",
+      "payment_sequential": 1,
+      "payment_type": "credit_card",
+      "payment_installments": 5,
+      "payment_value": 216.87
+    },
+    "source": {
+      "version": "3.5.2.Final",
+      "connector": "postgresql",
+      "name": "oltp",
+      "ts_ms": 1790104944721,
+      "snapshot": "false",
+      "db": "shop",
+      "sequence": "[\"1053057936\",\"1053150520\"]",
+      "ts_us": 1790104944721000,
+      "ts_ns": 1790104944721000000,
+      "schema": "shop",
+      "table": "payments",
+      "txId": 6309,
+      "lsn": 1053150520,
+      "xmin": null,
+      "origin": null,
+      "origin_lsn": null
+    },
+    "transaction": null,
+    "op": "c",
+    "ts_ms": 1790104945151,
+    "ts_us": 1790104945151000,
+    "ts_ns": 1790104945151000000
+  }
+}

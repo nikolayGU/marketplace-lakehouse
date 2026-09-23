@@ -24,6 +24,7 @@ superseded. Longer reasoning lives in `docs/planning/00-mini-architecture-review
 | ADR-017 | Stateful windowed job `orders_per_minute` (watermark, state, update mode) is mandatory, not optional | accepted |
 | ADR-018 | `REPLICA IDENTITY FULL` on all `shop` tables so CDC `before` carries the whole previous row | accepted |
 | ADR-019 | Debezium signal table `cdc.debezium_signal` for incremental snapshots, the recovery path when Kafka retention outlives a consumer outage | accepted |
+| ADR-020 | Silver contracts as JSON Schema per table; naive source timestamps become `timestamp_ntz` at millisecond precision | proposed, owner to confirm |
 
 ## ADR-001 Real data via Olist replay
 
@@ -171,3 +172,24 @@ Consequences: recovery from "consumer was down longer than retention" is one com
 blast radius. The connector role needs `insert` on one table in the source database, and every
 snapshot writes a pair of watermark rows per chunk there, which nothing cleans up yet. Bronze
 receives the snapshotted rows as extra events, which it is allowed to by contract (ADR-007).
+
+## ADR-020 Silver contracts and timestamp types
+
+Context: silver needs typed tables, and ADR-008 puts the typing there, but the payload in bronze is
+JSON text whose encoding follows the connector settings (`decimal.handling.mode=double`,
+`time.precision.mode=connect`). Source timestamps are `timestamp without time zone` holding Olist
+local times.
+
+Decision: one JSON Schema per table in `contracts/silver/`, which states both the wire type and the
+silver type of each column plus the primary key. Silver parses `after`/`before` with the wire
+types and casts. Timestamps become `timestamp_ntz` (Iceberg `timestamp`, Trino `timestamp(6)`),
+converted with integer arithmetic on the epoch milliseconds so the Spark session time zone never
+touches them. `smallint` becomes `int` because Iceberg has no smallint. A unit test keeps every
+contract in step with `oltp/migrations/001_schema.sql`, and envelope fixtures shaped after the
+live topics are validated against both schemas.
+
+Consequences: no time zone is invented, and a value reads the same in Spark, Trino and Postgres
+up to the millisecond. The microseconds are gone already in Kafka, because `connect` precision is
+milliseconds, so a silver timestamp can differ from Postgres by less than 1 ms; reconciliation
+compares counts and keys, not timestamps. Changing a column type in the source is a contract
+change here and an Iceberg type promotion in silver.

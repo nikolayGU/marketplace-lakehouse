@@ -1,0 +1,42 @@
+{
+  "key": {
+    "product_id": "product-1"
+  },
+  "value": {
+    "before": null,
+    "after": {
+      "product_id": "product-1",
+      "product_category_name": null,
+      "product_name_lenght": null,
+      "product_description_lenght": null,
+      "product_photos_qty": null,
+      "product_weight_g": 1225,
+      "product_length_cm": 55,
+      "product_height_cm": 10,
+      "product_width_cm": 26
+    },
+    "source": {
+      "version": "3.5.2.Final",
+      "connector": "postgresql",
+      "name": "oltp",
+      "ts_ms": 1790106056747,
+      "snapshot": "incremental",
+      "db": "shop",
+      "sequence": "[\"1122999696\",\"1122999696\"]",
+      "ts_us": 1790106056747000,
+      "ts_ns": 1790106056747000000,
+      "schema": "shop",
+      "table": "products",
+      "txId": null,
+      "lsn": null,
+      "xmin": null,
+      "origin": null,
+      "origin_lsn": null
+    },
+    "transaction": null,
+    "op": "r",
+    "ts_ms": 1790106056747,
+    "ts_us": 1790106056747000,
+    "ts_ns": 1790106056747000000
+  }
+}

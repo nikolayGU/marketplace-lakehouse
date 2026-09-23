@@ -20,12 +20,6 @@ Spark image and jobs.
 - `spark_jobs/catalog.py`: SparkSession with Iceberg catalog `lake` (JdbcCatalog in
   postgres-meta) and S3A pointed at MinIO. `CATALOG_TYPE=rest` is refused until W2-T09.
 
-Unit tests for `to_bronze` need a JVM and skip without one. The host has no Java; run them in
-the image:
-
-```
-docker run --rm --user root --entrypoint bash -v "$PWD":/repo:ro \
-  -e PYTHONPATH=/opt/spark/python:/opt/spark/python/lib/py4j-0.10.9.7-src.zip:/repo/streaming \
-  lakehouse/spark:dev -c 'pip install -q pytest && cd /tmp && python3 -m pytest -q \
-  -p no:cacheprovider --rootdir=/tmp /repo/tests/unit/test_bronze_cdc_ingest.py'
-```
+Unit tests that build a SparkSession need a JVM and skip without one. The host has no Java;
+`make test-spark` runs the Spark test files (`SPARK_TESTS` in the Makefile) inside
+`lakehouse/spark:dev` instead; a new Spark test file has to be added to that list.

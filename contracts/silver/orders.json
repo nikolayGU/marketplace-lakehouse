@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "silver/orders",
+  "title": "shop.orders row as Debezium sends it in before/after, typed into silver.orders",
+  "type": "object",
+  "x-source-table": "shop.orders",
+  "x-primary-key": ["order_id"],
+  "required": ["order_id", "customer_id", "order_status", "order_purchase_timestamp", "order_estimated_delivery_date"],
+  "properties": {
+    "order_id": {"type": "string", "x-silver-type": "string"},
+    "customer_id": {"type": "string", "x-silver-type": "string"},
+    "order_status": {"type": "string", "x-silver-type": "string", "enum": ["created", "approved", "invoiced", "processing", "shipped", "delivered", "canceled", "unavailable"]},
+    "order_purchase_timestamp": {"type": "integer", "x-silver-type": "timestamp_ntz"},
+    "order_approved_at": {"type": ["integer", "null"], "x-silver-type": "timestamp_ntz"},
+    "order_delivered_carrier_date": {"type": ["integer", "null"], "x-silver-type": "timestamp_ntz"},
+    "order_delivered_customer_date": {"type": ["integer", "null"], "x-silver-type": "timestamp_ntz"},
+    "order_estimated_delivery_date": {"type": "integer", "x-silver-type": "timestamp_ntz"}
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "silver/order_items",
+  "title": "shop.order_items row as Debezium sends it in before/after, typed into silver.order_items",
+  "type": "object",
+  "x-source-table": "shop.order_items",
+  "x-primary-key": ["order_id", "order_item_id"],
+  "required": ["order_id", "order_item_id", "product_id", "seller_id", "shipping_limit_date", "price", "freight_value"],
+  "properties": {
+    "order_id": {"type": "string", "x-silver-type": "string"},
+    "order_item_id": {"type": "integer", "x-silver-type": "int"},
+    "product_id": {"type": "string", "x-silver-type": "string"},
+    "seller_id": {"type": "string", "x-silver-type": "string"},
+    "shipping_limit_date": {"type": "integer", "x-silver-type": "timestamp_ntz"},
+    "price": {"type": "number", "x-silver-type": "decimal(10,2)"},
+    "freight_value": {"type": "number", "x-silver-type": "decimal(10,2)"}
+  }
+}

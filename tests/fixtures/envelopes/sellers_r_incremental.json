@@ -1,0 +1,37 @@
+{
+  "key": {
+    "seller_id": "seller-1"
+  },
+  "value": {
+    "before": null,
+    "after": {
+      "seller_id": "seller-1",
+      "seller_zip_code_prefix": "09080",
+      "seller_city": "santo andre",
+      "seller_state": "SP"
+    },
+    "source": {
+      "version": "3.5.2.Final",
+      "connector": "postgresql",
+      "name": "oltp",
+      "ts_ms": 1790106056747,
+      "snapshot": "incremental",
+      "db": "shop",
+      "sequence": "[\"1122999696\",\"1122999696\"]",
+      "ts_us": 1790106056747000,
+      "ts_ns": 1790106056747000000,
+      "schema": "shop",
+      "table": "sellers",
+      "txId": null,
+      "lsn": null,
+      "xmin": null,
+      "origin": null,
+      "origin_lsn": null
+    },
+    "transaction": null,
+    "op": "r",
+    "ts_ms": 1790106056747,
+    "ts_us": 1790106056747000,
+    "ts_ns": 1790106056747000000
+  }
+}

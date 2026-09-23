@@ -1,0 +1,41 @@
+{
+  "key": {
+    "review_id": "review-1",
+    "order_id": "order-1"
+  },
+  "value": {
+    "before": null,
+    "after": {
+      "review_id": "review-1",
+      "order_id": "order-1",
+      "review_score": 4,
+      "review_comment_title": null,
+      "review_comment_message": null,
+      "review_creation_date": 1782173061898,
+      "review_answer_timestamp": 1782219000898
+    },
+    "source": {
+      "version": "3.5.2.Final",
+      "connector": "postgresql",
+      "name": "oltp",
+      "ts_ms": 1790104944721,
+      "snapshot": "false",
+      "db": "shop",
+      "sequence": "[\"1053057936\",\"1053150600\"]",
+      "ts_us": 1790104944721000,
+      "ts_ns": 1790104944721000000,
+      "schema": "shop",
+      "table": "reviews",
+      "txId": 6309,
+      "lsn": 1053150600,
+      "xmin": null,
+      "origin": null,
+      "origin_lsn": null
+    },
+    "transaction": null,
+    "op": "c",
+    "ts_ms": 1790104945151,
+    "ts_us": 1790104945151000,
+    "ts_ns": 1790104945151000000
+  }
+}

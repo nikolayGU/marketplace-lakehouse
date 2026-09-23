@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "silver/products",
+  "title": "shop.products row as Debezium sends it in before/after, typed into silver.products",
+  "type": "object",
+  "x-source-table": "shop.products",
+  "x-primary-key": ["product_id"],
+  "required": ["product_id"],
+  "properties": {
+    "product_id": {"type": "string", "x-silver-type": "string"},
+    "product_category_name": {"type": ["string", "null"], "x-silver-type": "string"},
+    "product_name_lenght": {"type": ["integer", "null"], "x-silver-type": "int", "description": "source spelling kept"},
+    "product_description_lenght": {"type": ["integer", "null"], "x-silver-type": "int", "description": "source spelling kept"},
+    "product_photos_qty": {"type": ["integer", "null"], "x-silver-type": "int"},
+    "product_weight_g": {"type": ["integer", "null"], "x-silver-type": "int"},
+    "product_length_cm": {"type": ["integer", "null"], "x-silver-type": "int"},
+    "product_height_cm": {"type": ["integer", "null"], "x-silver-type": "int"},
+    "product_width_cm": {"type": ["integer", "null"], "x-silver-type": "int"}
+  }
+}

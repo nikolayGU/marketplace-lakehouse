@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "silver/payments",
+  "title": "shop.payments row as Debezium sends it in before/after, typed into silver.payments",
+  "type": "object",
+  "x-source-table": "shop.payments",
+  "x-primary-key": ["order_id", "payment_sequential"],
+  "required": ["order_id", "payment_sequential", "payment_type", "payment_installments", "payment_value"],
+  "properties": {
+    "order_id": {"type": "string", "x-silver-type": "string"},
+    "payment_sequential": {"type": "integer", "x-silver-type": "int"},
+    "payment_type": {"type": "string", "x-silver-type": "string", "enum": ["credit_card", "boleto", "voucher", "debit_card", "not_defined"]},
+    "payment_installments": {"type": "integer", "x-silver-type": "int"},
+    "payment_value": {"type": "number", "x-silver-type": "decimal(10,2)"}
+  }
+}
