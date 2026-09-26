@@ -18,6 +18,8 @@ from spark_jobs.silver_upsert import (
     BRONZE,
     MERGE_ON_READ,
     METADATA,
+    QUARANTINE,
+    QUARANTINE_DDL,
     SILVER,
     ensure_table,
     latest_per_key,
@@ -25,7 +27,7 @@ from spark_jobs.silver_upsert import (
     partition_fields,
     row_images,
     run,
-    valid,
+    unknown_fields,
 )
 
 CONTRACTS = load_contracts(Path(__file__).parents[2] / "contracts" / "silver")
@@ -125,8 +127,12 @@ def bronze(spark: SparkSession, *events: Row) -> DataFrame:
 
 def latest(spark: SparkSession, *events: Row, contract: TableContract = ORDERS) -> list[Row]:
     images = row_images(bronze(spark, *events), contract)
-    rows = latest_per_key(images.where(valid(contract)), contract).collect()
+    rows = latest_per_key(images.where("_reason is null"), contract).collect()
     return sorted(rows, key=lambda r: tuple(r[k] for k in contract.primary_key))
+
+
+def reasons(spark: SparkSession, *events: Row, contract: TableContract = ORDERS) -> list[Any]:
+    return [r._reason for r in row_images(bronze(spark, *events), contract).collect()]
 
 
 @needs_java
@@ -204,21 +210,84 @@ def test_composite_keys_are_kept_apart(spark: SparkSession) -> None:
 
 @needs_java
 @pytest.mark.parametrize(
-    "bad",
+    ("bad", "why"),
     [
-        event(None, raw="not json at all {"),
-        event("c", after=None),
-        event("c", after={"order_status": "created"}),
-        event("c", order(order_purchase_timestamp="yesterday")),
-        event("c", order(order_estimated_delivery_date=None)),
-        event("t", order()),
+        (event(None, raw="not json at all {"), "unparsed_envelope"),
+        (event("t", order()), "unknown_op"),
+        (event("c", after=None), "null_key"),
+        (event("c", after={"order_status": "created"}), "null_key"),
+        (event("c", order(order_purchase_timestamp="yesterday")), "type_mismatch"),
+        (event("c", order(order_approved_at="yesterday")), "type_mismatch"),
+        (event("c", order(order_estimated_delivery_date=None)), "null_required"),
     ],
-    ids=["unparsed-envelope", "no-payload", "no-key", "wrong-type", "null-required", "truncate"],
+    ids=[
+        "unparsed-envelope",
+        "truncate",
+        "no-payload",
+        "no-key",
+        "wrong-type-required",
+        "wrong-type-nullable",
+        "null-required",
+    ],
 )
-def test_invalid_event_is_not_merged(spark: SparkSession, bad: Row) -> None:
+def test_invalid_event_is_not_merged_and_says_why(spark: SparkSession, bad: Row, why: str) -> None:
     rows = latest(spark, bad, event("c", order("o2"), lsn=100))
 
     assert [r.order_id for r in rows] == ["o2"]
+    assert reasons(spark, bad) == [why]
+
+
+@needs_java
+def test_explicit_json_null_in_a_nullable_column_is_valid(spark: SparkSession) -> None:
+    assert reasons(spark, event("c", order(order_approved_at=None))) == [None]
+
+
+@needs_java
+def test_delete_is_valid_whatever_its_non_key_values(spark: SparkSession) -> None:
+    """A delete only flags the row; a before-image value that does not fit must not block it."""
+    bad_before = order(order_approved_at="yesterday", order_delivered_customer_date=10**17)
+
+    assert reasons(spark, event("d", before=bad_before, lsn=500)) == [None]
+
+
+@needs_java
+@pytest.mark.parametrize(
+    ("bad", "contract"),
+    [
+        (event("c", order(order_approved_at=10**17)), ORDERS),
+        (
+            event(
+                "c",
+                {
+                    "order_id": "o1",
+                    "order_item_id": 1,
+                    "product_id": "p1",
+                    "seller_id": "s1",
+                    "shipping_limit_date": 1782670471898,
+                    "price": 1e12,
+                    "freight_value": 1.0,
+                },
+                table="order_items",
+            ),
+            CONTRACTS["order_items"],
+        ),
+    ],
+    ids=["timestamp-out-of-range", "decimal-out-of-range"],
+)
+def test_value_that_parses_but_does_not_fit_is_a_type_mismatch(
+    spark: SparkSession, bad: Row, contract: TableContract
+) -> None:
+    assert reasons(spark, bad, contract=contract) == ["type_mismatch"]
+
+
+@needs_java
+def test_fields_the_contract_does_not_know_are_reported(spark: SparkSession) -> None:
+    evolved = event("c", order(sales_channel="web"))
+    images = row_images(bronze(spark, evolved), ORDERS)
+
+    assert unknown_fields(images, ORDERS) == ["sales_channel"]
+    # Reported, not quarantined: the row still merges.
+    assert reasons(spark, evolved) == [None]
 
 
 @needs_java
@@ -241,6 +310,8 @@ def fresh_silver(spark: SparkSession) -> Iterator[None]:
     for contract in CONTRACTS.values():
         spark.sql(f"drop table if exists {SILVER}.{contract.table}")
         ensure_table(spark, contract)
+    spark.sql(f"drop table if exists {QUARANTINE}")
+    spark.sql(QUARANTINE_DDL)
     yield
 
 
@@ -326,12 +397,16 @@ def test_run_processes_only_what_bronze_committed_since_the_last_run(
     spark.sql(f"create namespace if not exists {BRONZE_NAMESPACE}")
     spark.sql(f"drop table if exists {BRONZE}")
     spark.sql(BRONZE_DDL)
+    # run() creates the quarantine table itself on a fresh catalog.
+    spark.sql(f"drop table if exists {QUARANTINE}")
     checkpoint = f"file://{tmp_path}/checkpoint"
 
     bronze(spark, event("c", order(), lsn=100), event("c", order("o2"), lsn=110)).writeTo(
         BRONZE
     ).append()
-    bronze(spark, event("u", order(status="approved"), lsn=120)).writeTo(BRONZE).append()
+    bronze(
+        spark, event("u", order(status="approved"), lsn=120), event(None, raw="garbage")
+    ).writeTo(BRONZE).append()
     run(spark, CONTRACTS, checkpoint, max_rows_per_batch=1)
     first = silver(spark)
 
@@ -340,6 +415,7 @@ def test_run_processes_only_what_bronze_committed_since_the_last_run(
     second = silver(spark)
 
     assert first["o1"].order_status == "approved"
+    assert [r.reason for r in quarantined(spark)] == ["unparsed_envelope"]
     assert (first["o2"]._is_deleted, second["o2"]._is_deleted) == (False, True)
     # o1 got no new event, so the second run left its row alone.
     assert second["o1"]._updated_at == first["o1"]._updated_at
@@ -465,3 +541,63 @@ def test_copy_on_write_table_keeps_the_guard(spark: SparkSession) -> None:
         for r in spark.table(f"{SILVER}.customers").collect()
     ]
     assert rows == [("c1", "campinas", 300)]
+
+
+# Quarantine: events silver cannot type, with a reason, once per Kafka record.
+
+
+def quarantined(spark: SparkSession) -> list[Row]:
+    return sorted(spark.table(QUARANTINE).collect(), key=lambda r: r.kafka_offset)
+
+
+@needs_iceberg
+@pytest.mark.usefixtures("fresh_silver")
+def test_rejected_events_land_in_quarantine_once(spark: SparkSession) -> None:
+    batch = bronze(
+        spark,
+        event("c", order(), lsn=100),
+        event(None, raw="not json at all {"),
+        event("c", order("o3", order_approved_at="yesterday"), lsn=101),
+        event("c", {"id": 1}, table="wishlists"),
+        event("d", before={"order_status": "canceled"}, lsn=102),
+    )
+
+    merge_batch(batch, 7, CONTRACTS)
+    merge_batch(batch, 7, CONTRACTS)
+
+    rows = quarantined(spark)
+    assert [(r.source_table, r.reason, r.op, r.batch_id) for r in rows] == [
+        ("orders", "unparsed_envelope", None, 7),
+        ("orders", "type_mismatch", "c", 7),
+        ("wishlists", "no_contract", "c", 7),
+        ("orders", "null_key", "d", 7),
+    ]
+    # The payload is what the event carried: raw text, `after`, or `before` for a delete.
+    assert rows[0].payload == "not json at all {"
+    assert json.loads(rows[1].payload)["order_approved_at"] == "yesterday"
+    assert json.loads(rows[2].payload) == {"id": 1}
+    assert json.loads(rows[3].payload) == {"order_status": "canceled"}
+    assert silver(spark).keys() == {"o1"}
+
+
+@needs_iceberg
+@pytest.mark.usefixtures("fresh_silver")
+def test_same_kafka_coordinates_twice_in_a_batch_quarantine_once(spark: SparkSession) -> None:
+    poison = event(None, raw="garbage")
+
+    merge_batch(bronze(spark, poison, poison), 0, CONTRACTS)
+
+    assert len(quarantined(spark)) == 1
+
+
+@needs_iceberg
+@pytest.mark.usefixtures("fresh_silver")
+def test_batch_of_only_invalid_events_changes_no_silver_row(spark: SparkSession) -> None:
+    merge_batch(bronze(spark, event("c", order(), lsn=100)), 0, CONTRACTS)
+    before = silver(spark)
+
+    merge_batch(
+        bronze(spark, event("u", order(order_estimated_delivery_date=None), lsn=200)), 1, CONTRACTS
+    )
+
+    assert silver(spark)["o1"]._last_lsn == before["o1"]._last_lsn == 100

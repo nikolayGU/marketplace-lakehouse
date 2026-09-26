@@ -115,9 +115,25 @@ bronze snapshot committed since the previous run in micro-batches of about 200 0
 `lake.silver.<table>` tables and exits. Airflow takes over scheduling in week 3.
 
 - Per table and batch: parse `after` (`before` for a delete) with `contracts/silver/<table>.json`,
-  drop invalid events (unknown op, null key, a NOT NULL column that came out null), keep the
-  newest event per primary key, `MERGE` guarded by `_last_lsn`. Invalid events are counted in the
-  log (`invalid ... events skipped`); W2-T04 sends them to `silver.quarantine` instead.
+  send events that cannot become a row to `silver.quarantine`, keep the newest event per primary
+  key, `MERGE` guarded by `_last_lsn`.
+- Quarantine: one row per Kafka record, keyed by `(topic, kafka_partition, kafka_offset)`, so a
+  replayed batch adds nothing. A table without a contract goes there whole as `no_contract`.
+  Otherwise `reason` is the first that applies: `unparsed_envelope` (bronze kept it as `raw`),
+  `unknown_op`, `null_key`, then, for anything but a delete, `type_mismatch` (a field present in
+  the payload that does not fit its column) and `null_required`. A delete needs only its key: it
+  flags the row and never writes the other values. `payload` is `raw`, `after`, or `before` for a
+  delete. The log says `batch N: <table> events quarantined: {reason: count}` (counts of rejected
+  events in the batch, a replay counts them again) or `batch N: <n> <table> events quarantined,
+  no contract`. Check: `select source_table, reason, count(*) from silver.quarantine group by 1, 2`.
+- Quarantined events are not retried. After a contract fix: a key silver never received (its
+  insert was quarantined, or the table had no contract) arrives with its next change or with
+  `make cdc-snapshot TABLES=shop.<table>`; a key silver already holds catches up only with its
+  next streamed change, because a snapshot read never beats a streamed LSN (ADR-019); a
+  quarantined delete is not delivered again by anything and needs a hand fix the owner approves.
+- Payload fields the contract does not declare are ignored and logged once per table and batch
+  (`payloads carry fields contracts/silver/<table>.json does not declare: [...]`): the source
+  gained a column (schema evolution, W2-T07). The row still merges.
 - Soft delete: `_is_deleted = true` keeps the last values. Live rows are `where not _is_deleted`.
 - Layout (ADR-010): `silver.orders` is merge-on-read and partitioned by month, the other tables
   copy-on-write. An older table converges on the next run (`lake.silver.orders: set ...` and
@@ -183,7 +199,7 @@ why nothing is lost or duplicated (or where it can be). Filled in as scenarios a
 | 4 | Late events | `chaos-late` | planned (week 2) |
 | 5 | PostgreSQL restart | `chaos-postgres-restart` | planned (week 4) |
 | 6 | Connector down for 30 minutes (WAL growth) | `chaos-connect-pause` | planned (week 4) |
-| 7 | Corrupted event in topic | `chaos-poison-event` | planned (week 4) |
+| 7 | Corrupted event in topic | `chaos-poison-event` | data half done (W2-T04), alert in week 4 |
 | 8 | Kafka down | `chaos-kafka-down` | planned (week 4) |
 | 9 (optional) | Airflow task failure (dbt test) | `chaos-break-dbt-test` | planned (week 3) |
 | 10 (optional) | Partial processing (Trino memory) | `chaos-trino-memory` | planned (week 3) |

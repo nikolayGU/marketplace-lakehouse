@@ -249,16 +249,19 @@ Spark's MERGE fails when several source rows match one target row, and silently 
 them when they match none.
 
 Decision: one job reads all of bronze and, per table present in the batch, parses with the
-contract, drops invalid events, keeps one row per key (highest LSN, null last, then Debezium time,
-then Kafka offset), and merges with `when matched and (t._last_lsn is null or s._last_lsn >
-t._last_lsn)`. A delete updates only `_is_deleted`, `_last_lsn`, `_updated_at`. Silver tables are
+contract, sends events it cannot type to `silver.quarantine` (one row per Kafka record, merged
+on topic, partition and offset, with the first matching reason), keeps one row per key (highest
+LSN, null last, then Debezium time, then Kafka offset), and merges with `when matched and
+(t._last_lsn is null or s._last_lsn > t._last_lsn)`. A delete updates only `_is_deleted`, `_last_lsn`, `_updated_at`. Silver tables are
 format v2, laid out per ADR-010 (`orders` merge-on-read, partitioned by month; the rest
 copy-on-write). Shuffle partitions are 4, not 200.
 The soft-delete column is `_is_deleted` because Iceberg reserves `_deleted` for a metadata column
 and refuses a table that uses it.
 
 Consequences: a replayed batch is a no-op, verified by a test that merges the same batch twice
-and by rerunning the job on unchanged bronze. Two known limits, both from Iceberg 1.11:
+and by rerunning the job on unchanged bronze. A value that does not fit its column withholds the
+whole event, not just that field, so the key keeps its previous state until its next valid change
+(deletes are checked only for their key and always apply). Two known limits, both from Iceberg 1.11:
 - The AvailableNow prepare step starts from the snapshot the query first saw
   (apache/iceberg#18000, open). Expiring that bronze snapshot makes every later run fail, so
   `expire_snapshots` on bronze (W5-T05) must not run until this is solved, for example with

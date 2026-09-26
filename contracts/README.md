@@ -29,9 +29,10 @@ The pairs in use follow from the connector settings (`connect/shop-connector.jso
 | `numeric(p, s)` | `number` | `decimal(p,s)` | `decimal.handling.mode=double` |
 | `timestamp` | `integer` | `timestamp_ntz` | `time.precision.mode=connect`: epoch milliseconds of the naive source value, so microseconds are dropped; no time zone is invented |
 
-Silver parses with the wire types and casts afterwards. A field that fails to parse, or a number
-outside its silver type's range, comes out null while the rest of the row survives, so a null in a required column is how silver tells a
-broken row from a valid one.
+Silver parses with the wire types and casts afterwards. A field that is present in the payload
+but fails to parse or does not fit its silver type (a number out of range, a timestamp outside
+year 1-9999) sends the event to `silver.quarantine` as `type_mismatch`; a field that is absent or
+JSON null stays null, and a null in a required column is `null_required`.
 
 Adding a column: add the property here, run `ALTER TABLE lake.silver.<table> ADD COLUMN`, and
 new events fill it while older rows stay null. Bronze needs nothing, `after` is text. A column

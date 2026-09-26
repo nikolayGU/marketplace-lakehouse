@@ -5,9 +5,11 @@ then exits, so Airflow can schedule it (ADR-007). Bronze is at-least-once and Sp
 micro-batch whose commit it did not record, so both steps are idempotent: inside a batch only
 the newest event per primary key survives, and MERGE overwrites a row only with a newer one.
 Deletes are soft (`_is_deleted`, ADR-009; Iceberg reserves `_deleted` for a metadata column).
+Events silver cannot type go to `silver.quarantine` with a reason, once per Kafka record.
 """
 
 import logging
+import operator
 import time
 from functools import reduce
 from pathlib import Path
@@ -21,6 +23,7 @@ from spark_jobs.settings import Settings
 
 BRONZE = f"{CATALOG}.bronze.cdc_events"
 SILVER = f"{CATALOG}.silver"
+QUARANTINE = f"{SILVER}.quarantine"
 QUERY_NAME = "silver_upsert"
 OPS = ("c", "u", "d", "r")
 METADATA = [("_is_deleted", "boolean"), ("_last_lsn", "bigint"), ("_updated_at", "timestamp")]
@@ -38,37 +41,91 @@ MERGE_ON_READ = {
 PARTITIONS: dict[str, tuple[str, ...]] = {"orders": ("months(order_purchase_timestamp)",)}
 PROPERTIES: dict[str, dict[str, str]] = {"orders": MERGE_ON_READ}
 
+# Bronze columns an image keeps: ordering needs some, quarantine needs the rest.
+BRONZE_KEPT = (
+    "topic",
+    "kafka_partition",
+    "kafka_offset",
+    "key",
+    "op",
+    "lsn",
+    "ts_ms",
+    "raw",
+    "ingest_ts",
+    "source_table",
+)
+QUARANTINE_DDL = f"""
+create table if not exists {QUARANTINE} (
+    topic string,
+    kafka_partition int,
+    kafka_offset bigint,
+    source_table string,
+    reason string,
+    op string,
+    key string,
+    lsn bigint,
+    payload string,
+    ingest_ts timestamp,
+    quarantined_at timestamp,
+    batch_id bigint
+)
+using iceberg
+tblproperties ('format-version' = '2')
+"""
+
 log = logging.getLogger(QUERY_NAME)
 
 
 def row_images(events: DataFrame, contract: TableContract) -> DataFrame:
-    """Typed silver columns plus what ordering needs, one row per bronze event. A delete carries
-    its row in `before`, everything else in `after`."""
+    """One row per bronze event: the typed silver columns, what ordering and quarantine need,
+    and `_reason`, null when the event can become a silver row. A delete carries its row in
+    `before`, everything else in `after`."""
     payload = F.when(F.col("op") == "d", F.col("before")).otherwise(F.col("after"))
-    return events.select(
-        F.from_json(payload, contract.wire_schema).alias("_p"), "op", "lsn", "ts_ms", "kafka_offset"
-    ).select(
+    parsed = events.select(
+        F.from_json(payload, contract.wire_schema).alias("_p"),
+        # The same payload with every value as text: present here but null once typed means the
+        # value did not fit its column.
+        F.from_json(payload, "map<string,string>").alias("_fields"),
+        payload.alias("_payload"),
+        *BRONZE_KEPT,
+    )
+    images = parsed.select(
         *contract.typed("_p"),
-        "op",
         (F.col("op") == "d").alias("_is_deleted"),
         F.col("lsn").alias("_last_lsn"),
-        "ts_ms",
-        "kafka_offset",
+        "_fields",
+        "_payload",
+        *BRONZE_KEPT,
     )
+    return images.withColumn("_reason", reason(contract))
 
 
-def valid(contract: TableContract) -> Column:
-    """Known op, the whole primary key, and for anything but a delete every column the source
-    declares NOT NULL. A missing, unparseable or wrongly typed field comes out of the parse as
-    null, so this is where it is caught. A delete only needs the key: with REPLICA IDENTITY
-    DEFAULT its `before` would hold nothing else (ADR-018)."""
-    key = [F.col(k).isNotNull() for k in contract.primary_key]
-    required = [F.col(c.name).isNotNull() for c in contract.columns if not c.nullable]
+def reason(contract: TableContract) -> Column:
+    """Why an event cannot become a silver row, or null. The first match wins. A delete is
+    checked only for its key: MERGE flags the row and never writes its other values, so a bad
+    value in `before` must not keep a deleted row alive in silver."""
+    key_missing = reduce(operator.or_, [F.col(k).isNull() for k in contract.primary_key])
+    mismatch = reduce(
+        operator.or_,
+        [F.col("_fields")[c.name].isNotNull() & F.col(c.name).isNull() for c in contract.columns],
+    )
+    required_missing = reduce(
+        operator.or_, [F.col(c.name).isNull() for c in contract.columns if not c.nullable]
+    )
     return (
-        F.col("op").isin(*OPS)
-        & reduce(Column.__and__, key)
-        & ((F.col("op") == "d") | reduce(Column.__and__, required))
+        F.when(F.col("op").isNull(), "unparsed_envelope")
+        .when(~F.col("op").isin(*OPS), "unknown_op")
+        .when(key_missing, "null_key")
+        .when((F.col("op") != "d") & mismatch, "type_mismatch")
+        .when((F.col("op") != "d") & required_missing, "null_required")
     )
+
+
+def unknown_fields(images: DataFrame, contract: TableContract) -> list[str]:
+    """Payload fields the contract does not declare: the source gained a column (W2-T07)."""
+    known = [c.name for c in contract.columns]
+    keys = images.select(F.explode(F.map_keys("_fields")).alias("field"))
+    return sorted(r["field"] for r in keys.where(~F.col("field").isin(*known)).distinct().collect())
 
 
 def latest_per_key(images: DataFrame, contract: TableContract) -> DataFrame:
@@ -158,35 +215,85 @@ def ensure_table(spark: SparkSession, contract: TableContract) -> None:
     converge_layout(spark, table, partitions, properties)
 
 
+def quarantine_rows(events: DataFrame, why: Column, payload: Column, batch_id: int) -> DataFrame:
+    return events.select(
+        "topic",
+        "kafka_partition",
+        "kafka_offset",
+        "source_table",
+        why.alias("reason"),
+        "op",
+        "key",
+        "lsn",
+        F.coalesce(payload, F.col("raw")).alias("payload"),
+        "ingest_ts",
+        F.current_timestamp().alias("quarantined_at"),
+        F.lit(batch_id).cast("bigint").alias("batch_id"),
+    )
+
+
+def quarantine(rows: DataFrame) -> None:
+    """Keyed by Kafka coordinates, so a replayed batch finds its events already there."""
+    view = "silver_upsert_quarantine"
+    rows.dropDuplicates(["topic", "kafka_partition", "kafka_offset"]).createOrReplaceTempView(view)
+    rows.sparkSession.sql(
+        f"merge into {QUARANTINE} q using {view} s "
+        "on q.topic = s.topic and q.kafka_partition = s.kafka_partition "
+        "and q.kafka_offset = s.kafka_offset "
+        "when not matched then insert *"
+    )
+
+
+def merge_table(events: DataFrame, count: int, batch_id: int, contract: TableContract) -> None:
+    images = row_images(events, contract).persist()
+    try:
+        rejected = images.where(F.col("_reason").isNotNull())
+        why = {r["_reason"]: r["count"] for r in rejected.groupBy("_reason").count().collect()}
+        if why:
+            quarantine(quarantine_rows(rejected, F.col("_reason"), F.col("_payload"), batch_id))
+            log.warning("batch %s: %s events quarantined: %s", batch_id, contract.table, why)
+        extra = unknown_fields(images, contract)
+        if extra:
+            log.warning(
+                "batch %s: %s payloads carry fields contracts/silver/%s.json does not declare: %s",
+                batch_id,
+                contract.table,
+                contract.table,
+                extra,
+            )
+        view = f"silver_upsert_{contract.table}"
+        valid = images.where(F.col("_reason").isNull())
+        latest_per_key(valid, contract).createOrReplaceTempView(view)
+        started = time.monotonic()
+        events.sparkSession.sql(merge_sql(f"{SILVER}.{contract.table}", view, contract))
+        log.info(
+            "batch %s: %s events merged into %s.%s in %.1f s",
+            batch_id,
+            count,
+            SILVER,
+            contract.table,
+            time.monotonic() - started,
+        )
+    finally:
+        images.unpersist()
+
+
 def merge_batch(batch: DataFrame, batch_id: int, contracts: dict[str, TableContract]) -> None:
     # The batch is read once per table; without persist each read goes back to MinIO.
-    spark = batch.sparkSession
     batch.persist()
     try:
         counts = batch.groupBy("source_table").count().collect()
-        for table, events in sorted((r["source_table"], r["count"]) for r in counts):
+        for table, count in sorted((r["source_table"], r["count"]) for r in counts):
+            events = batch.where(F.col("source_table") == table)
             contract = contracts.get(table)
             if contract is None:
-                log.warning("batch %s: %s %s events skipped, no contract", batch_id, events, table)
+                payload = F.coalesce(F.col("after"), F.col("before"))
+                quarantine(quarantine_rows(events, F.lit("no_contract"), payload, batch_id))
+                log.warning(
+                    "batch %s: %s %s events quarantined, no contract", batch_id, count, table
+                )
                 continue
-            images = row_images(batch.where(F.col("source_table") == table), contract)
-            images.persist()
-            rejected = images.where(~valid(contract)).count()
-            if rejected:
-                log.warning("batch %s: %s invalid %s events skipped", batch_id, rejected, table)
-            view = f"silver_upsert_{table}"
-            latest_per_key(images.where(valid(contract)), contract).createOrReplaceTempView(view)
-            started = time.monotonic()
-            spark.sql(merge_sql(f"{SILVER}.{table}", view, contract))
-            images.unpersist()
-            log.info(
-                "batch %s: %s events merged into %s.%s in %.1f s",
-                batch_id,
-                events,
-                SILVER,
-                table,
-                time.monotonic() - started,
-            )
+            merge_table(events, count, batch_id, contract)
     finally:
         batch.unpersist()
 
@@ -199,6 +306,7 @@ def run(
 ) -> None:
     """Process everything bronze has committed since the checkpoint, then return."""
     spark.sql(f"create namespace if not exists {SILVER}")
+    spark.sql(QUARANTINE_DDL)
     for contract in contracts.values():
         ensure_table(spark, contract)
 
