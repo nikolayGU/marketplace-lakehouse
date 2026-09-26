@@ -87,6 +87,14 @@ which happens on an empty topic too.
   `make cdc-snapshot` (all tables) or `make cdc-snapshot TABLES="shop.orders"` re-reads the
   source into the topics without touching the slot (ADR-019). Done on 2026-09-22 for all seven
   tables after the initial snapshot had expired.
+- Schema changes of bronze itself are additive and applied on start: a new column goes into
+  the DDL at its position and into `ADDED_COLUMNS` (name, type, after), and `ensure_table` adds it
+  to the live table there, logging `lacks <column>, adding it`. A column only in the DDL is not
+  added, and the streaming sink then refuses the DataFrame: it checks column order. The
+  checkpoint is unaffected. `source_sequence` arrived this way on 2026-09-26 (ADR-022); from then
+  on every parsed event has one:
+  `select count(*) from bronze.cdc_events where op is not null and source_sequence is null
+  and ingest_ts > timestamp '2026-09-26 04:13:00'` returns 0.
 - Resetting bronze means deleting both the checkpoint prefix and the table, which is on the
   blast-radius list.
 

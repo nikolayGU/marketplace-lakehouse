@@ -1,10 +1,13 @@
 """Kafka `oltp.shop.*` -> `lake.bronze.cdc_events`, append-only (ADR-007, ADR-008).
 
-Bronze is an at-least-once journal: it parses only what routing and dedup need (op, lsn, times)
-and keeps `before` and `after` as JSON text. Typing happens in silver against `contracts/`.
+Bronze is an at-least-once journal: it parses only what routing, dedup and ordering need (op,
+lsn, sequence, times) and keeps `before` and `after` as JSON text. Typing happens in silver
+against `contracts/`.
 """
 
-from pyspark.sql import Column, DataFrame
+import logging
+
+from pyspark.sql import Column, DataFrame, SparkSession
 from pyspark.sql import functions as F
 from pyspark.sql.types import LongType, StringType, StructField, StructType
 
@@ -14,6 +17,8 @@ from spark_jobs.settings import Settings
 
 TABLE = f"{CATALOG}.bronze.cdc_events"
 QUERY_NAME = "bronze_cdc_ingest"
+
+log = logging.getLogger(QUERY_NAME)
 
 # The subset of contracts/cdc-envelope.schema.json that bronze reads; a unit test keeps the two
 # in step. `before` and `after` are declared as strings: Spark's JSON parser then hands back the
@@ -29,6 +34,7 @@ ENVELOPE = StructType(
             StructType(
                 [
                     StructField("lsn", LongType()),
+                    StructField("sequence", StringType()),
                     StructField("ts_ms", LongType()),
                     StructField("table", StringType()),
                 ]
@@ -46,6 +52,7 @@ create table if not exists {TABLE} (
     key string,
     op string,
     lsn bigint,
+    source_sequence string,
     ts_ms bigint,
     source_ts_ms bigint,
     source_table string,
@@ -58,6 +65,22 @@ using iceberg
 partitioned by (source_table, days(ingest_ts))
 tblproperties ('format-version' = '2')
 """
+
+# Columns added after the table first shipped, as (name, type, after). The DDL above already has
+# them in place for a fresh start; ensure_table adds them to an older table, where they must land
+# in the same position because the streaming sink checks column order.
+ADDED_COLUMNS = (("source_sequence", "string", "lsn"),)
+
+
+def ensure_table(spark: SparkSession) -> None:
+    """Create bronze, or add the columns it gained since. Iceberg has no ADD COLUMN IF NOT
+    EXISTS, so the check is ours; a second run changes nothing."""
+    spark.sql(DDL)
+    existing = set(spark.table(TABLE).columns)
+    for name, kind, after in ADDED_COLUMNS:
+        if name not in existing:
+            log.warning("%s lacks %s, adding it as %s after %s", TABLE, name, kind, after)
+            spark.sql(f"alter table {TABLE} add column {name} {kind} after {after}")
 
 
 def source_table(topic: Column) -> Column:
@@ -79,6 +102,8 @@ def to_bronze(kafka: DataFrame) -> DataFrame:
         F.col("key").cast("string").alias("key"),
         env["op"].alias("op"),
         env["source"]["lsn"].alias("lsn"),
+        # [end of the previous transaction's commit record, this change's LSN] as text (ADR-022).
+        env["source"]["sequence"].alias("source_sequence"),
         env["ts_ms"].alias("ts_ms"),
         env["source"]["ts_ms"].alias("source_ts_ms"),
         source_table(F.col("topic")).alias("source_table"),
@@ -90,12 +115,13 @@ def to_bronze(kafka: DataFrame) -> DataFrame:
 
 
 def main() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     settings = Settings()
     spark = build_session(QUERY_NAME, settings)
     spark.streams.addListener(start_metrics(settings.metrics_port))
 
     spark.sql(f"create namespace if not exists {CATALOG}.bronze")
-    spark.sql(DDL)
+    ensure_table(spark)
 
     kafka = (
         spark.readStream.format("kafka")

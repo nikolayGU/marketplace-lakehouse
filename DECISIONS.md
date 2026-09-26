@@ -26,6 +26,7 @@ superseded. Longer reasoning lives in `docs/planning/00-mini-architecture-review
 | ADR-019 | Debezium signal table `cdc.debezium_signal` for incremental snapshots, the recovery path when Kafka retention outlives a consumer outage | accepted |
 | ADR-020 | Silver contracts as JSON Schema per table; naive source timestamps become `timestamp_ntz` at millisecond precision | accepted |
 | ADR-021 | Silver upsert: one AvailableNow job, newest event per key, MERGE guarded by `_last_lsn`, idempotent on replay | accepted |
+| ADR-022 | Bronze keeps Debezium's `source.sequence` as text; silver keeps ordering by `lsn` until there is a second writer | accepted |
 
 ## ADR-001 Real data via Olist replay
 
@@ -231,5 +232,25 @@ and by rerunning the job on unchanged bronze. Two known limits, both from Iceber
   with a single writer, which is what the replayer is (checked on 1 561 same-key pairs in Kafka:
   none decreasing). With concurrent writers a re-insert of a key that another transaction just
   deleted can commit later with a lower LSN, and the guard would keep the row deleted. The sound
-  order is Debezium's `source.sequence` (`[last commit LSN, LSN]`), which bronze does not store;
-  adding it is a bronze contract change for the owner to decide.
+  order is Debezium's `source.sequence` (`[end of the previous transaction's commit, LSN]`),
+  which bronze stores since ADR-022; silver does not use it yet.
+
+## ADR-022 Bronze keeps the commit position (`source.sequence`)
+
+Context: ADR-021 orders changes of one key by `lsn`, the start of the change's WAL record. That
+is commit order only with a single writer. Debezium's `source.sequence` is a JSON array in a
+string, `[end of the previous transaction's commit record, LSN of this change]`; compared as two
+numbers it follows commit order across transactions and WAL order inside one. Incremental
+snapshot reads have a null `lsn` but a sequence, the position of the chunk's close watermark,
+which is what would let a snapshot read be compared with streamed changes (ADR-019).
+
+Decision: bronze stores it verbatim as `source_sequence string`, right after `lsn`. Silver keeps
+ordering by `lsn` for now; parsing the pair and switching the MERGE guard is a separate change,
+due when a second writer appears or a gap has to be repaired with a snapshot. Bronze adds the
+column on start (`ensure_table`), without a rewrite and without touching the checkpoint.
+
+Consequences: rows ingested before 2026-09-26 have a null sequence. Bronze is append-only, so
+they are not backfilled; most of them have also left Kafka (24 h retention). The first element is null for initial snapshot rows and for
+the first transaction after one. After a `docker kill` of Connect the first re-sent transaction
+can carry a first element that is too small, because the slot is flushed from the last acked
+record rather than from the stored offset; a sequence-based guard would have to tolerate that.

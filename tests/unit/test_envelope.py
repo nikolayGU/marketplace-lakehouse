@@ -85,8 +85,9 @@ def test_incremental_snapshot_read_has_no_lsn() -> None:
         lambda v: v.pop("source"),
         lambda v: v["source"].update(lsn="1110641816"),
         lambda v: v["source"].pop("table"),
+        lambda v: v["source"].pop("sequence"),
     ],
-    ids=["no-op", "unknown-op", "no-source", "lsn-as-text", "no-table"],
+    ids=["no-op", "unknown-op", "no-source", "lsn-as-text", "no-table", "no-sequence"],
 )
 def test_broken_envelope_is_rejected(mutate: Any) -> None:
     value = envelope("orders_u")

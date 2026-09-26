@@ -11,9 +11,10 @@
     "after": {"type": ["object", "null"]},
     "source": {
       "type": "object",
-      "required": ["lsn", "table", "schema", "ts_ms"],
+      "required": ["lsn", "sequence", "table", "schema", "ts_ms"],
       "properties": {
         "lsn": {"type": ["integer", "null"], "description": "null on incremental snapshot reads (ADR-019)"},
+        "sequence": {"type": ["string", "null"], "description": "[end LSN of the previous transaction's commit, LSN of this change] as a JSON array in a string; the first element is null until the connector has seen a commit; on incremental snapshot reads (lsn null) both positions refer to the chunk's close watermark (ADR-019, ADR-022)"},
         "txId": {"type": ["integer", "null"]},
         "table": {"type": "string"},
         "schema": {"type": "string"},

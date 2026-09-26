@@ -10,7 +10,7 @@ Spark image and jobs.
 - `run-job.sh <job>`: the entrypoint, `spark-submit` of `spark_jobs/<job>.py` with
   `SPARK_MASTER` and `SPARK_DRIVER_MEMORY`.
 - `spark_jobs/bronze_cdc_ingest.py`: Kafka `oltp.shop.*` -> `lake.bronze.cdc_events`, append,
-  20 s trigger, checkpoint `s3a://lakehouse/checkpoints/bronze_cdc_ingest`. Columns: ADR-008.
+  20 s trigger, checkpoint `s3a://lakehouse/checkpoints/bronze_cdc_ingest`. Columns: ADR-008, ADR-022.
 - `spark_jobs/silver_upsert.py`: Iceberg streaming read from bronze, `Trigger.AvailableNow`,
   `foreachBatch` -> parse with `contracts/silver` -> newest event per key -> `MERGE INTO
   lake.silver.<table>`. `make silver` runs it; Airflow schedules it from week 3.

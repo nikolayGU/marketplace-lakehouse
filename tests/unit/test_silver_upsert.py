@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 from pyspark.sql import DataFrame, Row, SparkSession
 from spark_jobs.bronze_cdc_ingest import DDL as BRONZE_DDL
+from spark_jobs.bronze_cdc_ingest import ensure_table as ensure_bronze
 from spark_jobs.contracts import TableContract, load_contracts
 from spark_jobs.silver_upsert import (
     BRONZE,
@@ -28,8 +29,8 @@ BRONZE_NAMESPACE = BRONZE.rsplit(".", 1)[0]
 ORDERS = CONTRACTS["orders"]
 BRONZE_COLUMNS = (
     "topic string, kafka_partition int, kafka_offset bigint, kafka_ts timestamp, key string, "
-    "op string, lsn bigint, ts_ms bigint, source_ts_ms bigint, source_table string, "
-    "before string, after string, raw string, ingest_ts timestamp"
+    "op string, lsn bigint, source_sequence string, ts_ms bigint, source_ts_ms bigint, "
+    "source_table string, before string, after string, raw string, ingest_ts timestamp"
 )
 
 HAS_JAVA = shutil.which("java") is not None
@@ -93,6 +94,7 @@ def event(
     ts_ms: int = 1_790_000_000_000,
     table: str = "orders",
     raw: str | None = None,
+    sequence: str | None = None,
 ) -> Row:
     return Row(
         topic=f"oltp.shop.{table}",
@@ -102,6 +104,7 @@ def event(
         key=None,
         op=op,
         lsn=lsn,
+        source_sequence=sequence,
         ts_ms=ts_ms,
         source_ts_ms=ts_ms,
         source_table=table,
@@ -336,3 +339,34 @@ def test_run_processes_only_what_bronze_committed_since_the_last_run(
     assert (first["o2"]._is_deleted, second["o2"]._is_deleted) == (False, True)
     # o1 got no new event, so the second run left its row alone.
     assert second["o1"]._updated_at == first["o1"]._updated_at
+
+
+OLD_BRONZE_DDL = BRONZE_DDL.replace("    source_sequence string,\n", "")
+
+
+@needs_iceberg
+@pytest.mark.usefixtures("fresh_silver")
+def test_run_survives_a_column_added_to_bronze_between_runs(
+    spark: SparkSession, tmp_path: Path
+) -> None:
+    spark.sql(f"create namespace if not exists {BRONZE_NAMESPACE}")
+    spark.sql(f"drop table if exists {BRONZE}")
+    spark.sql(OLD_BRONZE_DDL)
+    assert "source_sequence" not in spark.table(BRONZE).columns
+    checkpoint = f"file://{tmp_path}/checkpoint"
+    bronze(spark, event("c", order(), lsn=100)).drop("source_sequence").writeTo(BRONZE).append()
+    run(spark, CONTRACTS, checkpoint, max_rows_per_batch=10)
+
+    ensure_bronze(spark)
+    versions = spark.table(f"{BRONZE}.metadata_log_entries").count()
+    ensure_bronze(spark)
+    unchanged = spark.table(f"{BRONZE}.metadata_log_entries").count() == versions
+    columns = spark.table(BRONZE).columns
+    bronze(spark, event("u", order(status="approved"), lsn=120, sequence='["110","120"]')).writeTo(
+        BRONZE
+    ).append()
+    run(spark, CONTRACTS, checkpoint, max_rows_per_batch=10)
+
+    assert columns == [spec.split()[0] for spec in BRONZE_COLUMNS.split(", ")]
+    assert unchanged
+    assert silver(spark)["o1"].order_status == "approved"

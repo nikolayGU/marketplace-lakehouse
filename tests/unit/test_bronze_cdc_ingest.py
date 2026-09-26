@@ -1,4 +1,5 @@
 import json
+import re
 import shutil
 from collections.abc import Iterator
 from datetime import datetime
@@ -16,9 +17,10 @@ from pyspark.sql.types import (
     StructType,
     TimestampType,
 )
-from spark_jobs.bronze_cdc_ingest import ENVELOPE, to_bronze
+from spark_jobs.bronze_cdc_ingest import ADDED_COLUMNS, DDL, ENVELOPE, to_bronze
 
 CONTRACT = Path(__file__).parents[2] / "contracts" / "cdc-envelope.schema.json"
+FIXTURES = Path(__file__).parents[1] / "fixtures" / "envelopes"
 
 # What the Spark Kafka source hands to to_bronze (the columns it reads, not the headers).
 KAFKA_SOURCE = StructType(
@@ -72,13 +74,26 @@ def spark() -> Iterator[SparkSession]:
     session.stop()
 
 
-def envelope(op: str, before: dict[str, Any] | None, after: dict[str, Any] | None) -> bytes:
+def envelope(
+    op: str,
+    before: dict[str, Any] | None,
+    after: dict[str, Any] | None,
+    sequence: str | None = '["40","42"]',
+) -> bytes:
+    source: dict[str, Any] = {
+        "lsn": 42,
+        "ts_ms": 1_700_000_000_000,
+        "table": "orders",
+        "schema": "shop",
+    }
+    if sequence is not None:
+        source["sequence"] = sequence
     event = {
         "op": op,
         "ts_ms": 1_700_000_000_500,
         "before": before,
         "after": after,
-        "source": {"lsn": 42, "ts_ms": 1_700_000_000_000, "table": "orders", "schema": "shop"},
+        "source": source,
     }
     return json.dumps(event).encode()
 
@@ -168,3 +183,48 @@ def test_duplicate_records_both_land(spark: SparkSession) -> None:
 
     assert [r.kafka_offset for r in rows] == [1, 2]
     assert {r.lsn for r in rows} == {42}
+
+
+@needs_java
+def test_sequence_is_kept_as_the_text_debezium_sent(spark: SparkSession) -> None:
+    [row] = bronze(spark, kafka_row(envelope("u", {"order_id": "o1"}, {"order_id": "o1"})))
+
+    assert row.source_sequence == '["40","42"]'
+
+
+@needs_java
+def test_envelope_without_sequence_gives_null(spark: SparkSession) -> None:
+    [row] = bronze(spark, kafka_row(envelope("c", None, {"order_id": "o1"}, sequence=None)))
+
+    assert row.source_sequence is None
+
+
+def ddl_columns() -> list[str]:
+    body = re.search(r"\((.*?)\n\)", DDL, re.S)
+    assert body is not None
+    return [line.split()[0] for line in body.group(1).strip().splitlines()]
+
+
+@needs_java
+def test_columns_come_out_in_table_order(spark: SparkSession) -> None:
+    """The Iceberg sink checks column order; a column out of place fails the stream."""
+    frame = to_bronze(spark.createDataFrame([kafka_row(b"{}")], KAFKA_SOURCE))
+
+    assert frame.columns == ddl_columns()
+
+
+def test_every_added_column_sits_in_the_ddl_right_after_its_neighbour() -> None:
+    columns = ddl_columns()
+    for name, _, after in ADDED_COLUMNS:
+        assert columns.index(name) == columns.index(after) + 1
+
+
+@needs_java
+@pytest.mark.parametrize("path", sorted(FIXTURES.glob("*.json")), ids=lambda p: p.stem)
+def test_real_envelopes_keep_lsn_and_sequence(spark: SparkSession, path: Path) -> None:
+    """Incremental snapshot reads have no lsn but do have a sequence: the reason it is kept."""
+    value = json.loads(path.read_text())["value"]
+
+    [row] = bronze(spark, kafka_row(json.dumps(value).encode()))
+
+    assert (row.lsn, row.source_sequence) == (value["source"]["lsn"], value["source"]["sequence"])
