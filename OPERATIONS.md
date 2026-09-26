@@ -119,6 +119,17 @@ bronze snapshot committed since the previous run in micro-batches of about 200 0
   newest event per primary key, `MERGE` guarded by `_last_lsn`. Invalid events are counted in the
   log (`invalid ... events skipped`); W2-T04 sends them to `silver.quarantine` instead.
 - Soft delete: `_is_deleted = true` keeps the last values. Live rows are `where not _is_deleted`.
+- Layout (ADR-010): `silver.orders` is merge-on-read and partitioned by month, the other tables
+  copy-on-write. An older table converges on the next run (`lake.silver.orders: set ...` and
+  `partitioned by ... from now on` in the log), metadata only. Delete files accumulate between
+  compactions; `alter table silver.orders execute optimize` in Trino folds them and rewrites old
+  files into the current spec. Check: `select content, spec_id, count(*) from
+  silver."orders$files" group by 1, 2` (content 1 are delete files).
+- `silver_shuffle_partitions` in `spark_jobs/settings.py` (a code default, compose does not pass
+  it) is frozen in the checkpoint on the first run: Spark restores the stored value and logs
+  `Updating the value of conf 'spark.sql.shuffle.partitions'`. A new value takes effect only
+  with a new checkpoint, and deleting the checkpoint prefix is blast radius: the next run then
+  re-reads all of bronze (idempotent, but long).
 - A rerun with nothing new in bronze does nothing. A crash mid-run replays the unfinished batch,
   and the replay changes nothing that the first attempt already merged.
 - The job refuses to start if a silver table and its contract disagree on columns: add the

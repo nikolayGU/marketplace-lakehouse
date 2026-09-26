@@ -14,7 +14,7 @@ superseded. Longer reasoning lives in `docs/planning/00-mini-architecture-review
 | ADR-007 | Bronze append-only streaming (at-least-once contract, idempotent epoch commit to be verified); silver via AvailableNow + foreachBatch MERGE is the no-duplicates guarantee | accepted |
 | ADR-008 | Bronze keeps payload as JSON string; typed schema applied in silver from contracts | accepted |
 | ADR-009 | Soft deletes in silver (`_is_deleted`; Iceberg reserves `_deleted`), filtered in dbt | accepted |
-| ADR-010 | `silver.orders` merge-on-read, other silver tables copy-on-write | proposed, measure in week 2 |
+| ADR-010 | `silver.orders` merge-on-read, partitioned by month; other silver tables copy-on-write | accepted, measured 2026-09-26 |
 | ADR-011 | Airflow 3 LocalExecutor, batch only, BashOperator for dbt (no Cosmos) | accepted |
 | ADR-012 | No Schema Registry until week 6; JSON envelopes + JSON Schema contracts | accepted |
 | ADR-013 | Spark metrics via custom StreamingQueryListener, because kafka-exporter cannot see Spark offsets | accepted |
@@ -114,6 +114,42 @@ sends those rows to quarantine. Partitioned by `(source_table, days(ingest_ts))`
 Consequences: bronze never fails on content, `ALTER TABLE` in the source is invisible here, and
 typing lives in one place (silver, from `contracts/`). The cost is a JSON parse per row in
 silver and no column pruning inside `after`.
+
+## ADR-010 Silver layout: `orders` merge-on-read, the rest copy-on-write
+
+Context: every replayed order changes status several times after it is inserted, while
+customers, sellers, products, items, payments and reviews rarely change a row twice. Copy-on-write
+MERGE rewrites every data file that holds a matched row, and the updated orders are spread over
+all of them.
+
+Decision: `silver.orders` gets `write.merge.mode`, `write.update.mode`, `write.delete.mode` =
+`merge-on-read` and `write.delete.granularity` = `file` (Spark's default, spelled out because the
+Iceberg docs list `partition`), and is partitioned by `months(order_purchase_timestamp)`. The
+other tables stay copy-on-write and unpartitioned. `ensure_table` creates new tables that way and
+converges an existing one on the next run with `ALTER TABLE ... SET TBLPROPERTIES` and `ADD
+PARTITION FIELD`, which are metadata only; the schema, by contrast, never converges by itself.
+
+Measured on 2026-09-26 on the live table (91 k orders), one replay burst each:
+
+| | copy-on-write | merge-on-read |
+|---|---|---|
+| orders events in the batch | 1 174 | 1 405 |
+| data files rewritten | 4 of 4 | 0 |
+| rows written | 90 950 | 1 115 new rows + 842 position deletes |
+| bytes written (`added-files-size`) | 5 735 311 | 77 891 (70 316 data + 7 575 deletes) |
+| orders step, between log lines | 4.2 s | 2.9 s, of which the MERGE statement 2.1 s |
+
+Write amplification drops from about 4.9 KB to about 55 bytes per event. The cost moves to
+reads: every scan applies the position deletes (one delete file per touched data file with
+`file` granularity), and each MERGE adds small files per touched month. `ALTER TABLE
+silver.orders EXECUTE optimize` in Trino folds the deletes and rewrites files of the old
+unpartitioned spec into the monthly one: on 2026-09-26 it turned 6 data files and 4 delete
+files into 22 files, one per month, with the row count unchanged. That is a `replace` snapshot,
+which no stream reads, so no data is at risk. It does conflict with a merge-on-read MERGE that
+commits at the same time: the MERGE's position deletes point at files optimize removed, the losing
+commit fails, and silver replays the batch on its next run. `iceberg_maintenance` therefore must
+not overlap `silver_upsert`.
+The partition does not prune the MERGE itself, whose `on` clause has only the primary key.
 
 ## ADR-013 Spark metrics
 
@@ -216,7 +252,8 @@ Decision: one job reads all of bronze and, per table present in the batch, parse
 contract, drops invalid events, keeps one row per key (highest LSN, null last, then Debezium time,
 then Kafka offset), and merges with `when matched and (t._last_lsn is null or s._last_lsn >
 t._last_lsn)`. A delete updates only `_is_deleted`, `_last_lsn`, `_updated_at`. Silver tables are
-format v2, copy-on-write for now (layout is W2-T03, ADR-010). Shuffle partitions are 4, not 200.
+format v2, laid out per ADR-010 (`orders` merge-on-read, partitioned by month; the rest
+copy-on-write). Shuffle partitions are 4, not 200.
 The soft-delete column is `_is_deleted` because Iceberg reserves `_deleted` for a metadata column
 and refuses a table that uses it.
 

@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import shutil
 from collections.abc import Iterator
@@ -15,10 +16,13 @@ from spark_jobs.bronze_cdc_ingest import ensure_table as ensure_bronze
 from spark_jobs.contracts import TableContract, load_contracts
 from spark_jobs.silver_upsert import (
     BRONZE,
+    MERGE_ON_READ,
+    METADATA,
     SILVER,
     ensure_table,
     latest_per_key,
     merge_batch,
+    partition_fields,
     row_images,
     run,
     valid,
@@ -370,3 +374,94 @@ def test_run_survives_a_column_added_to_bronze_between_runs(
     assert columns == [spec.split()[0] for spec in BRONZE_COLUMNS.split(", ")]
     assert unchanged
     assert silver(spark)["o1"].order_status == "approved"
+
+
+# Layout (ADR-010): orders merge-on-read and partitioned by month, the rest copy-on-write.
+
+
+def properties(spark: SparkSession, table: str) -> dict[str, str]:
+    return {r.key: r.value for r in spark.sql(f"show tblproperties {table}").collect()}
+
+
+@needs_iceberg
+@pytest.mark.usefixtures("fresh_silver")
+def test_orders_is_merge_on_read_and_partitioned_by_month(spark: SparkSession) -> None:
+    table = f"{SILVER}.orders"
+    # Created with its layout in one commit, not created bare and converged afterwards.
+    assert spark.table(f"{table}.metadata_log_entries").count() == 1
+    merge_batch(bronze(spark, event("c", order(), lsn=100)), 0, CONTRACTS)
+    merge_batch(bronze(spark, event("u", order(status="shipped"), lsn=200)), 1, CONTRACTS)
+
+    assert {k: properties(spark, table).get(k) for k in MERGE_ON_READ} == MERGE_ON_READ
+    assert partition_fields(spark, table) == {"months(order_purchase_timestamp)"}
+    # The update masked the inserted row with a position delete instead of rewriting its file.
+    assert spark.table(f"{table}.delete_files").count() == 1
+    assert silver(spark)["o1"].order_status == "shipped"
+
+
+@needs_iceberg
+@pytest.mark.usefixtures("fresh_silver")
+def test_other_tables_stay_copy_on_write_and_unpartitioned(spark: SparkSession) -> None:
+    table = f"{SILVER}.customers"
+
+    assert "write.merge.mode" not in properties(spark, table)
+    assert partition_fields(spark, table) == set()
+
+
+@needs_iceberg
+@pytest.mark.usefixtures("fresh_silver")
+def test_existing_copy_on_write_orders_converges_once(
+    spark: SparkSession, caplog: pytest.LogCaptureFixture
+) -> None:
+    table = f"{SILVER}.orders"
+    spark.sql(f"drop table {table}")
+    metadata = ", ".join(f"{name} {kind}" for name, kind in METADATA)
+    spark.sql(
+        f"create table {table} ({ORDERS.column_ddl}, {metadata}) "
+        "using iceberg tblproperties ('format-version' = '2')"
+    )
+
+    with caplog.at_level(logging.INFO, logger="silver_upsert"):
+        ensure_table(spark, ORDERS)
+        first = [r.getMessage() for r in caplog.records]
+        caplog.clear()
+        versions = spark.table(f"{table}.metadata_log_entries").count()
+        ensure_table(spark, ORDERS)
+        second = [r.getMessage() for r in caplog.records]
+
+    assert [m.split(": ")[1].split(" ")[0] for m in first] == ["set", "partitioned"]
+    assert second == []
+    assert spark.table(f"{table}.metadata_log_entries").count() == versions
+    assert properties(spark, table)["write.merge.mode"] == "merge-on-read"
+    assert partition_fields(spark, table) == {"months(order_purchase_timestamp)"}
+
+
+def customer(city: str) -> dict[str, Any]:
+    return {
+        "customer_id": "c1",
+        "customer_unique_id": "u1",
+        "customer_zip_code_prefix": "01001",
+        "customer_city": city,
+        "customer_state": "SP",
+    }
+
+
+@needs_iceberg
+@pytest.mark.usefixtures("fresh_silver")
+def test_copy_on_write_table_keeps_the_guard(spark: SparkSession) -> None:
+    """orders is merge-on-read now; the LSN guard must hold on the copy-on-write path too."""
+    batch = bronze(spark, event("c", customer("sao paulo"), lsn=100, table="customers"))
+    merge_batch(batch, 0, CONTRACTS)
+    merge_batch(batch, 0, CONTRACTS)
+    merge_batch(
+        bronze(spark, event("u", customer("campinas"), lsn=300, table="customers")), 1, CONTRACTS
+    )
+    merge_batch(
+        bronze(spark, event("u", customer("santos"), lsn=200, table="customers")), 2, CONTRACTS
+    )
+
+    rows = [
+        (r.customer_id, r.customer_city, r._last_lsn)
+        for r in spark.table(f"{SILVER}.customers").collect()
+    ]
+    assert rows == [("c1", "campinas", 300)]

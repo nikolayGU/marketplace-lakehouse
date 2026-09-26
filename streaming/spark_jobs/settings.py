@@ -35,4 +35,6 @@ class Settings(BaseSettings):
     # Soft cap per micro-batch: the first run reads all of bronze in several batches.
     silver_max_rows_per_batch: int = 200000
     # local[2] has two cores; the default 200 would write up to 200 small files per MERGE.
+    # Spark stores the value in the checkpoint on the first run and restores it on every later
+    # one, so changing it takes effect only with a new checkpoint.
     silver_shuffle_partitions: int = 4

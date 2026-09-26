@@ -8,6 +8,7 @@ Deletes are soft (`_is_deleted`, ADR-009; Iceberg reserves `_deleted` for a meta
 """
 
 import logging
+import time
 from functools import reduce
 from pathlib import Path
 
@@ -23,6 +24,19 @@ SILVER = f"{CATALOG}.silver"
 QUERY_NAME = "silver_upsert"
 OPS = ("c", "u", "d", "r")
 METADATA = [("_is_deleted", "boolean"), ("_last_lsn", "bigint"), ("_updated_at", "timestamp")]
+
+# Physical layout (ADR-010). An order changes status several times after it is inserted, so its
+# MERGE writes position deletes instead of rewriting whole files; the other tables rarely change
+# a row twice and stay copy-on-write.
+MERGE_ON_READ = {
+    "write.merge.mode": "merge-on-read",
+    "write.update.mode": "merge-on-read",
+    "write.delete.mode": "merge-on-read",
+    # Already Spark's default, but the Iceberg docs list `partition`, so it is spelled out.
+    "write.delete.granularity": "file",
+}
+PARTITIONS: dict[str, tuple[str, ...]] = {"orders": ("months(order_purchase_timestamp)",)}
+PROPERTIES: dict[str, dict[str, str]] = {"orders": MERGE_ON_READ}
 
 log = logging.getLogger(QUERY_NAME)
 
@@ -95,14 +109,43 @@ when not matched then insert *
 """
 
 
+def partition_fields(spark: SparkSession, table: str) -> set[str]:
+    """Partition transforms as DESCRIBE prints them, e.g. `months(order_purchase_timestamp)`."""
+    rows = spark.sql(f"describe table {table}").collect()
+    return {r["data_type"] for r in rows if r["col_name"].startswith("Part ")}
+
+
+def converge_layout(
+    spark: SparkSession, table: str, partitions: tuple[str, ...], properties: dict[str, str]
+) -> None:
+    """Bring an existing table to its layout. Metadata only: files already written keep their
+    old spec and write mode until compaction rewrites them."""
+    current = {r["key"]: r["value"] for r in spark.sql(f"show tblproperties {table}").collect()}
+    missing = {k: v for k, v in properties.items() if current.get(k) != v}
+    if missing:
+        pairs = ", ".join(f"'{k}' = '{v}'" for k, v in sorted(missing.items()))
+        spark.sql(f"alter table {table} set tblproperties ({pairs})")
+        log.info("%s: set %s", table, pairs)
+    fields = partition_fields(spark, table)
+    for transform in partitions:
+        if transform not in fields:
+            spark.sql(f"alter table {table} add partition field {transform}")
+            log.info("%s: partitioned by %s from now on", table, transform)
+
+
 def ensure_table(spark: SparkSession, contract: TableContract) -> None:
-    """Create the silver table, or fail with the fix if it no longer matches its contract.
-    Schema evolution is deliberate: contract first, then ALTER TABLE (contracts/README.md)."""
+    """Create the silver table, or fail with the fix if it no longer matches its contract, then
+    converge its layout. Schema evolution is deliberate: contract first, then ALTER TABLE
+    (contracts/README.md). Layout is physical and converges on its own."""
     table = f"{SILVER}.{contract.table}"
+    partitions = PARTITIONS.get(contract.table, ())
+    properties = PROPERTIES.get(contract.table, {})
     metadata_ddl = ", ".join(f"{name} {kind}" for name, kind in METADATA)
+    partitioned = f" partitioned by ({', '.join(partitions)})" if partitions else ""
+    pairs = ", ".join(f"'{k}' = '{v}'" for k, v in {"format-version": "2", **properties}.items())
     spark.sql(
         f"create table if not exists {table} ({contract.column_ddl}, {metadata_ddl}) "
-        "using iceberg tblproperties ('format-version' = '2')"
+        f"using iceberg{partitioned} tblproperties ({pairs})"
     )
     expected = {(c.name, c.silver_type) for c in contract.columns} | set(METADATA)
     actual = {(f.name, f.dataType.simpleString()) for f in spark.table(table).schema.fields}
@@ -112,6 +155,7 @@ def ensure_table(spark: SparkSession, contract: TableContract) -> None:
             f"missing {sorted(expected - actual)}, unexpected {sorted(actual - expected)}. "
             "Align the contract and the table (ALTER TABLE ... ADD COLUMN) first."
         )
+    converge_layout(spark, table, partitions, properties)
 
 
 def merge_batch(batch: DataFrame, batch_id: int, contracts: dict[str, TableContract]) -> None:
@@ -132,9 +176,17 @@ def merge_batch(batch: DataFrame, batch_id: int, contracts: dict[str, TableContr
                 log.warning("batch %s: %s invalid %s events skipped", batch_id, rejected, table)
             view = f"silver_upsert_{table}"
             latest_per_key(images.where(valid(contract)), contract).createOrReplaceTempView(view)
+            started = time.monotonic()
             spark.sql(merge_sql(f"{SILVER}.{table}", view, contract))
             images.unpersist()
-            log.info("batch %s: %s events merged into %s.%s", batch_id, events, SILVER, table)
+            log.info(
+                "batch %s: %s events merged into %s.%s in %.1f s",
+                batch_id,
+                events,
+                SILVER,
+                table,
+                time.monotonic() - started,
+            )
     finally:
         batch.unpersist()
 
