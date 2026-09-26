@@ -24,7 +24,7 @@ superseded. Longer reasoning lives in `docs/planning/00-mini-architecture-review
 | ADR-017 | Stateful windowed job `orders_per_minute` (watermark, state, update mode) is mandatory, not optional | accepted |
 | ADR-018 | `REPLICA IDENTITY FULL` on all `shop` tables so CDC `before` carries the whole previous row | accepted |
 | ADR-019 | Debezium signal table `cdc.debezium_signal` for incremental snapshots, the recovery path when Kafka retention outlives a consumer outage | accepted |
-| ADR-020 | Silver contracts as JSON Schema per table; naive source timestamps become `timestamp_ntz` at millisecond precision | proposed, owner to confirm |
+| ADR-020 | Silver contracts as JSON Schema per table; naive source timestamps become `timestamp_ntz` at millisecond precision | accepted |
 | ADR-021 | Silver upsert: one AvailableNow job, newest event per key, MERGE guarded by `_last_lsn`, idempotent on replay | accepted |
 
 ## ADR-001 Real data via Olist replay
