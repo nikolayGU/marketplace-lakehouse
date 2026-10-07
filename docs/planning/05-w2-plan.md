@@ -893,16 +893,16 @@ git commit -m "lake: silver.quarantine for events silver cannot type, poison-eve
 
 **Интерфейсы:**
 - Потребляет: `lib.sh` из задачи 3.
-- Производит: в `lib.sh` `replay_burst <seconds> [VAR=value ...]`, `bronze_caught_up`, `healthy <container>`, `bronze_offsets_report`.
+- Производит: в `lib.sh` `replay_burst <seconds> [VAR=value ...]`, `no_other_replayer`, `bronze_caught_up`, `healthy <container>`, `bronze_offsets_report`.
 
 - [ ] **Шаг 1: падающий тест пропуска эпохи (`tests/unit/test_iceberg_sink.py`)**
 
 ```python
 """The Iceberg streaming sink skips an epoch it already committed (ADR-007, chaos 1).
 
-A crash between Iceberg's commit and Spark's own commit log makes Spark replay the batch. The
-window is milliseconds wide on the live stack, so it is reproduced here by deleting the
-checkpoint's commit entry by hand.
+A crash between Iceberg's commit and Spark's own commit log makes Spark replay the batch. On the
+live stack that window is milliseconds wide, so here it is reproduced by deleting the checkpoint's
+commit entry by hand. The skip is keyed by query id, so a new checkpoint is the negative control.
 """
 
 import os
@@ -944,6 +944,16 @@ def spark(tmp_path_factory: pytest.TempPathFactory) -> Iterator[SparkSession]:
     session.stop()
 
 
+def epochs(spark: SparkSession) -> list[str]:
+    return [
+        r.epoch
+        for r in spark.sql(
+            f"select summary['spark.sql.streaming.epochId'] as epoch from {TABLE}.snapshots "
+            "order by committed_at"
+        ).collect()
+    ]
+
+
 @needs_iceberg
 def test_replayed_epoch_is_skipped(spark: SparkSession, tmp_path: Path) -> None:
     source, checkpoint = tmp_path / "in", tmp_path / "checkpoint"
@@ -951,14 +961,14 @@ def test_replayed_epoch_is_skipped(spark: SparkSession, tmp_path: Path) -> None:
     spark.sql("create namespace if not exists lake.probe")
     spark.sql(f"create table {TABLE} (id bigint) using iceberg")
 
-    def run() -> None:
+    def run(location: Path = checkpoint) -> None:
         (
             spark.readStream.schema("id bigint")
             .json(str(source))
             .writeStream.format("iceberg")
             .outputMode("append")
             .trigger(availableNow=True)
-            .option("checkpointLocation", str(checkpoint))
+            .option("checkpointLocation", str(location))
             .toTable(TABLE)
             .awaitTermination()
         )
@@ -967,24 +977,27 @@ def test_replayed_epoch_is_skipped(spark: SparkSession, tmp_path: Path) -> None:
     run()
     (source / "2.json").write_text('{"id": 2}\n')
     run()
-    snapshots = spark.table(f"{TABLE}.snapshots").count()
+    assert epochs(spark) == ["0", "1"]
 
+    # Iceberg holds epoch 1, Spark's commit log does not: the state a kill leaves in the window.
+    commit = checkpoint / "commits" / "1"
     for entry in (checkpoint / "commits").glob("*1*"):  # "1" and its ".1.crc"
         entry.unlink()
+    assert not commit.exists()
     run()
+    assert commit.exists()  # Spark re-ran batch 1 ...
+    assert sorted(r.id for r in spark.table(TABLE).collect()) == [1, 2]
+    assert epochs(spark) == ["0", "1"]  # ... and Iceberg added no rows and no snapshot for it
     (source / "3.json").write_text('{"id": 3}\n')
     run()
 
     assert sorted(r.id for r in spark.table(TABLE).collect()) == [1, 2, 3]
-    epochs = [
-        r.epoch
-        for r in spark.sql(
-            f"select summary['spark.sql.streaming.epochId'] as epoch from {TABLE}.snapshots "
-            "order by committed_at"
-        ).collect()
-    ]
-    assert epochs == ["0", "1", "2"]
-    assert spark.table(f"{TABLE}.snapshots").count() == snapshots + 1
+    assert epochs(spark) == ["0", "1", "2"]
+
+    # A new checkpoint is a new query id: Iceberg finds no epoch of its own and appends again.
+    run(tmp_path / "checkpoint-new")
+    assert sorted(r.id for r in spark.table(TABLE).collect()) == [1, 1, 2, 2, 3, 3]
+    assert epochs(spark).count("0") == 2
 ```
 
 Makefile: `SPARK_TESTS := ... test_iceberg_sink.py`.
@@ -992,25 +1005,43 @@ Makefile: `SPARK_TESTS := ... test_iceberg_sink.py`.
 - [ ] **Шаг 2: прогнать тест**
 
 Run: `make test-spark`
-Expected: тест проходит сразу (он проверяет поведение Iceberg, а не наш код). Чтобы убедиться, что он умеет падать, временно заменить удаление `commits/1` на удаление всего checkpoint (новый queryId, пропуска нет): тест должен упасть на `[1, 2, 2, 3]` или на числе снапшотов. Вернуть.
+Expected: тест проходит сразу (он проверяет поведение Iceberg, а не наш код). Чтобы убедиться, что он умеет падать, временно заменить удаление `commits/1` на удаление всего checkpoint (новый queryId, пропуска нет): тест должен упасть на `assert commit.exists()`, потому что новый checkpoint пишет только `commits/0`. Если убрать и проверки существования, падение будет на `[1, 1, 2, 2] == [1, 2]`. Вернуть.
 
 - [ ] **Шаг 3: `lib.sh`, добавить**
 
 ```bash
 healthy() { [ "$(docker inspect -f '{{.State.Health.Status}}' "$1" 2>/dev/null)" = healthy ]; }
 
-# replay_burst <real seconds> [VAR=value ...]: play the schedule on the host, then stop.
-# The replayer resumes from its saved virtual clock, so a burst only spends what it plays.
+# replay_burst <real seconds> [VAR=value ...]: play the schedule on the host, then stop. The
+# replayer resumes from its saved virtual clock, so a burst spends only what it plays. It never
+# exits by itself, so any status but timeout's 124 is a failure and shows the log tail.
+# --foreground keeps timeout in the caller's process group, so a script that runs the burst as a
+# job of its own group stops all of it with one kill.
 replay_burst() {
-  local seconds=$1 rc=0
+  local seconds=$1 rc=0 log
   shift
+  log=$(mktemp -t replay_burst.XXXXXX.log)
   (cd "$ROOT" && env REPLAY_SPEED="${CHAOS_REPLAY_SPEED:-720}" "$@" PYTHONPATH=oltp \
-    timeout "$seconds" .venv/bin/python -m replayer start) || rc=$?
-  [ "$rc" -eq 124 ] || [ "$rc" -eq 0 ]
+    timeout --foreground "$seconds" .venv/bin/python -m replayer start >"$log" 2>&1) || rc=$?
+  if [ "$rc" -ne 124 ]; then
+    tail -20 "$log" >&2
+    echo "replayer exited $rc, full log: $log" >&2
+    return 1
+  fi
+  rm -f "$log"
 }
 
-# Every Kafka record of the CDC topics is in bronze: the end offset of each non-empty partition
-# equals bronze's highest offset plus one.
+# Returns 2, so a script under set -e stops with 2 before it touches anything.
+no_other_replayer() {
+  if curl -sf -o /dev/null --max-time 2 http://127.0.0.1:8000/health; then
+    echo "a replayer already answers on :8000 (oltp-replayer or make replay-start); stop it" \
+      "first: the burst cannot bind the port and that replayer keeps playing at REPLAY_SPEED" >&2
+    return 2
+  fi
+}
+
+# Every record of the CDC topics is in bronze: the end offset of each non-empty partition equals
+# bronze's highest offset there plus one. A failed or empty Kafka listing counts as not caught up.
 kafka_ends() {
   kafka kafka-get-offsets.sh --topic 'oltp\.shop\..*' --time -1 | awk -F: '$3 > 0' | sort
 }
@@ -1019,9 +1050,13 @@ bronze_ends() {
                       || cast(max(kafka_offset) + 1 as varchar)
                from bronze.cdc_events group by topic, kafka_partition" | sort
 }
-bronze_caught_up() { [ -z "$(comm -23 <(kafka_ends) <(bronze_ends))" ]; }
+bronze_caught_up() {
+  local k b
+  k=$(kafka_ends) && [ -n "$k" ] && b=$(bronze_ends) || return 1
+  [ -z "$(comm -23 <(printf '%s\n' "$k") <(printf '%s\n' "$b"))" ]
+}
 
-# Per topic partition: copies of the same offset and holes between the lowest and highest one.
+# Per topic partition: copies of one offset, and holes between the lowest and highest offset.
 bronze_offsets_report() {
   trino "select topic, kafka_partition, count(*) - count(distinct kafka_offset) as duplicates,
                 max(kafka_offset) - min(kafka_offset) + 1 - count(distinct kafka_offset) as missing
@@ -1042,27 +1077,85 @@ ui=http://127.0.0.1:4040/api/v1/applications
 running_job() {
   local app
   app=$(curl -sf "$ui" | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["id"])')
-  curl -sf "$ui/$app/jobs?status=running" | python3 -c 'import json,sys; sys.exit(not json.load(sys.stdin))'
+  curl -sf "$ui/$app/jobs?status=running" |
+    python3 -c 'import json,sys; sys.exit(not json.load(sys.stdin))'
 }
 
+no_other_replayer
+# The burst runs in a process group of its own, so an early exit or ctrl-c stops all of it.
+set -m
 replay_burst 150 &
 burst=$!
+set +m
+stop_burst() { kill -TERM -- -"$burst" 2>/dev/null || true; }
+trap stop_burst EXIT
+
 wait_until 120 "a running micro-batch" running_job
-docker kill "$container" >/dev/null
-echo "killed $container at $(date -u +%T) while a micro-batch was running"
+kill -0 "$burst" 2>/dev/null ||
+  { echo "the replay burst ended before the kill; its log is above" >&2; exit 1; }
 # docker kill counts as a manual stop: restart: unless-stopped will not bring it back.
+trap 'stop_burst; docker start "$container" >/dev/null' EXIT
+docker kill "$container" >/dev/null
+echo "killed $container at $(date -u +%T) after the Spark UI reported a running job"
 sleep 5
 docker start "$container" >/dev/null
+trap stop_burst EXIT
+started=$(docker inspect -f '{{.State.StartedAt}}' "$container")
 wait_until 300 "$container to turn healthy" healthy "$container"
+echo "started $container at ${started:11:8}, healthy at $(date -u +%T)"
+
+# Spark logs "Resuming at batch N" on every start. Only a batch that was planned and never
+# committed resumes with committed offsets (end of N-1) different from available ones (end of N).
+resume=$(docker logs --since "$started" "$container" 2>&1 | grep -m1 'Resuming at batch') || true
+batch=${resume#*Resuming at batch }
+batch=${batch%% *}
+committed=${resume#*with committed offsets }
+committed=${committed%% and available offsets *}
+if [ -z "$resume" ] || [ "$committed" = "${resume##* and available offsets }" ]; then
+  echo "inconclusive: Spark replayed no uncommitted batch, the kill landed between batches;" \
+    "run again" >&2
+  exit 1
+fi
+echo "Spark replayed batch $batch, which the kill interrupted"
+
 wait "$burst"
+trap - EXIT
 wait_until 300 "bronze to catch up with Kafka" bronze_caught_up
 
-docker logs "$container" 2>&1 | grep -E 'Resuming at batch|Skipping epoch' | tail -3
+docker logs --since "$started" "$container" 2>&1 | grep 'Skipping epoch' | cut -c1-110 || true
 bronze_offsets_report
-trino "select committed_at, element_at(summary, 'spark.sql.streaming.epochId') as epoch,
-              element_at(summary, 'added-records') as records
-       from bronze.\"cdc_events\$snapshots\" order by committed_at desc limit 5"
-echo "expected: duplicates = 0 and missing = 0 for every partition; epochs strictly increasing"
+trino "with s as (
+         select committed_at, element_at(summary, 'spark.sql.streaming.queryId') as query_id,
+                cast(element_at(summary, 'spark.sql.streaming.epochId') as bigint) as epoch,
+                element_at(summary, 'added-records') as records
+         from bronze.\"cdc_events\$snapshots\"
+         where element_at(summary, 'spark.sql.streaming.queryId') is not null)
+       select committed_at, epoch, records from s
+       where query_id = (select max_by(query_id, committed_at) from s)
+         and epoch between $batch - 1 and $batch + 1
+       order by committed_at"
+
+bad=$(trino_value "select count(*) from (
+                     select topic, kafka_partition from bronze.cdc_events group by 1, 2
+                     having count(*) > count(distinct kafka_offset)
+                       or max(kafka_offset) - min(kafka_offset) + 1
+                         > count(distinct kafka_offset))")
+if [ "$bad" != 0 ]; then
+  echo "FAIL: $bad topic partitions with duplicate or missing offsets" >&2
+  exit 1
+fi
+# Grouped by query id: a new checkpoint starts a new query whose epochs count from 0 again.
+repeated=$(trino_value "select count(*) from (
+                          select 1 from bronze.\"cdc_events\$snapshots\"
+                          where element_at(summary, 'spark.sql.streaming.epochId') is not null
+                          group by element_at(summary, 'spark.sql.streaming.queryId'),
+                                   element_at(summary, 'spark.sql.streaming.epochId')
+                          having count(*) > 1)")
+if [ "$repeated" != 0 ]; then
+  echo "FAIL: $repeated epochs committed twice by one query" >&2
+  exit 1
+fi
+echo "ok: every Kafka offset is in bronze exactly once; no epoch was committed twice"
 ```
 
 - [ ] **Шаг 5: прогон на живом стеке**

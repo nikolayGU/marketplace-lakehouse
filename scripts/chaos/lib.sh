@@ -42,3 +42,56 @@ run_silver() {
   fi
   rm -f "$log"
 }
+
+healthy() { [ "$(docker inspect -f '{{.State.Health.Status}}' "$1" 2>/dev/null)" = healthy ]; }
+
+# replay_burst <real seconds> [VAR=value ...]: play the schedule on the host, then stop. The
+# replayer resumes from its saved virtual clock, so a burst spends only what it plays. It never
+# exits by itself, so any status but timeout's 124 is a failure and shows the log tail.
+# --foreground keeps timeout in the caller's process group, so a script that runs the burst as a
+# job of its own group stops all of it with one kill.
+replay_burst() {
+  local seconds=$1 rc=0 log
+  shift
+  log=$(mktemp -t replay_burst.XXXXXX.log)
+  (cd "$ROOT" && env REPLAY_SPEED="${CHAOS_REPLAY_SPEED:-720}" "$@" PYTHONPATH=oltp \
+    timeout --foreground "$seconds" .venv/bin/python -m replayer start >"$log" 2>&1) || rc=$?
+  if [ "$rc" -ne 124 ]; then
+    tail -20 "$log" >&2
+    echo "replayer exited $rc, full log: $log" >&2
+    return 1
+  fi
+  rm -f "$log"
+}
+
+# Returns 2, so a script under set -e stops with 2 before it touches anything.
+no_other_replayer() {
+  if curl -sf -o /dev/null --max-time 2 http://127.0.0.1:8000/health; then
+    echo "a replayer already answers on :8000 (oltp-replayer or make replay-start); stop it" \
+      "first: the burst cannot bind the port and that replayer keeps playing at REPLAY_SPEED" >&2
+    return 2
+  fi
+}
+
+# Every record of the CDC topics is in bronze: the end offset of each non-empty partition equals
+# bronze's highest offset there plus one. A failed or empty Kafka listing counts as not caught up.
+kafka_ends() {
+  kafka kafka-get-offsets.sh --topic 'oltp\.shop\..*' --time -1 | awk -F: '$3 > 0' | sort
+}
+bronze_ends() {
+  trino_value "select topic || ':' || cast(kafka_partition as varchar) || ':'
+                      || cast(max(kafka_offset) + 1 as varchar)
+               from bronze.cdc_events group by topic, kafka_partition" | sort
+}
+bronze_caught_up() {
+  local k b
+  k=$(kafka_ends) && [ -n "$k" ] && b=$(bronze_ends) || return 1
+  [ -z "$(comm -23 <(printf '%s\n' "$k") <(printf '%s\n' "$b"))" ]
+}
+
+# Per topic partition: copies of one offset, and holes between the lowest and highest offset.
+bronze_offsets_report() {
+  trino "select topic, kafka_partition, count(*) - count(distinct kafka_offset) as duplicates,
+                max(kafka_offset) - min(kafka_offset) + 1 - count(distinct kafka_offset) as missing
+         from bronze.cdc_events group by 1, 2 order by 1, 2"
+}

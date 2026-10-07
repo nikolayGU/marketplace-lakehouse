@@ -11,7 +11,7 @@ superseded. Longer reasoning lives in `docs/planning/00-mini-architecture-review
 | ADR-004 | Object storage: MinIO, last community release pulled from quay.io (Docker Hub repo removed) | accepted |
 | ADR-005 | JDBC catalog in `postgres-meta` first; REST catalog (Lakekeeper) as should-have after the vertical slice | accepted |
 | ADR-006 | Spark 3.5 + Iceberg 1.11 runtime in `local[2]`, no standalone cluster | accepted |
-| ADR-007 | Bronze append-only streaming (at-least-once contract, idempotent epoch commit to be verified); silver via AvailableNow + foreachBatch MERGE is the no-duplicates guarantee | accepted |
+| ADR-007 | Bronze append-only streaming (at-least-once contract, idempotent epoch commit verified 2026-09-26 and 2026-10-07); silver via AvailableNow + foreachBatch MERGE is the no-duplicates guarantee | accepted |
 | ADR-008 | Bronze keeps payload as JSON string; typed schema applied in silver from contracts | accepted |
 | ADR-009 | Soft deletes in silver (`_is_deleted`; Iceberg reserves `_deleted`), filtered in dbt | accepted |
 | ADR-010 | `silver.orders` merge-on-read, partitioned by month; other silver tables copy-on-write | accepted, measured 2026-09-26 |
@@ -99,6 +99,18 @@ Iceberg sink skips an already committed epoch (it records `spark.sql.streaming.q
 result is recorded here. Either way, the no-duplicates guarantee lives in silver
 (`MERGE` keyed by primary key with an LSN guard) and `bronze_duplicate_ratio` is a monitored
 metric, not an assumption.
+
+Verified on 2026-09-26, re-run on 2026-10-07 with a script that asserts the result. Iceberg 1.11
+`SparkWrite` skips an epoch when the last snapshot of the same query id already carries an equal
+or higher `epochId`. `tests/unit/test_iceberg_sink.py` reproduces the crash window by deleting
+`commits/N` of a checkpoint: Spark re-runs batch N, the re-run adds no rows and no snapshot, and a
+new checkpoint (new query id) appends every file again. On the live stack `make chaos-spark-kill`
+killed the driver during batch 80 on 2026-10-07 (batch 47 on 2026-09-26), both times before the
+write stage; after `docker start` Spark replayed the batch, and the script found every Kafka
+offset in bronze exactly once, with no gaps, and no epoch committed twice.
+So bronze is exactly once across Spark restarts that keep the checkpoint, and at-least-once
+across Debezium re-sends and checkpoint loss.
+
 
 ## ADR-008 Bronze keeps the payload as JSON text
 

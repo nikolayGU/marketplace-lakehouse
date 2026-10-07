@@ -95,7 +95,8 @@ lint: ## ruff, mypy, yamllint, sqlfluff, compose config
 test: ## unit tests (Spark ones skip on a host without Java)
 	uv run pytest tests/unit -q
 
-SPARK_TESTS := test_bronze_cdc_ingest.py test_contracts.py test_envelope.py test_silver_upsert.py
+SPARK_TESTS := test_bronze_cdc_ingest.py test_contracts.py test_envelope.py test_iceberg_sink.py \
+  test_silver_upsert.py
 
 test-spark: ## the Spark unit tests, inside lakehouse/spark:dev because the host has no JVM
 	docker run --rm --user root --entrypoint bash -v "$(CURDIR)":/repo:ro \

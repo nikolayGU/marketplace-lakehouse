@@ -193,7 +193,7 @@ why nothing is lost or duplicated (or where it can be). Filled in as scenarios a
 
 | # | Scenario | Target | Status |
 |---|---|---|---|
-| 1 | Spark bronze killed mid-batch | `chaos-spark-kill` | planned (week 2) |
+| 1 | Spark bronze killed mid-batch | `chaos-spark-kill` | done 2026-10-07 (re-run) |
 | 2 | Kafka Connect restart | `chaos-connect-restart` | planned (week 2) |
 | 3 | Duplicate events from source | `chaos-duplicates` | planned (week 2) |
 | 4 | Late events | `chaos-late` | planned (week 2) |
@@ -207,7 +207,7 @@ why nothing is lost or duplicated (or where it can be). Filled in as scenarios a
 ### Template
 
 ```
-## <n>. <Scenario>
+### <n>. <Scenario>
 
 What happened:
 What monitoring shows: (metric, alert, time to detect)
@@ -217,13 +217,70 @@ Why no loss or duplication: (or where it is possible)
 Verification SQL:
 ```
 
+Every scenario prints its own verification; the helpers it uses (`bronze_offsets_report`,
+`bronze_caught_up`, ...) live in `scripts/chaos/lib.sh`. The file sets `set -euo pipefail` and
+exports `.env`, so run a helper from the repo root in a child shell, not sourced into your own:
+`bash -c '. scripts/chaos/lib.sh && bronze_offsets_report'`. A scenario that plays a replay
+burst on the host exits 2 before it touches anything while another replayer answers on
+`127.0.0.1:8000` (the `oltp-replayer` container or `make replay-start`): the burst could not bind
+the port, and that replayer would keep playing at its own `REPLAY_SPEED`.
+
+### 1. Spark bronze killed mid-batch
+
+`make chaos-spark-kill` plays about 30 virtual hours (150 s at 720x, `CHAOS_REPLAY_SPEED`), waits
+until the Spark UI reports a running job, `docker kill`s `spark-bronze` and starts it 5 s later.
+It then reads `Resuming at batch N` from the new log: equal committed and available offsets mean
+the kill landed between batches, and the script exits 1 as inconclusive; otherwise it prints
+`Spark replayed batch N`. After the replayer burst ends and bronze catches up with Kafka it fails
+on any duplicate or missing offset and on any epoch one query committed twice.
+
+What happened: the driver JVM died with a micro-batch in flight. Spark had written `offsets/N` to
+the checkpoint but not `commits/N`, and Iceberg had no snapshot for epoch N. On 2026-10-07 the
+kill came 4 s after `offsets/80` was written, while the first stage of batch 80 (ShuffleMapStage
+0) was still reading Kafka: the write stage (ResultStage 1) was never submitted, so no data file
+reached MinIO.
+What monitoring shows: the container exits and stays down until it is started again (`docker
+kill` counts as a manual stop, the restart policy does not apply). The `:4041` endpoint goes away
+with the driver, so once Prometheus scrapes it (W4-T01, not running on 2026-10-07) the scrape
+fails (`up` = 0) and Prometheus marks `spark_streaming_last_batch_timestamp` stale: Grafana shows
+no data, not an old timestamp.
+`SparkNoBatch5m` (week 4) written as `time() - spark_streaming_last_batch_timestamp > 300` alone
+would never fire here, so it also needs `absent(spark_streaming_last_batch_timestamp)`, for 5
+minutes. After `docker start` the log says `Resuming at batch N`.
+Data at risk: the batch in flight, 158 records in batch 80 on 2026-10-07 (`added-records` of its
+snapshot). None is lost: Kafka keeps the records within retention, and bronze only misses the
+batch until it is replayed.
+Recovery: automatic after the container starts: Spark replays batch N from `offsets/N`. On
+2026-10-07 the kill landed at 18:09:44 during batch 80 and the container started at 18:09:49; the
+query logged `Resuming at batch 80` at 18:10:03, the replayed batch 80 committed at 18:10:12, 28 s
+after the kill, with the same query id, and batch 81 followed. The container reported healthy at
+18:10:17, about 28 s after the start (the script polls every 3 s). The first run, on 2026-09-26,
+landed the same way (batch 47, 1 s after `offsets/47`, before the write stage) and also committed
+the replayed batch 28 s after the kill.
+Why no loss or duplication: the offsets come from the checkpoint, so nothing is skipped; a
+replayed batch that Iceberg already committed is skipped by epoch (`Skipping epoch N`), because
+the sink stores `spark.sql.streaming.queryId` and `epochId` in every snapshot summary. Both live
+kills landed before the write stage, so no skip was needed and no `Skipping epoch` line appeared;
+the commit-window case is reproduced deterministically by `tests/unit/test_iceberg_sink.py`. On
+2026-10-07 the script ended with `ok`: no duplicate or missing offset in any of the 21 topic
+partitions and no epoch committed twice. A kill during the write stage leaves the files already
+written in MinIO as orphans until `remove_orphan_files` (week 5); neither run left any, since the
+write stage never started.
+Verification SQL (0 in both columns for every topic partition):
+
+```
+select topic, kafka_partition, count(*) - count(distinct kafka_offset) as duplicates,
+       max(kafka_offset) - min(kafka_offset) + 1 - count(distinct kafka_offset) as missing
+from bronze.cdc_events group by 1, 2 order by 1, 2;
+```
+
 ## Runbooks
 
 | Symptom | Runbook |
 |---|---|
 | Connector status FAILED | `docs/runbooks/connector-failed.md` (week 2) |
 | Retained WAL growing | `docs/runbooks/slot-wal-growth.md` (week 4) |
-| Spark job no batch for 5 minutes | `docs/runbooks/spark-stalled.md` (week 2) |
+| Spark job no batch for 5 minutes | `docs/runbooks/spark-stalled.md` |
 | Freshness above 15 minutes | `docs/runbooks/freshness.md` (week 4) |
 | Disk full | `docs/runbooks/disk-full.md` (week 4) |
 | Reset everything | `make nuke` (asks for confirmation; deletes volumes, checkpoints, data) |

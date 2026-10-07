@@ -305,7 +305,7 @@ Schema evolution: bronze не ломается, потому что `after` эт
 
 | # | Сценарий | Команда | Ожидаемый ответ системы |
 |---|---|---|---|
-| 1 | Spark bronze kill посреди микробатча | `docker kill spark-bronze` | Restart с checkpoint; незакоммиченный батч повторяется. Гипотеза: Iceberg пропускает уже закоммиченный epoch и дублей по (topic, partition, offset) нет; проверить по `snapshots.summary`. Если дубли есть, это фиксируется в OPERATIONS как известное поведение at-least-once bronze; silver в любом случае без дублей |
+| 1 | Spark bronze kill посреди микробатча | `make chaos-spark-kill` (`docker kill` + `docker start`) | Restart с checkpoint; незакоммиченный батч повторяется. Проверено 07.10 (повтор прогона 26.09): kill во время батча 80 до стадии записи, Spark повторил батч, в bronze каждый offset ровно один раз, без дыр, ни один epoch не закоммичен дважды. Пропуск уже закоммиченного epoch (`Skipping epoch`) воспроизводит `tests/unit/test_iceberg_sink.py`; silver в любом случае без дублей |
 | 2 | Kafka Connect restart | `docker restart kafka-connect` | Возможны дубли событий (at-least-once); bronze содержит дубли, silver нет |
 | 3 | Duplicate events из источника | `REPLAY_DUPLICATE_RATIO=0.1` | Bronze растёт, silver `count(*)` не меняется, DQ-метрика `bronze_duplicate_ratio` растёт |
 | 4 | Late events | `REPLAY_LATE_RATIO=0.1 LATE_DELAY=300` | Silver не откатывает `delivered` в `shipped`; watermark-демо в optional job |
