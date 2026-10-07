@@ -1202,7 +1202,7 @@ git commit -m "stream: chaos-spark-kill, bronze exactly once across restarts pro
 - Изменить: `OPERATIONS.md`, `DECISIONS.md` (ADR-007), `docs/planning/00-mini-architecture-review.md` (§8)
 
 **Интерфейсы:**
-- Производит: в `lib.sh` `connector_running`, `reconcile`, `lsn_duplicates_since <utc timestamp>`.
+- Производит: в `lib.sh` `connector_running`, `slot_reattached <pid>`, `reconcile`, `lsn_duplicates_since <utc timestamp>`.
 
 - [ ] **Шаг 1: `lib.sh`, добавить**
 
@@ -1211,15 +1211,24 @@ connector_running() {
   curl -sf http://127.0.0.1:8083/connectors/shop-connector/status | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
-sys.exit(not (d["connector"]["state"] == "RUNNING" and all(t["state"] == "RUNNING" for t in d["tasks"])))'
+running = d["connector"]["state"] == "RUNNING"
+sys.exit(not (running and d["tasks"] and all(t["state"] == "RUNNING" for t in d["tasks"])))'
 }
 
-# Live rows per table: Postgres against silver. Non-zero status when any table differs.
+# slot_reattached <pid>: a walsender other than <pid> streams shop_slot. After a kill,
+# connect-status can still hold the dead worker's RUNNING records; Postgres cannot.
+slot_reattached() {
+  [ "$(psql_value "select active and active_pid <> $1 from pg_replication_slots
+                   where slot_name = 'shop_slot'")" = t ]
+}
+
+# Live row counts per table, Postgres against silver: 1 when any table differs, 2 when a count
+# query fails.
 reconcile() {
   local t pg lake status=0
   for t in customers sellers products orders order_items payments reviews; do
-    pg=$(psql_value "select count(*) from shop.$t")
-    lake=$(trino_value "select count(*) from silver.$t where not _is_deleted")
+    pg=$(psql_value "select count(*) from shop.$t") || return 2
+    lake=$(trino_value "select count(*) from silver.$t where not _is_deleted") || return 2
     printf '%-12s postgres %8s  silver %8s  %s\n' "$t" "$pg" "$lake" \
       "$([ "$pg" = "$lake" ] && echo ok || echo DIFF)"
     [ "$pg" = "$lake" ] || status=1
@@ -1228,8 +1237,11 @@ reconcile() {
 }
 
 # Events bronze holds more than once with the same LSN, ingested since <utc 'YYYY-MM-DD HH:MM:SS'>.
+# Both copies must be ingested after that time: after a Connect kill the first copy can be up to
+# offset.flush.interval.ms (60 s) older than the kill, so start the window before that.
 lsn_duplicates_since() {
-  trino "select source_table, count(*) as keys_repeated, sum(copies - 1) as extra_events
+  trino "select source_table, count(distinct key) as keys_repeated, count(*) as events_repeated,
+                sum(copies - 1) as extra_events
          from (select source_table, key, lsn, count(*) as copies from bronze.cdc_events
                where ingest_ts >= timestamp '$1' and lsn is not null
                group by 1, 2, 3 having count(*) > 1)
@@ -1241,32 +1253,83 @@ lsn_duplicates_since() {
 
 ```bash
 #!/usr/bin/env bash
-# Chaos 2: restart Kafka Connect during a replay. MODE=restart (default, SIGTERM: Connect commits
-# offsets and flushes the slot, so ~0 duplicates) or MODE=kill (no final commit: everything since
-# the last offset flush, up to offset.flush.interval.ms = 60 s, is sent again with the same LSN).
+# Chaos 2: restart Kafka Connect during a replay. MODE=restart (default, SIGTERM): Connect commits
+# offsets and the connector flushes the slot, so about zero repeats. MODE=kill: no final commit,
+# so everything since the last offset flush (offset.flush.interval.ms, 60 s) is sent again with
+# the same LSN. Silver absorbs both (OPERATIONS.md, scenarios 2a and 2b).
 . "$(dirname "$0")/lib.sh"
 
 mode=${MODE:-restart}
 container=lakehouse-kafka-connect-1
-t0=$(date -u +'%Y-%m-%d %H:%M:%S')
-
-replay_burst 180 &
-burst=$!
-sleep 90
 case "$mode" in
-  restart) docker restart "$container" >/dev/null ;;
-  kill) docker kill "$container" >/dev/null && sleep 5 && docker start "$container" >/dev/null ;;
+  restart | kill) ;;
   *) echo "MODE must be restart or kill" >&2; exit 2 ;;
 esac
-echo "$mode of $container at $(date -u +%T)"
+t0=$(date -u +'%Y-%m-%d %H:%M:%S')
+
+no_other_replayer
+# The burst runs in a process group of its own, so an early exit or ctrl-c stops all of it.
+set -m
+replay_burst 180 &
+burst=$!
+set +m
+stop_burst() { kill -TERM -- -"$burst" 2>/dev/null || true; }
+trap stop_burst EXIT
+
+sleep 90
+kill -0 "$burst" 2>/dev/null ||
+  { echo "the replay burst ended before the $mode; its log is above" >&2; exit 1; }
+pid0=$(psql_value "select coalesce(active_pid, 0) from pg_replication_slots
+                   where slot_name = 'shop_slot'")
+t1=$(date -u +'%Y-%m-%d %H:%M:%S')
+if [ "$mode" = restart ]; then
+  docker restart "$container" >/dev/null
+else
+  # docker kill is a manual stop: if the script dies before docker start, Connect stays down.
+  trap 'stop_burst; docker start "$container" >/dev/null' EXIT
+  docker kill "$container" >/dev/null
+  sleep 5
+  docker start "$container" >/dev/null
+  trap stop_burst EXIT
+fi
+echo "$mode of $container at ${t1#* }, running again at $(date -u +%T)"
 wait_until 180 "connector and task RUNNING" connector_running
+wait_until 180 "shop_slot streaming to a new walsender" slot_reattached "$pid0"
 wait "$burst"
+trap - EXIT
 wait_until 300 "bronze to catch up with Kafka" bronze_caught_up
 
+# kafka_ts is when Connect produced the record. The minute before the stop is one offset flush
+# interval: without traffic there, "0 repeats" would prove nothing.
+counts=$(trino_value "
+  select count_if(kafka_ts >= timestamp '$t1 UTC' - interval '60' second
+                  and kafka_ts < timestamp '$t1 UTC'),
+         count_if(kafka_ts >= timestamp '$t1 UTC')
+  from bronze.cdc_events where ingest_ts >= timestamp '$t0 UTC'")
+read -r before after <<<"$counts"
+echo "CDC events produced in the 60 s before the $mode: $before, after it: $after"
+if ! [ "$before" -gt 0 ] || ! [ "$after" -gt 0 ]; then
+  echo "inconclusive: no CDC traffic on one side of the $mode (schedule drained?); run again" >&2
+  exit 1
+fi
+
 lsn_duplicates_since "$t0"
+if [ "$mode" = kill ]; then
+  repeated=$(trino_value "select count(*) from (
+                            select 1 from bronze.cdc_events
+                            where ingest_ts >= timestamp '$t0' and lsn is not null
+                            group by source_table, key, lsn having count(*) > 1)")
+  if ! [ "$repeated" -gt 0 ]; then
+    echo "inconclusive: the kill repeated no event, it came right after an offset flush;" \
+      "run again" >&2
+    exit 1
+  fi
+fi
+
 run_silver
 reconcile
-echo "expected: MODE=restart no rows above; MODE=kill repeated events; silver equals Postgres either way"
+echo "expected: MODE=restart no rows above; MODE=kill repeated events; reconcile ok (live row" \
+  "counts) either way"
 ```
 
 - [ ] **Шаг 3: прогон обоих режимов**

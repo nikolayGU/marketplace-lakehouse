@@ -194,7 +194,8 @@ why nothing is lost or duplicated (or where it can be). Filled in as scenarios a
 | # | Scenario | Target | Status |
 |---|---|---|---|
 | 1 | Spark bronze killed mid-batch | `chaos-spark-kill` | done 2026-10-07 (re-run) |
-| 2 | Kafka Connect restart | `chaos-connect-restart` | planned (week 2) |
+| 2a | Kafka Connect restart | `chaos-connect-restart` | done 2026-10-07 (re-run) |
+| 2b | Kafka Connect killed | `MODE=kill make chaos-connect-restart` | done 2026-10-07 (re-run) |
 | 3 | Duplicate events from source | `chaos-duplicates` | planned (week 2) |
 | 4 | Late events | `chaos-late` | planned (week 2) |
 | 5 | PostgreSQL restart | `chaos-postgres-restart` | planned (week 4) |
@@ -274,11 +275,81 @@ select topic, kafka_partition, count(*) - count(distinct kafka_offset) as duplic
 from bronze.cdc_events group by 1, 2 order by 1, 2;
 ```
 
+### 2a. Kafka Connect restart
+
+`make chaos-connect-restart` plays about 36 virtual hours (180 s at 720x) and 90 s into it runs
+`docker restart lakehouse-kafka-connect-1`. It waits until the connector reports RUNNING and
+`shop_slot` streams to a new walsender, lets the burst end and bronze catch up, and exits 1 as
+inconclusive unless CDC events were produced both in the minute before the restart and after it.
+Then it prints the events repeated with the same LSN, runs silver and compares live row counts
+with Postgres (`reconcile`, which fails on any difference).
+
+What happened: the worker got SIGTERM. On the way down it waited for the producer's acks and stored
+the offset of the last acked record in `connect-offsets` (`Committing offsets for 1305 acknowledged
+messages` on 2026-10-07); Debezium flushed that offset's last commit LSN to the replication slot,
+which is behind the stored change LSN (offset `lsn=0/4F7298D0`, `lastCommitLsn=0/4F7221F8`, and
+Postgres logged `Streaming transactions committing after 0/4F7221F8`). After the restart Postgres
+re-sent the transactions committing after the slot position, and Debezium dropped everything up to
+the stored offset (`identified as already processed`, then `switching off the filtering` at
+`0/4F72B4D0`).
+What monitoring shows: `make connector-status` is briefly unavailable, then RUNNING; the
+Connect log shows `Committing offsets for N acknowledged messages` just before `Stopping down
+connector`. Bronze stops growing for the restart and catches up afterwards.
+Data at risk: none. The replayer kept writing; Postgres kept the WAL for the slot.
+Recovery: automatic, about 32 s on 2026-10-07 (SIGTERM at 18:14:19, `Kafka Connect stopped` at
+18:14:20.4, `Processing messages` at 18:14:50.7); about 40 s on 2026-09-26.
+Why no loss or duplication: the final offset commit covered every record Kafka had acked, and on
+resume Debezium filters whatever Postgres re-sends up to that offset, so nothing reached Kafka
+twice. That holds while the stop fits Docker's 10 s stop timeout and the final commit fits
+`offset.flush.timeout.ms` (5 s); otherwise expect repeats as in 2b. On 2026-10-07, with 1429 CDC
+events produced in the minute before the restart and 1593 after it, 0 events repeated with the
+same LSN, and live row counts of all seven silver tables matched Postgres; the 2026-09-26 run also
+gave 0.
+
+### 2b. Kafka Connect killed
+
+`MODE=kill make chaos-connect-restart` does the same with `docker kill` and, 5 s later, `docker
+start`. It also exits 1 as inconclusive when the kill repeated no event, which means it came
+right after an offset flush.
+
+What happened: no shutdown hook ran. Connect stores source offsets every 60 s
+(`offset.flush.interval.ms`), so on restart it resumes from the last stored offset: Postgres
+re-sends from the slot's last confirmed position, Debezium skips up to the stored offset, and every
+event emitted after the stored offset is sent a second time with the same LSN.
+What monitoring shows: the container is gone until someone starts it (a manual kill is not
+restarted by the policy); `ConnectorNotRunning` (week 4). In bronze, repeated `(source_table,
+key, lsn)`: the second copy arrives after the restart, the first can be up to 60 s older than the
+kill.
+Data at risk: none lost. Repeats only.
+Recovery: `docker start lakehouse-kafka-connect-1`; the connector resumes by itself (on 2026-10-07
+`Processing messages` at 18:20:30.0, 26 s after the start at 18:20:03.6).
+Why no loss or duplication: nothing is lost because both positions are behind what reached
+Kafka. The repeats land in bronze, which is at-least-once by contract, and silver's MERGE keeps
+one row per key and ignores an equal LSN (ADR-021). On 2026-10-07 the kill came about 9 s after
+the last offset flush (`Committing offsets for 728 acknowledged messages` at 18:19:49.2 in the
+Connect log, walsender connection reset at 18:19:57.9 in the postgres-oltp log): 253 events
+arrived twice (orders 173 on 152 keys, order_items 40, payments 39, reviews 1), their first copies
+produced between 18:19:48.8 (not covered by that flush) and 18:19:57.4, and live row counts of all
+seven silver tables still matched Postgres. On 2026-09-26 a kill about 2 s after the flush
+repeated 11 events: the count follows the time since the last flush, up to 60 s of changes.
+Verification SQL (the first copy can be in bronze up to 60 s before the kill, so the window starts
+90 s before it; `make chaos-connect-restart` uses the run start instead, and on 2026-10-07 both
+gave the same 253 events):
+
+```
+select source_table, count(distinct key) as keys_repeated, count(*) as events_repeated,
+       sum(copies - 1) as extra_events
+from (select source_table, key, lsn, count(*) as copies from bronze.cdc_events
+      where ingest_ts >= timestamp '<kill time, UTC>' - interval '90' second and lsn is not null
+      group by 1, 2, 3 having count(*) > 1)
+group by 1;
+```
+
 ## Runbooks
 
 | Symptom | Runbook |
 |---|---|
-| Connector status FAILED | `docs/runbooks/connector-failed.md` (week 2) |
+| Connector status FAILED | `docs/runbooks/connector-failed.md` |
 | Retained WAL growing | `docs/runbooks/slot-wal-growth.md` (week 4) |
 | Spark job no batch for 5 minutes | `docs/runbooks/spark-stalled.md` |
 | Freshness above 15 minutes | `docs/runbooks/freshness.md` (week 4) |

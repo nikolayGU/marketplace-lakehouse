@@ -74,7 +74,7 @@ cdc-snapshot: ## incremental snapshot via signal table: make cdc-snapshot [TABLE
 	bash connect/snapshot.sh $(TABLES)
 
 connector-status: ## debezium connector state
-	curl -s http://127.0.0.1:8083/connectors/shop-connector/status | python -m json.tool
+	curl -s http://127.0.0.1:8083/connectors/shop-connector/status | python3 -m json.tool
 
 iceberg-demo: ## snapshots, time travel, files before/after compaction
 	bash scripts/iceberg/demo.sh

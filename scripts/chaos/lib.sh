@@ -95,3 +95,44 @@ bronze_offsets_report() {
                 max(kafka_offset) - min(kafka_offset) + 1 - count(distinct kafka_offset) as missing
          from bronze.cdc_events group by 1, 2 order by 1, 2"
 }
+
+connector_running() {
+  curl -sf http://127.0.0.1:8083/connectors/shop-connector/status | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+running = d["connector"]["state"] == "RUNNING"
+sys.exit(not (running and d["tasks"] and all(t["state"] == "RUNNING" for t in d["tasks"])))'
+}
+
+# slot_reattached <pid>: a walsender other than <pid> streams shop_slot. After a kill,
+# connect-status can still hold the dead worker's RUNNING records; Postgres cannot.
+slot_reattached() {
+  [ "$(psql_value "select active and active_pid <> $1 from pg_replication_slots
+                   where slot_name = 'shop_slot'")" = t ]
+}
+
+# Live row counts per table, Postgres against silver: 1 when any table differs, 2 when a count
+# query fails.
+reconcile() {
+  local t pg lake status=0
+  for t in customers sellers products orders order_items payments reviews; do
+    pg=$(psql_value "select count(*) from shop.$t") || return 2
+    lake=$(trino_value "select count(*) from silver.$t where not _is_deleted") || return 2
+    printf '%-12s postgres %8s  silver %8s  %s\n' "$t" "$pg" "$lake" \
+      "$([ "$pg" = "$lake" ] && echo ok || echo DIFF)"
+    [ "$pg" = "$lake" ] || status=1
+  done
+  return "$status"
+}
+
+# Events bronze holds more than once with the same LSN, ingested since <utc 'YYYY-MM-DD HH:MM:SS'>.
+# Both copies must be ingested after that time: after a Connect kill the first copy can be up to
+# offset.flush.interval.ms (60 s) older than the kill, so start the window before that.
+lsn_duplicates_since() {
+  trino "select source_table, count(distinct key) as keys_repeated, count(*) as events_repeated,
+                sum(copies - 1) as extra_events
+         from (select source_table, key, lsn, count(*) as copies from bronze.cdc_events
+               where ingest_ts >= timestamp '$1' and lsn is not null
+               group by 1, 2, 3 having count(*) > 1)
+         group by 1 order by 1"
+}

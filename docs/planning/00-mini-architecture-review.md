@@ -306,7 +306,8 @@ Schema evolution: bronze не ломается, потому что `after` эт
 | # | Сценарий | Команда | Ожидаемый ответ системы |
 |---|---|---|---|
 | 1 | Spark bronze kill посреди микробатча | `make chaos-spark-kill` (`docker kill` + `docker start`) | Restart с checkpoint; незакоммиченный батч повторяется. Проверено 07.10 (повтор прогона 26.09): kill во время батча 80 до стадии записи, Spark повторил батч, в bronze каждый offset ровно один раз, без дыр, ни один epoch не закоммичен дважды. Пропуск уже закоммиченного epoch (`Skipping epoch`) воспроизводит `tests/unit/test_iceberg_sink.py`; silver в любом случае без дублей |
-| 2 | Kafka Connect restart | `docker restart kafka-connect` | Возможны дубли событий (at-least-once); bronze содержит дубли, silver нет |
+| 2a | Kafka Connect restart | `make chaos-connect-restart` (`docker restart`) | Graceful: Connect коммитит offsets и сдвигает slot, повторов нет (проверено 07.10: 0, как и 26.09) |
+| 2b | Kafka Connect kill | `MODE=kill make chaos-connect-restart` (`docker kill` + `docker start`) | Повтор всего, что вышло после последнего flush offsets (до 60 с), с теми же LSN; bronze содержит дубли, silver нет (07.10: 253 события при kill через 9 с после flush; 26.09: 11 событий через 2 с) |
 | 3 | Duplicate events из источника | `REPLAY_DUPLICATE_RATIO=0.1` | Bronze растёт, silver `count(*)` не меняется, DQ-метрика `bronze_duplicate_ratio` растёт |
 | 4 | Late events | `REPLAY_LATE_RATIO=0.1 LATE_DELAY=300` | Silver не откатывает `delivered` в `shipped`; watermark-демо в optional job |
 | 5 | Postgres restart | `docker restart postgres-oltp` | Коннектор падает и поднимается по retry; slot сохранён; после восстановления LSN продолжается |

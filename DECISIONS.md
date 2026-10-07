@@ -92,8 +92,9 @@ append-only streaming sink with a 20 s trigger; silver is a separate job with
 `MERGE INTO`. Consequences: one continuous JVM plus one short-lived JVM; silver latency is
 minutes, not seconds, which is acceptable for analytics; both Spark trigger modes are shown.
 
-On duplicates: bronze is contractually at-least-once. Debezium re-sends events after a restart
-and those land in bronze as new Kafka records. For Spark restarts the expectation is that the
+On duplicates: bronze is contractually at-least-once. Debezium re-sends events after a hard stop
+of Connect (or a restart whose final offset commit does not finish), and those land in bronze as
+new Kafka records. For Spark restarts the expectation is that the
 Iceberg sink skips an already committed epoch (it records `spark.sql.streaming.queryId` and
 `epochId` in the snapshot summary); chaos scenario 1 verifies this experimentally and the
 result is recorded here. Either way, the no-duplicates guarantee lives in silver
@@ -111,6 +112,17 @@ offset in bronze exactly once, with no gaps, and no epoch committed twice.
 So bronze is exactly once across Spark restarts that keep the checkpoint, and at-least-once
 across Debezium re-sends and checkpoint loss.
 
+In the runs measured so far Debezium re-sent events only after a hard stop. A `docker restart` of
+Connect (SIGTERM) waits up to `offset.flush.timeout.ms` (5 s) for producer acks, stores the offset
+of the last acked record and flushes that offset's commit LSN to the slot; on resume Debezium drops
+what Postgres re-sends up to the stored offset. The shutdown took about 1.3 s and gave 0 repeats
+on 2026-10-07 (about 2 s and 0 repeats on 2026-09-26). That holds only while the stop fits
+Docker's 10 s stop timeout (no `stop_grace_period`) and the final commit fits 5 s; records still
+unacked then, or a timed-out commit, are sent again as after a kill. A `docker kill` skips the
+final commit, and everything since the last offset flush (at most `offset.flush.interval.ms`,
+60 s) arrives again with the same LSN: 253 events for a kill about 9 s after the flush on
+2026-10-07 (11 events about 2 s after it on 2026-09-26), and silver live row counts still matched
+Postgres both times. A Postgres restart (chaos 5) is not measured yet.
 
 ## ADR-008 Bronze keeps the payload as JSON text
 
