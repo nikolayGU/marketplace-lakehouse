@@ -16,16 +16,31 @@ from spark_jobs.contracts import load_contracts, parse_contract
 ROOT = Path(__file__).parents[2]
 CONTRACTS = ROOT / "contracts" / "silver"
 SCHEMA_SQL = ROOT / "oltp" / "migrations" / "001_schema.sql"
+EVOLUTION = ROOT / "oltp" / "migrations" / "evolution"
 FIXTURES = ROOT / "tests" / "fixtures" / "envelopes"
 
 COLUMN = re.compile(
     r"(\w+) (varchar\(\d+\)|char\(\d+\)|text|integer|smallint|timestamp|numeric\((\d+), (\d+)\))"
     r"(.*)"
 )
+ADD_COLUMN = re.compile(
+    r"alter table shop\.(\w+) add column (\w+) (varchar\(\d+\)|text|integer|timestamp)"
+)
 
 needs_java = pytest.mark.skipif(
     shutil.which("java") is None, reason="local SparkSession needs a JVM; CI and the image have one"
 )
+
+
+def silver_types(pg_type: str) -> tuple[str, str]:
+    if pg_type.startswith("numeric"):
+        precision, scale = re.findall(r"\d+", pg_type)
+        return "number", f"decimal({precision},{scale})"
+    if pg_type in ("integer", "smallint"):
+        return "integer", "int"
+    if pg_type == "timestamp":
+        return "integer", "timestamp_ntz"
+    return "string", "string"
 
 
 def source_tables() -> dict[str, dict[str, Any]]:
@@ -43,22 +58,23 @@ def source_tables() -> dict[str, dict[str, Any]]:
             match = COLUMN.fullmatch(line)
             if not match:
                 continue
-            column, pg_type, precision, scale, rest = match.groups()
-            if pg_type.startswith("numeric"):
-                wire, silver = "number", f"decimal({precision},{scale})"
-            elif pg_type in ("integer", "smallint"):
-                wire, silver = "integer", "int"
-            elif pg_type == "timestamp":
-                wire, silver = "integer", "timestamp_ntz"
-            else:
-                wire, silver = "string", "string"
-            columns.append((column, wire, silver))
+            column, pg_type, rest = match.group(1, 2, 5)
+            columns.append((column, *silver_types(pg_type)))
             if "not null" in rest or "primary key" in rest:
                 not_null.add(column)
             if "primary key" in rest:
                 primary_key = [column]
         tables[name] = {"columns": columns, "not_null": not_null, "primary_key": primary_key}
     return tables
+
+
+def evolution_columns() -> dict[str, list[tuple[str, str, str]]]:
+    """Columns that later migrations add; a contract may adopt them or not yet."""
+    added: dict[str, list[tuple[str, str, str]]] = {}
+    for path in sorted(EVOLUTION.glob("*.sql")):
+        for table, column, pg_type in ADD_COLUMN.findall(path.read_text()):
+            added.setdefault(table, []).append((column, *silver_types(pg_type)))
+    return added
 
 
 def test_every_source_table_has_exactly_one_contract() -> None:
@@ -74,11 +90,18 @@ def test_contract_is_valid_json_schema(path: Path) -> None:
 def test_contract_matches_the_source_table(table: str) -> None:
     source = source_tables()[table]
     contract = load_contracts(CONTRACTS)[table]
+    columns = [(c.name, c.wire_type, c.silver_type) for c in contract.columns]
+    base = source["columns"]
 
     assert contract.source_table == f"shop.{table}"
-    assert [(c.name, c.wire_type, c.silver_type) for c in contract.columns] == source["columns"]
+    assert columns[: len(base)] == base
+    assert columns[len(base) :] == [c for c in evolution_columns().get(table, []) if c in columns]
     assert {c.name for c in contract.columns if not c.nullable} == source["not_null"]
     assert list(contract.primary_key) == source["primary_key"]
+
+
+def test_evolution_migration_adds_sales_channel() -> None:
+    assert ("sales_channel", "string", "string") in evolution_columns()["orders"]
 
 
 def minimal(**overrides: Any) -> dict[str, Any]:

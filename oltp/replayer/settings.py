@@ -1,6 +1,8 @@
 """Configuration for the OLTP side: everything comes from the environment or `.env`."""
 
-from pydantic import Field
+from datetime import datetime
+
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -29,11 +31,17 @@ class Settings(BaseSettings):
     replay_late_delay_seconds: int = 300
     # Share of updates emitted twice, byte for byte, to exercise dedup downstream.
     replay_duplicate_ratio: float = 0.0
-    replay_schema_evolution_at: str = ""
+    # Virtual time at which evolution/003 is applied; empty means never.
+    replay_schema_evolution_at: datetime | None = None
 
     http_port: int = 8000
     # How many due events one pass of the loop claims. Bounds memory and transaction size.
     replay_batch_size: int = 500
+
+    @field_validator("replay_schema_evolution_at", mode="before")
+    @classmethod
+    def _empty_means_never(cls, value: object) -> object:
+        return None if value == "" else value
 
     @property
     def dsn(self) -> str:

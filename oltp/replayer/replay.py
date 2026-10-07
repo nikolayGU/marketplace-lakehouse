@@ -15,10 +15,12 @@ from datetime import datetime, timedelta
 
 import psycopg
 
-from replayer import server, state
+from replayer import migrations, server, state
 from replayer.settings import Settings
 
 log = logging.getLogger("replayer")
+
+EVOLUTION = migrations.migrations_dir() / "evolution" / "003_orders_sales_channel.sql"
 
 
 class NotLoadedError(Exception):
@@ -41,6 +43,17 @@ INSERT_ORDER = """
 insert into shop.orders (order_id, customer_id, order_status,
                          order_purchase_timestamp, order_estimated_delivery_date)
 select order_id, customer_id, 'created', order_purchase_timestamp, order_estimated_delivery_date
+from replay.orders where order_id = %s
+on conflict (order_id) do nothing
+"""
+
+INSERT_ORDER_WITH_CHANNEL = """
+insert into shop.orders (order_id, customer_id, order_status, order_purchase_timestamp,
+                         order_estimated_delivery_date, sales_channel)
+select order_id, customer_id, 'created', order_purchase_timestamp, order_estimated_delivery_date,
+       (array['web', 'app', 'marketplace'])[
+           1 + mod(('x' || substr(md5(order_id), 1, 7))::bit(28)::int, 3)
+       ]
 from replay.orders where order_id = %s
 on conflict (order_id) do nothing
 """
@@ -95,6 +108,22 @@ def picks(key: str, salt: str, ratio: float) -> bool:
     return int(digest, 16) / 0xFFFFFFFF < ratio
 
 
+def evolution_due(at: datetime | None, now: datetime, applied: bool) -> bool:
+    return at is not None and not applied and now >= at
+
+
+def has_column(conn: Conn, table: str, column: str) -> bool:
+    with conn.cursor() as cur:
+        cur.execute(
+            "select 1 from information_schema.columns "
+            "where table_schema = 'shop' and table_name = %s and column_name = %s",
+            (table, column),
+        )
+        found = cur.fetchone() is not None
+    conn.commit()
+    return found
+
+
 class Replayer:
     def __init__(self, settings: Settings, conn: Conn) -> None:
         self.settings = settings
@@ -106,6 +135,7 @@ class Replayer:
         self.virtual_base = current.virtual_now
         self.real_base = time.monotonic()
         self.emitted = current.events_emitted
+        self.channel = has_column(conn, "orders", "sales_channel")
 
     def virtual_now(self) -> datetime:
         elapsed = time.monotonic() - self.real_base
@@ -124,7 +154,9 @@ class Replayer:
 
     def execute(self, cur: Cur, event: Event) -> None:
         if event.kind == "order_insert":
-            cur.execute(INSERT_ORDER, (event.order_id,))
+            cur.execute(
+                INSERT_ORDER_WITH_CHANNEL if self.channel else INSERT_ORDER, (event.order_id,)
+            )
             for child_sql in INSERT_CHILDREN:
                 cur.execute(child_sql, (event.order_id,))
         elif event.kind == "order_status":
@@ -153,6 +185,11 @@ class Replayer:
 
     def step(self) -> int:
         now = self.virtual_now()
+        if evolution_due(self.settings.replay_schema_evolution_at, now, self.channel):
+            migrations.apply(self.conn, EVOLUTION)
+            self.channel = True
+            server.EVENTS.labels(kind="schema_evolution").inc()
+            log.info("applied %s at virtual %s", EVOLUTION.name, now)
         with self.conn.cursor() as cur:
             events = self.claim(cur, now)
             done: list[int] = []

@@ -112,7 +112,7 @@ Debezium 3.5 (Connect runtime 4.2.0):
 ### W2-T07 schema evolution, сторона реплеера
 
 - `oltp/migrations/evolution/003_orders_sales_channel.sql`: `alter table shop.orders add column sales_channel varchar(16)` с check на три значения, без default (старые строки null). Подкаталог, потому что `make migrate` берёт только `migrations/*.sql`.
-- Реплеер: если `REPLAY_SCHEMA_EVOLUTION_AT` задан, миграция ещё не записана в `public.schema_migrations` и виртуальное время дошло до отметки, применяет её тем же `migrations.apply`, пишет в лог и метрику, дальше вставляет заказы с `sales_channel` (детерминированно по `md5(order_id)`). Настройка парсится в `datetime | None`, пустая строка это «никогда».
+- Реплеер: если `REPLAY_SCHEMA_EVOLUTION_AT` задан, колонки `shop.orders.sales_channel` ещё нет и виртуальное время дошло до отметки, применяет миграцию тем же `migrations.apply` (он же записывает файл в `public.schema_migrations`; признак «применено» это колонка, а не запись, так переживается и колонка, добавленная руками, решение 07.10), пишет в лог и метрику, дальше вставляет заказы с `sales_channel` (детерминированно по `md5(order_id)`). Настройка парсится в `datetime | None`, пустая строка это «никогда».
 - `test_contracts` читает колонки из `001_schema.sql` и из `evolution/`: контракт обязан содержать все колонки 001 в порядке, колонки из evolution может содержать или нет. После гейта владельца тест не краснеет.
 - Проверка на живом стеке: порция реплея с отметкой в её середине; колонка в Postgres, новые заказы с `sales_channel`, в bronze `after` с полем, silver не упал и пишет строку про неизвестное поле (из W2-T04).
 - Подсказка для гейта: какие файлы и какой `ALTER`, в `HANDOFF.md`.
