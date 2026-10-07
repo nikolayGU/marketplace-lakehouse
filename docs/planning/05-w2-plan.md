@@ -1372,44 +1372,96 @@ git commit -m "cdc: chaos-connect-restart, graceful restart vs kill measured"
 
 **Файлы:**
 - Создать: `scripts/chaos/duplicates.sh`
-- Изменить: `OPERATIONS.md`
+- Изменить: `OPERATIONS.md`, `docs/planning/00-mini-architecture-review.md` (§8, строка 3)
 
 - [ ] **Шаг 1: `scripts/chaos/duplicates.sh`**
 
 ```bash
 #!/usr/bin/env bash
-# Chaos 3: the source repeats itself. REPLAY_DUPLICATE_RATIO re-runs a status UPDATE with the same
-# values: a new WAL record, a new LSN, before = after. Bronze gets an extra event that dedup by
-# LSN cannot see; silver merges the same values again and stays equal to Postgres.
+# Chaos 3: the source repeats itself. REPLAY_DUPLICATE_RATIO picks that share of orders (md5 of
+# duplicate:<order_id>) and runs each status UPDATE of a picked order twice with the same values:
+# a new WAL record, a new LSN, before = after. Bronze gets an extra event that dedup by LSN cannot
+# see. The repeat commits with its original, so silver usually reads both in one batch:
+# latest_per_key keeps the repeat (higher LSN, same values) and MERGE writes the row once. If a
+# batch boundary splits the pair, the _last_lsn guard lets the repeat rewrite the row with the
+# same values. Either way silver ends equal to Postgres (OPERATIONS.md, scenario 3).
 . "$(dirname "$0")/lib.sh"
 
+ratio=0.1
+no_other_replayer
+# The window must hold only this burst: anything still on its way from Kafka would land in it.
+wait_until 300 "bronze to catch up before the burst" bronze_caught_up
 t0=$(date -u +'%Y-%m-%d %H:%M:%S')
-replay_burst 120 REPLAY_DUPLICATE_RATIO=0.1
+echo "window: ingest_ts >= timestamp '$t0' (UTC), REPLAY_DUPLICATE_RATIO=$ratio"
+replay_burst 120 REPLAY_DUPLICATE_RATIO=$ratio
 wait_until 300 "bronze to catch up with Kafka" bronze_caught_up
+echo "bronze caught up at $(date -u +%T)"
 
-trino "select source_table, count(*) as events,
+# The ratio picks orders, so pct_of_status_updates varies around it with the orders in the burst.
+trino "select source_table, count(*) as events, count_if(op = 'u') as updates,
               count_if(op = 'u' and before = after) as no_op_updates,
-              round(100.0 * count_if(op = 'u' and before = after) / count(*), 1) as pct
+              cast(100.0 * count_if(op = 'u' and before = after)
+                   / nullif(count_if(op = 'u' and before <> after), 0) as decimal(5, 1))
+                as pct_of_status_updates,
+              count(distinct key) filter (where op = 'u') as keys_updated,
+              count(distinct key) filter (where op = 'u' and before = after) as keys_repeated
        from bronze.cdc_events where ingest_ts >= timestamp '$t0' group by 1 order by 1"
 lsn_duplicates_since "$t0"
+
+no_ops=$(trino_value "select count_if(op = 'u' and before = after) from bronze.cdc_events
+                      where source_table = 'orders' and ingest_ts >= timestamp '$t0'")
+if ! [ "$no_ops" -gt 0 ]; then
+  echo "FAIL: no no-op UPDATE on orders since $t0 UTC, the burst proved nothing" >&2
+  exit 1
+fi
+repeats=$(trino_value "select count(*) from (select 1 from bronze.cdc_events
+                         where ingest_ts >= timestamp '$t0' and lsn is not null
+                         group by source_table, key, lsn having count(*) > 1)")
+if [ "$repeats" != 0 ]; then
+  echo "FAIL: $repeats changes arrived twice with the same LSN: a delivery repeat (chaos 2b)" \
+    "mixed into the window" >&2
+  exit 1
+fi
+
+echo "silver run at $(date -u +%T)"
 run_silver
-reconcile
-echo "expected: no_op_updates > 0 on orders, no repeated LSN, silver equals Postgres"
+# Positive control: a repeat never changes a row count, so reconcile alone cannot show that silver
+# read it. An order with a repeat ends on one, and silver must hold exactly that LSN and status.
+counts=$(trino_value "
+  with ev as (
+    select json_extract_scalar(key, '\$.order_id') as order_id, lsn,
+           op = 'u' and before = after as no_op,
+           json_extract_scalar(after, '\$.order_status') as status,
+           max(lsn) over (partition by key) as last_lsn
+    from bronze.cdc_events
+    where source_table = 'orders' and ingest_ts >= timestamp '$t0')
+  select count(*), count_if(s._last_lsn = ev.lsn and s.order_status = ev.status)
+  from ev left join silver.orders s on s.order_id = ev.order_id
+  where ev.no_op and ev.lsn = ev.last_lsn")
+read -r repeated held <<<"$counts"
+echo "orders whose last event is a repeat: $repeated, silver holds that repeat: $held"
+if ! [ "$repeated" -gt 0 ] || [ "$held" != "$repeated" ]; then
+  echo "FAIL: silver holds the repeat of $held of $repeated orders that end on one" >&2
+  exit 1
+fi
+reconcile || { echo "FAIL: reconcile, see the lines above" >&2; exit 1; }
+echo "ok: $no_ops no-op UPDATEs on orders, none repeated by LSN; silver holds every repeat and" \
+  "matches Postgres"
 ```
 
 - [ ] **Шаг 2: прогон**
 
 Run: `make chaos-duplicates`
-Expected: у `orders` доля no-op UPDATE около 10% от UPDATE статуса, повторов по LSN нет, `reconcile` ok.
+Expected: напечатаны окно (`window: ingest_ts >= timestamp '...'`) и время догона bronze; у `orders` no-op UPDATE больше 0, их доля от UPDATE статуса около `REPLAY_DUPLICATE_RATIO` с разбросом (ratio выбирает заказы, а не UPDATE; первый прогон дал 15.0%, 16 из 114 заказов; прогон 07.10 (UTC) дал 9.8%, 90 из 926), повторов по LSN 0, silver держит LSN и статус повтора у каждого такого заказа, `reconcile` ok, последняя строка `ok: ...`. Скрипт выходит с кодом 2 (make печатает `Error 2`), если уже работает другой реплеер на `:8000`; FAIL-проверки дают `Error 1`.
 
 - [ ] **Шаг 3: документация**
 
-`OPERATIONS.md`: `## 3. Duplicate events from the source` с цифрами; отдельной фразой, что `bronze_duplicate_ratio` по `(source_table, key, lsn)` меряет только повторы доставки (chaos 2b), а повторы источника видны как `before = after`.
+`OPERATIONS.md`: `### 3. Duplicate events from the source` с цифрами; отдельной фразой, что проверка повторов по `(source_table, key, lsn)` (`lsn_duplicates_since`; `bronze_duplicate_ratio` в `dq_checks` это план W3-T05, метрики ещё нет) видит только повторы доставки (chaos 2b), а повторы источника видны как `before = after`. `00-mini-architecture-review.md` §8, строка 3: метрика по LSN такие повторы не видит и не растёт.
 
 - [ ] **Шаг 4: ревью и коммит**
 
 ```bash
-git add scripts/chaos/duplicates.sh OPERATIONS.md
+git add scripts/chaos/duplicates.sh OPERATIONS.md docs/planning/00-mini-architecture-review.md
 git commit -m "oltp: chaos-duplicates, repeated source updates absorbed by silver"
 ```
 

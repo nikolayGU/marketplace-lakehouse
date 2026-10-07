@@ -202,7 +202,7 @@ why nothing is lost or duplicated (or where it can be). Filled in as scenarios a
 | 1 | Spark bronze killed mid-batch | `chaos-spark-kill` | done 2026-10-07 (re-run) |
 | 2a | Kafka Connect restart | `chaos-connect-restart` | done 2026-10-07 (re-run) |
 | 2b | Kafka Connect killed | `MODE=kill make chaos-connect-restart` | done 2026-10-07 (re-run) |
-| 3 | Duplicate events from source | `chaos-duplicates` | planned (week 2) |
+| 3 | Duplicate events from source | `chaos-duplicates` | done 2026-10-07 UTC |
 | 4 | Late events | `chaos-late` | planned (week 2) |
 | 5 | PostgreSQL restart | `chaos-postgres-restart` | planned (week 4) |
 | 6 | Connector down for 30 minutes (WAL growth) | `chaos-connect-pause` | planned (week 4) |
@@ -228,9 +228,9 @@ Every scenario prints its own verification; the helpers it uses (`bronze_offsets
 `bronze_caught_up`, ...) live in `scripts/chaos/lib.sh`. The file sets `set -euo pipefail` and
 exports `.env`, so run a helper from the repo root in a child shell, not sourced into your own:
 `bash -c '. scripts/chaos/lib.sh && bronze_offsets_report'`. A scenario that plays a replay
-burst on the host exits 2 before it touches anything while another replayer answers on
-`127.0.0.1:8000` (the `oltp-replayer` container or `make replay-start`): the burst could not bind
-the port, and that replayer would keep playing at its own `REPLAY_SPEED`.
+burst on the host stops before it touches anything, its script exiting 2, while another replayer
+answers on `127.0.0.1:8000` (the `oltp-replayer` container or `make replay-start`): the burst
+could not bind the port, and that replayer would keep playing at its own `REPLAY_SPEED`.
 
 ### 1. Spark bronze killed mid-batch
 
@@ -349,6 +349,67 @@ from (select source_table, key, lsn, count(*) as copies from bronze.cdc_events
       where ingest_ts >= timestamp '<kill time, UTC>' - interval '90' second and lsn is not null
       group by 1, 2, 3 having count(*) > 1)
 group by 1;
+```
+
+### 3. Duplicate events from the source
+
+`make chaos-duplicates` stops before it touches anything while another replayer answers on `:8000`
+(the script exits 2, make prints `Error 2`; a failed check prints `Error 1`), waits until bronze has
+caught up with Kafka so that the window holds only this run, prints the window start, and plays
+about one virtual day (120 s at 720x) with `REPLAY_DUPLICATE_RATIO=0.1`. Once bronze has caught up
+again it prints, per table, the UPDATEs, the no-op UPDATEs (`before = after`) with their share of
+status UPDATEs, and the changes that arrived twice with the same LSN. It fails when orders got no
+no-op UPDATE (the burst proved nothing) or when any change arrived twice with the same LSN (a
+delivery repeat mixed in). Then it runs silver and fails unless silver holds, for every order whose
+last event is a repeat, that repeat's LSN and status, and unless live row counts match Postgres.
+
+What happened: the replayer picks `REPLAY_DUPLICATE_RATIO` of the orders (md5 of
+`duplicate:<order_id>`) and runs every status UPDATE of a picked order twice, with the same values,
+in one transaction. Postgres writes a second tuple version, so Debezium emits a second event with a
+new LSN and `before` = `after`: a real change that changes nothing. On 2026-10-07 (UTC) the burst
+moved the virtual clock from 2026-07-08 10:06 to 2026-07-09 10:03 (`make replay-status`), and bronze
+took 2267 CDC events in the window (opened 2026-10-07 20:31:07 UTC).
+What monitoring shows: the replayer counts the repeats (`replayer_events_total{kind="duplicate"}` on
+its `/metrics`, `:8000` while the burst runs); nothing downstream reacts, by design.
+`bronze_duplicate_ratio` by `(source_table, key, lsn)`, a planned `dq_checks` metric (W3-T05),
+measures delivery repeats (chaos 2b) only: a source repeat is a new WAL record with a new LSN, so it
+never counts there and shows instead as `op = 'u'` with `before = after`. Until the metric exists
+the same check is `lsn_duplicates_since` in `scripts/chaos/lib.sh`.
+Data at risk: none in silver. Bronze grows by the repeats (95 of the 2267 events in that run), and a
+consumer that counts bronze events as business changes (status changes per day, say) counts each
+repeat as one more: filter `before = after` out or read silver.
+Recovery: nothing to recover; the next silver run absorbs the repeats. In that run the whole script
+(burst, both catch-ups, silver, checks) took 3 min 11 s.
+Why no loss or duplication: the repeat commits in the same transaction as its original, so a silver
+batch usually holds both: `latest_per_key` keeps the repeat (higher LSN, same values) and MERGE
+writes the row once. Only if a batch boundary splits the pair does MERGE rewrite the row with
+identical values and a newer `_last_lsn` (one more row version in merge-on-read `silver.orders`, no
+data change). Either way silver ends equal to Postgres. In that run orders had 1344 events and 1067
+UPDATEs: 972 status changes and 95 no-op repeats, 9.8% of status UPDATEs, on 90 of the 926 orders
+updated (85 with one repeat, 5 with two, one per status change); order_items (309 events), payments
+(288) and reviews (326) had no UPDATE. 0 changes arrived twice with the same LSN, silver held the
+repeat's LSN and status for all 90 orders whose last event is a repeat, and live row counts of all
+seven silver tables matched Postgres (orders 93 860). The share is close to 10% because 90 picked of
+926 is close to the expected 92.6: the ratio picks orders, not UPDATEs. The first run (burst on
+2026-09-26, silver and `reconcile` ok on 2026-10-05 after the laptop slept) predates the asserts and
+printed 18 no-op of 325 orders events, 5.5% of all orders events, a denominator the script no longer
+uses; on status UPDATEs that is 18 of 120, 15.0%, on 16 of 114 orders: the fewer orders a burst
+updates, the further the share can drift from the ratio.
+Verification SQL (window start from the script's `window:` line; add an upper bound when later runs
+followed, `ingest_ts < timestamp '2026-10-07 20:33:25'` for the numbers above, since bronze caught
+up at 20:33:24):
+
+```
+select source_table, count(*) as events, count_if(op = 'u') as updates,
+       count_if(op = 'u' and before = after) as no_op_updates,
+       cast(100.0 * count_if(op = 'u' and before = after)
+            / nullif(count_if(op = 'u' and before <> after), 0) as decimal(5, 1))
+         as pct_of_status_updates,
+       count(distinct key) filter (where op = 'u') as keys_updated,
+       count(distinct key) filter (where op = 'u' and before = after) as keys_repeated
+from bronze.cdc_events
+where ingest_ts >= timestamp '<window start, UTC>'
+group by 1 order by 1;
 ```
 
 ## Runbooks
