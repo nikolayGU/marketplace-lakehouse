@@ -62,8 +62,14 @@ make kafka-topics    # list topics with partitions
 make kafka-groups    # consumer groups and lag (connect only; Spark lag is in Grafana)
 make connector-status
 make replay-status   # replayer position and virtual clock
-make iceberg-demo    # snapshots, time travel, files before/after compaction
+make iceberg-demo    # snapshots, time travel, rollback, compaction, expiration
 ```
+
+`make iceberg-demo` works on `lake.demo.orders` only: every run drops and rebuilds that sandbox
+from `silver.orders`, which it only reads, so its rollback and `expire_snapshots` never reach
+bronze or silver. It needs `silver.orders` populated (`make silver`) with at least 1 100 live
+rows: it copies 1 000 for the first snapshot, then 20 appends of 5. Before the first
+`make silver` it fails with table not found.
 
 ## Bronze ingest
 

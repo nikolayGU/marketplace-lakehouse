@@ -76,8 +76,8 @@ cdc-snapshot: ## incremental snapshot via signal table: make cdc-snapshot [TABLE
 connector-status: ## debezium connector state
 	curl -s http://127.0.0.1:8083/connectors/shop-connector/status | python3 -m json.tool
 
-iceberg-demo: ## snapshots, time travel, files before/after compaction
-	bash scripts/iceberg/demo.sh
+iceberg-demo: ## snapshots, time travel, rollback, compaction, expiration on lake.demo.orders
+	$(COMPOSE) --profile core run --rm --no-deps spark-silver iceberg_demo
 
 # ---------------------------------------------------------------- chaos (week 2+)
 chaos-%: ## run a failure scenario: make chaos-spark-kill
@@ -95,8 +95,8 @@ lint: ## ruff, mypy, yamllint, sqlfluff, compose config
 test: ## unit tests (Spark ones skip on a host without Java)
 	uv run pytest tests/unit -q
 
-SPARK_TESTS := test_bronze_cdc_ingest.py test_contracts.py test_envelope.py test_iceberg_sink.py \
-  test_silver_upsert.py
+SPARK_TESTS := test_bronze_cdc_ingest.py test_contracts.py test_envelope.py test_iceberg_demo.py \
+  test_iceberg_sink.py test_silver_upsert.py
 
 test-spark: ## the Spark unit tests, inside lakehouse/spark:dev because the host has no JVM
 	docker run --rm --user root --entrypoint bash -v "$(CURDIR)":/repo:ro \

@@ -1717,11 +1717,13 @@ Expected: PASS.
 
 ```bash
 docker compose --env-file .env -f docker/compose.yaml --profile core build spark-bronze
-make iceberg-demo 2>/dev/null
+make iceberg-demo
 make trino   # select count(*) from demo.orders; select * from demo."orders$snapshots";
 ```
 
-Expected: все секции напечатаны, файлов после compaction 1, снапшот 1, последняя секция показывает ошибку time travel.
+Перенаправлять stderr не нужно: job сам понижает логирование Spark до WARN (`setLogLevel` в `main()`). Из терминала `docker compose run` выделяет TTY и сливает stderr контейнера в stdout, так что `2>/dev/null` всё равно не помогло бы. До создания сессии остаются около 38 строк INFO при старте: почти все убирает `spark.log.level=WARN` при сборке сессии (остаются 3 строки SparkContext) или `log4j2.properties` в `SPARK_CONF_DIR` образа (вне этой задачи).
+
+Expected: все секции напечатаны, после первого rollback снова все строки, файлов после compaction 1, после expire снапшот 1, последняя секция показывает ошибку time travel.
 
 - [ ] **Шаг 7: ревью и коммит**
 

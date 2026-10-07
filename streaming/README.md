@@ -14,6 +14,13 @@ Spark image and jobs.
 - `spark_jobs/silver_upsert.py`: Iceberg streaming read from bronze, `Trigger.AvailableNow`,
   `foreachBatch` -> parse with `contracts/silver` -> newest event per key -> `MERGE INTO
   lake.silver.<table>`. `make silver` runs it; Airflow schedules it from week 3.
+- `spark_jobs/iceberg_demo.py`: `make iceberg-demo`, run in a one-off `spark-silver` container
+  from the `lakehouse/spark:dev` image, which `spark-bronze` builds. Rebuilds the sandbox
+  `lake.demo.orders` from `silver.orders` (read only) and walks through snapshots, time travel,
+  rollback and its undo, compaction and `expire_snapshots`, then prints the same queries for
+  Trino. Bronze and silver are never touched. The code is baked into the image, so after a change
+  rebuild it: `docker compose --env-file .env -f docker/compose.yaml --profile core build
+  spark-bronze`.
 - `spark_jobs/contracts.py`: loads `contracts/silver/*.json` (baked into the image at
   `/opt/app/contracts/silver` through the named build context `contracts`).
 - `spark_jobs/orders_per_minute.py` (mandatory, week 5): 1-minute window, 5-minute watermark,

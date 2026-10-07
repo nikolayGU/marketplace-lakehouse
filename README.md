@@ -81,7 +81,7 @@ dbt/            dbt project (staging, intermediate, marts, seeds, tests)
 airflow/        DAGs and Airflow image
 observability/  prometheus config, alert rules, grafana provisioning
 docker/         compose.yaml and per-service configs
-scripts/        chaos scenarios, iceberg demos, helpers
+scripts/        chaos scenarios, helpers
 tests/          unit tests (parsers, dedup logic, replayer), compose/config tests
 docs/           planning (ru), interview notes, images
 ```
