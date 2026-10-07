@@ -1471,58 +1471,119 @@ git commit -m "oltp: chaos-duplicates, repeated source updates absorbed by silve
 
 **Файлы:**
 - Создать: `scripts/chaos/late.sh`
-- Изменить: `oltp/replayer/settings.py` (комментарий), `OPERATIONS.md`
+- Изменить: `oltp/replayer/settings.py` (комментарий), `OPERATIONS.md`, `docs/planning/00-mini-architecture-review.md` (§8, строка 4)
 
 - [ ] **Шаг 1: `scripts/chaos/late.sh`**
 
 ```bash
 #!/usr/bin/env bash
 # Chaos 4: an older change of an order arrives after a newer one, the way Debezium re-sends after
-# a restart. The script re-publishes an earlier envelope of an order silver already moved past
-# and checks that silver keeps the newer state (the _last_lsn guard, ADR-021).
+# a kill (chaos 2b; a graceful restart re-sends nothing). The script re-publishes an earlier
+# envelope of an order silver has already moved past and checks that silver keeps the newer state
+# (the _last_lsn guard, ADR-021).
 . "$(dirname "$0")/lib.sh"
 
+no_other_replayer
+# A stack that cannot carry the burst fails here, before it costs a virtual day.
+if ! connector_running; then
+  echo "shop-connector or its task is not RUNNING; see docs/runbooks/connector-failed.md" >&2
+  exit 1
+fi
+if ! healthy lakehouse-spark-bronze-1; then
+  echo "lakehouse-spark-bronze-1 is not healthy; see docs/runbooks/spark-stalled.md" >&2
+  exit 1
+fi
+
 t0=$(date -u +'%Y-%m-%d %H:%M:%S')
+echo "window: ingest_ts >= timestamp '$t0' (UTC)"
 replay_burst 120
 wait_until 300 "bronze to catch up with Kafka" bronze_caught_up
+echo "bronze caught up at $(date -u +%T)"
 run_silver
 
-read -r order_id partition offset stale_lsn < <(trino_value "
+# The oldest change, insert or update, of an order with a newer one. Comparing LSNs, not counting
+# rows, keeps two copies of one change (a Connect re-send) from passing for two changes.
+pick=$(trino_value "
   with ev as (
-    select json_extract_scalar(after, '\$.order_id') as order_id, kafka_partition, kafka_offset, lsn,
-           row_number() over (partition by json_extract_scalar(after, '\$.order_id') order by lsn) as n,
-           count(*) over (partition by json_extract_scalar(after, '\$.order_id')) as changes
+    select json_extract_scalar(after, '\$.order_id') as order_id,
+           kafka_partition, kafka_offset, lsn
     from bronze.cdc_events
-    where source_table = 'orders' and op = 'u' and ingest_ts >= timestamp '$t0')
-  select order_id, kafka_partition, kafka_offset, lsn from ev where changes >= 2 and n = 1 limit 1")
-[ -n "${order_id:-}" ] || { echo "no order changed twice in this burst; run again" >&2; exit 1; }
+    where source_table = 'orders' and op in ('c', 'u') and ingest_ts >= timestamp '$t0'),
+  ranked as (
+    select *, row_number() over (partition by order_id order by lsn) as n,
+              max(lsn) over (partition by order_id) as newest
+    from ev)
+  select order_id, kafka_partition, kafka_offset, lsn, newest from ranked
+  where n = 1 and lsn < newest limit 1")
+read -r order_id partition offset stale_lsn newest <<<"$pick"
+if [ -z "$order_id" ]; then
+  echo "inconclusive: no order changed twice in this burst; run again" >&2
+  exit 1
+fi
 state="select order_status, _last_lsn from silver.orders where order_id = '$order_id'"
 before=$(trino_value "$state")
-echo "order $order_id: silver has [$before]; re-sending its change at lsn $stale_lsn"
+# Silver must be past the stale LSN. At an equal LSN the row reads the same afterwards and proves
+# nothing; with no row, a null or a lower LSN, MERGE takes the re-sent change and the run fails
+# for the wrong reason.
+silver_lsn=$(cut -s -f2 <<<"$before")
+if ! [[ $silver_lsn =~ ^[0-9]+$ ]] || ((silver_lsn <= stale_lsn)); then
+  echo "FAIL: silver has [$before] for order $order_id, not past lsn $stale_lsn (newest in" \
+    "bronze $newest): the first silver run did not apply the newer change" >&2
+  exit 1
+fi
+echo "order $order_id: silver has [$before]; re-sending its change at lsn $stale_lsn" \
+  "(partition $partition, offset $offset; newest in bronze $newest)"
 
 record=$(kafka kafka-console-consumer.sh --topic oltp.shop.orders --partition "$partition" \
   --offset "$offset" --max-messages 1 --timeout-ms 20000 \
-  --property print.key=true --property key.separator=$'\t')
-printf '%s\n' "$record" | kafka kafka-console-producer.sh --topic oltp.shop.orders \
-  --property parse.key=true --property key.separator=$'\t'
-
-resent() {
-  [ "$(trino_value "select count(*) from bronze.cdc_events
-                    where lsn = $stale_lsn and source_table = 'orders'")" -ge 2 ]
+  --formatter-property print.key=true --formatter-property key.separator=$'\t')
+[ -n "$record" ] || { echo "could not read offset $offset of partition $partition" >&2; exit 1; }
+stale_copies() {
+  trino_value "select count(*) from bronze.cdc_events
+               where lsn = $stale_lsn and source_table = 'orders'"
 }
-wait_until 120 "bronze to hold the stale event twice" resent
-run_silver
+# Bronze is caught up and the burst is over: only the re-sent record can move this count.
+copies=$(stale_copies)
+# --sync: a failed send exits non-zero instead of being logged and forgotten.
+printf '%s\n' "$record" | kafka kafka-console-producer.sh --sync --topic oltp.shop.orders \
+  --reader-property parse.key=true --reader-property key.separator=$'\t'
+echo "re-sent at $(date -u +%T)"
+resent() { [ "$(stale_copies)" -gt "$copies" ]; }
+wait_until 120 "bronze to take in the re-sent record" resent
+
+# Positive control: a silver run that never read the re-sent record would leave the row as it was
+# too, so this run must report orders events merged. Kept in a file on failure, like run_silver.
+log=$(mktemp -t silver_upsert.XXXXXX.log)
+if ! make -C "$ROOT" --no-print-directory silver >"$log" 2>&1; then
+  tail -40 "$log" >&2
+  echo "silver_upsert failed, full log: $log" >&2
+  exit 1
+fi
+merged=$(grep -E 'batch [0-9]+: [0-9]+ events merged into lake\.silver\.orders in' "$log") || true
+if [ -z "$merged" ]; then
+  echo "FAIL: the second silver run merged no orders event, the guard was never exercised;" \
+    "full log: $log" >&2
+  exit 1
+fi
+rm -f "$log"
+printf '%s\n' "$merged"
+
 after=$(trino_value "$state")
-trino "select kafka_partition, kafka_offset, lsn, json_extract_scalar(after, '\$.order_status') as status, ingest_ts
+trino "select kafka_partition, kafka_offset, lsn,
+              json_extract_scalar(after, '\$.order_status') as status, ingest_ts
        from bronze.cdc_events where lsn = $stale_lsn and source_table = 'orders'"
 echo "silver before [$before], after [$after]"
-[ "$before" = "$after" ] && echo "ok: the late event did not roll the order back" || { echo "FAIL" >&2; exit 1; }
+if [ "$before" != "$after" ]; then
+  echo "FAIL: the late event changed the order" >&2
+  exit 1
+fi
+echo "ok: the late event did not roll the order back"
 ```
 
 - [ ] **Шаг 2: прогон**
 
 Run: `make chaos-late`
-Expected: две строки в bronze с одним LSN (исходная и повтор, в той же партиции), состояние silver до и после совпадает, `ok`. Если `kafka-console-consumer` в Kafka 4.3 не принимает `--property`, заменить на `--formatter-property` и повторить.
+Expected: напечатаны окно (`window: ingest_ts >= timestamp '...'`) и время догона bronze; строка `re-sending` с заказом, старым LSN и `_last_lsn` silver больше него; две строки в bronze с одним LSN (исходная и повтор), второй прогон silver печатает строку `events merged into lake.silver.orders`, состояние silver до и после совпадает, последняя строка `ok: ...`. Прогон 07.10 (UTC) прошёл с первого раза, exit 0 за 3 мин 12.6 с: insert заказа (`created`, LSN 1401450968, партиция 1, offset 74825) повторён на offset 74855, silver до и после `approved` с `_last_lsn` 1401679552, `batch 15: 1 events merged into lake.silver.orders`; число в этой строке это события orders, которые батч silver прочитал из bronze (до quarantine и до одной строки на ключ), а не изменённые строки: snapshot второго прогона без изменённых партиций и без `added-records`. Скрипт выходит с кодом 2, если уже работает другой реплеер на `:8000`, и с кодом 1 до порции, если коннектор или его task не RUNNING или `spark-bronze` не healthy; сам `make` при любой ошибке возвращает 2 и показывает код скрипта как `Error 2` или `Error 1`. В Kafka 4.3.1 `--property` у консольных утилит помечен DEPRECATED, поэтому `--formatter-property` и `--reader-property` (проверено по `--help`).
 
 - [ ] **Шаг 3: комментарий в `oltp/replayer/settings.py`**
 
@@ -1532,14 +1593,16 @@ Expected: две строки в bronze с одним LSN (исходная и �
     # Kafka in order with a higher LSN; out-of-order arrival is chaos 4 (scripts/chaos/late.sh).
 ```
 
+В том же файле исправлен комментарий `replay_duplicate_ratio` (находка проверки Задачи 6): ratio выбирает доли заказов по md5 `duplicate:<order_id>`, а не отдельные UPDATE.
+
 - [ ] **Шаг 4: документация**
 
-`OPERATIONS.md`: `## 4. Late events` с цифрами и объяснением двух смыслов «late» (приход не по порядку для silver и event time для W5-T01). Таблица сценариев: 1-4 `done`.
+`OPERATIONS.md`: `### 4. Late events` с цифрами прогона и объяснением двух смыслов «late» (приход не по порядку для silver и event time для W5-T01). Таблица сценариев: строка 4 `done <дата прогона>`. `00-mini-architecture-review.md` §8, строка 4: команда `make chaos-late`, guard по `_last_lsn`, ручка `REPLAY_LATE_RATIO` про event time; после прогона добавить «Проверено <дата>: ...».
 
 - [ ] **Шаг 5: ревью и коммит**
 
 ```bash
-git add scripts/chaos/late.sh oltp/replayer/settings.py OPERATIONS.md
+git add scripts/chaos/late.sh oltp/replayer/settings.py OPERATIONS.md docs/planning/00-mini-architecture-review.md
 git commit -m "lake: chaos-late, a stale change re-sent through kafka does not roll silver back"
 ```
 

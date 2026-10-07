@@ -26,10 +26,13 @@ class Settings(BaseSettings):
     replay_speed: float = 2880.0
     # Share of the history bulk-loaded before the clock starts; the rest is replayed.
     replay_initial_share: float = 0.8
-    # Share of delivery updates held back by replay_late_delay_seconds of real time.
+    # Share of delivery updates pushed back by replay_late_delay_seconds of VIRTUAL time: late in
+    # event time for the windowed job (W5-T01). The update still commits later, so it reaches
+    # Kafka in order with a higher LSN; out-of-order arrival is chaos 4 (scripts/chaos/late.sh).
     replay_late_ratio: float = 0.0
     replay_late_delay_seconds: int = 300
-    # Share of updates emitted twice, byte for byte, to exercise dedup downstream.
+    # Share of orders (md5 of duplicate:<order_id>) whose status updates all run twice with the
+    # same values, to exercise dedup downstream.
     replay_duplicate_ratio: float = 0.0
     # Virtual time at which evolution/003 is applied; empty means never.
     replay_schema_evolution_at: datetime | None = None

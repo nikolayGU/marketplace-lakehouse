@@ -203,7 +203,7 @@ why nothing is lost or duplicated (or where it can be). Filled in as scenarios a
 | 2a | Kafka Connect restart | `chaos-connect-restart` | done 2026-10-07 (re-run) |
 | 2b | Kafka Connect killed | `MODE=kill make chaos-connect-restart` | done 2026-10-07 (re-run) |
 | 3 | Duplicate events from source | `chaos-duplicates` | done 2026-10-07 UTC |
-| 4 | Late events | `chaos-late` | planned (week 2) |
+| 4 | Late events | `chaos-late` | done 2026-10-07 UTC |
 | 5 | PostgreSQL restart | `chaos-postgres-restart` | planned (week 4) |
 | 6 | Connector down for 30 minutes (WAL growth) | `chaos-connect-pause` | planned (week 4) |
 | 7 | Corrupted event in topic | `chaos-poison-event` | data half done (W2-T04), alert in week 4 |
@@ -410,6 +410,79 @@ select source_table, count(*) as events, count_if(op = 'u') as updates,
 from bronze.cdc_events
 where ingest_ts >= timestamp '<window start, UTC>'
 group by 1 order by 1;
+```
+
+### 4. Late events
+
+`make chaos-late` stops before it touches anything while another replayer answers on `:8000` (the
+script exits 2), and before the burst when `shop-connector` or its task is not RUNNING or
+`spark-bronze` is not healthy, naming the runbook (the script exits 1); `make` itself exits 2 on any
+failure and shows the script's status as `Error 2` or `Error 1`. It prints the window start, plays
+about one virtual day (120 s at 720x), waits until bronze has caught up and runs silver. It then
+picks an order whose oldest change in the window (insert or update) has a newer one by LSN, and
+fails unless silver already holds a higher `_last_lsn` for that order: at an equal one the row would
+read the same afterwards and prove nothing, and with no row, a null or a lower one, MERGE would take
+the re-sent change and the script would fail for the wrong reason. It reads that change back from
+Kafka by partition and offset, produces it again with the same key, waits until bronze holds one
+more copy of that LSN and runs silver again. It fails unless that run merged orders events (a run
+that never read the record would also leave the row as it was) and unless silver's `order_status`
+and `_last_lsn` for the order match before and after.
+
+What happened: an older change of an order reached bronze after silver had applied a newer one.
+Debezium does this after a kill (2b): everything sent since the last offset flush comes again with
+the same LSN, behind newer changes that silver may already hold; a graceful restart (2a) re-sends
+nothing. The script produces the record by hand, so the run does not depend on where a kill lands.
+On 2026-10-07 (UTC) the burst moved the virtual clock from 2026-07-09 10:03 to 2026-07-10 10:00
+(`make replay-status`), and bronze took 1180 events in the window (opened 2026-10-07 20:56:27 UTC),
+the re-sent record included. Of the 350 orders the burst changed, 180 had more than one change, so
+the pick is rarely short of candidates. It picked order `008819c6d5f6da6fa5cd9d50ca927cf4`: its
+insert (`op = 'c'`, `created`, LSN 1401450968) and its update to `approved` (LSN 1401679552) came in
+one bronze batch, and the first silver run left the row at `approved` with `_last_lsn` 1401679552.
+The script re-sent the insert at 20:59:17 UTC.
+What monitoring shows: nothing reacts, by design. Bronze takes one more record, and the second
+silver run logs an orders merge (`batch N: <k> events merged into lake.silver.orders`) while the row
+stays. The repeat check by `(source_table, key, lsn)` (`lsn_duplicates_since`, later the duplicate
+ratio in `dq_checks`, W3-T05) counts the re-sent record as one delivery repeat, as in 2b. In that
+run bronze took the record in at 20:59:20 UTC, and the second silver run logged
+`batch 15: 1 events merged into lake.silver.orders in 2.4 s`. The count is the orders events the
+silver batch read from bronze (before quarantine and before keeping one row per key), not rows MERGE
+changed: the snapshot that run committed has `changed-partition-count` 0, no `added-records` and the
+same `total-records` (98812) as the first run's. `lsn_duplicates_since` over the window reported
+orders with 1 key repeated and 1 extra event.
+Data at risk: none in silver. Bronze keeps the re-sent record for good, at a new offset with the
+old LSN: a consumer that reads bronze in offset or ingest order rather than by LSN sees the order
+go back to its older status.
+Recovery: nothing to recover; the MERGE guard drops the event. In that run the whole script (burst,
+catch-up, both silver runs, checks) took 3 min 12.6 s.
+Why no loss or duplication: silver keeps one row per key, and MERGE updates a matched row only when
+`t._last_lsn is null or s._last_lsn > t._last_lsn` (ADR-021; a null marks a row from an incremental
+snapshot read). The re-sent change has a lower LSN than the row, so the row and its `_last_lsn`
+stay; an equal LSN (a plain repeat, 2b) is skipped the same way. In that run bronze held LSN
+1401450968 twice in partition 1, both `created` with the same key and `after`: offset 74825,
+ingested at 20:57:40 UTC, and the re-sent copy at offset 74855, at 20:59:20 UTC. Silver read
+`approved` with `_last_lsn` 1401679552 before and after, and the row's `_updated_at`, 20:59:03 UTC,
+is from the first silver run, before the re-send.
+
+Two meanings of "late". This scenario is late arrival: a change reaches the lake out of LSN order,
+which here only a delivery repeat produces, and silver guards against it. `REPLAY_LATE_RATIO` with
+`REPLAY_LATE_DELAY_SECONDS` is the other meaning: for that share of orders (md5 of
+`late:<order_id>`) the replayer pushes the `delivered` update back by the delay in virtual time. The
+change is late in event time for the windowed job (W5-T01, watermark), but it commits later, reaches
+Kafka in order with a higher LSN, and gives silver nothing to guard against.
+Verification SQL (order and stale LSN from the script's `re-sending` line):
+
+```
+select kafka_partition, kafka_offset, lsn,
+       json_extract_scalar(after, '$.order_status') as status, ingest_ts
+from bronze.cdc_events where lsn = <stale lsn> and source_table = 'orders';
+
+select order_status, _last_lsn, _updated_at from silver.orders where order_id = '<order id>';
+
+-- right after the script: the second silver run's snapshot changes no partition, adds no record
+select committed_at, summary['changed-partition-count'] as changed_partitions,
+       element_at(summary, 'added-records') as added_records,
+       summary['total-records'] as total_records
+from silver."orders$snapshots" order by committed_at desc limit 2;
 ```
 
 ## Runbooks
