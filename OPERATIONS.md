@@ -191,6 +191,86 @@ the container (`docker compose ... restart trino`); `up -d` does not notice file
 Trino only reads what Spark committed: a bronze micro-batch shows up after its Iceberg commit,
 not when Kafka receives the event.
 
+## Lakekeeper (REST catalog)
+
+Lakekeeper v0.13.6 runs side by side with the JDBC catalog until the cutover (ADR-005): Spark
+(`CATALOG_TYPE=jdbc`) and Trino `lake` still use `iceberg_catalog`, and nothing reads Lakekeeper
+yet. Its services are in profile `rest`, which compose accepts only together with `core`:
+`lakekeeper-migrate` (one-shot schema migration of the `lakekeeper` database in `postgres-meta`,
+128 MiB), `lakekeeper` (the API on `127.0.0.1:8181`, 256 MiB limit, under 100 MiB used) and
+`lakekeeper-bootstrap` (one-shot, 128 MiB). The API has no authentication (allow-all), which is why
+the port stays on 127.0.0.1.
+
+```
+make lakekeeper-bootstrap   # starts lakekeeper (migration first) if needed, creates warehouse lake
+curl -s '127.0.0.1:8181/catalog/v1/config?warehouse=lake'   # defaults.prefix is the warehouse id
+docker stop lakehouse-lakekeeper-1                          # JDBC does not need it
+```
+
+`make lakekeeper-bootstrap` is safe to re-run: the second time it prints `warehouse lake exists`
+and changes nothing, since it never updates an existing warehouse. It runs in
+`lakehouse/spark:dev` with `pull_policy: never`, so build that image first (`make up` does);
+otherwise compose stops with `No such image`.
+
+Encryption key. `LAKEKEEPER_ENCRYPTION_KEY` encrypts the warehouse's S3 keys inside the
+`lakekeeper` database. `make secrets` generates it only for a new `.env`; it never touches an
+existing one, and without the key every compose command fails, `make lint` and `make up`
+included, whatever the profile (`required variable LAKEKEEPER_ENCRYPTION_KEY is missing a
+value`). Add it to an existing `.env` once, from the repo root; the command prints nothing:
+
+```
+grep -q '^LAKEKEEPER_ENCRYPTION_KEY=' .env || printf 'LAKEKEEPER_ENCRYPTION_KEY=%s\n' "$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')" >> .env
+```
+
+Never change the key once the warehouse exists: Lakekeeper could no longer decrypt its S3 keys and
+would lose access to MinIO. Sending the credential again
+(`POST /management/v1/warehouse/{id}/storage-credential`) should repair that; it is untested.
+
+Registration. `scripts/lakekeeper/register.sh` registers every bronze and silver table of the JDBC
+catalog in Lakekeeper at its current metadata file, then reads JDBC again and loads each table
+back from Lakekeeper. It prints one `same <table> <metadata file>` line per table and `all N
+tables point at the same metadata file in both catalogs`, or `MISMATCH` lines and exits 1. Stop
+the writers first: a commit on either side while it runs forks the two catalogs. The script
+refuses while `spark-bronze` or any `spark-silver` container runs, and while `CATALOG_TYPE` in
+`.env` or in the shell is anything but `jdbc`.
+
+```
+make lakekeeper-bootstrap              # starts lakekeeper if stopped, waits until healthy
+docker stop lakehouse-spark-bronze-1   # and no make silver running
+bash scripts/lakekeeper/register.sh
+docker start lakehouse-spark-bronze-1  # its log says Resuming at batch N
+```
+
+Keep the stop short: Kafka keeps what bronze has not read for 24 h only. Re-running is safe,
+`overwrite` replaces Lakekeeper's pointer and never a file. The pointers go stale with bronze's
+next commit, which is harmless while nothing reads them; the cutover registers again. `lake.demo`
+is not registered: `make iceberg-demo` starts with `drop ... purge`, which on Lakekeeper would
+delete the files of the JDBC sandbox. Never undo a registration with any kind of drop. To back
+out, stop `lakekeeper`: its rows are inert while nothing reads them.
+
+What deletes files. Lakekeeper reads a REST `DELETE` without `purgeRequested` as a purge (the
+Iceberg REST spec defaults it to `false`), and warehouse `lake` soft-deletes for 7 days: the table
+disappears from the catalog at once, Lakekeeper deletes its whole location 7 days later, and until
+then `POST /management/v1/warehouse/{id}/deleted-tabulars/undrop` brings it back. The location of a
+registered table is the JDBC table's directory, so the right column hits the JDBC table's data
+too.
+
+| Action | JDBC catalog | Lakekeeper (soft delete, 7 days) |
+|---|---|---|
+| Spark `DROP TABLE` | removes the catalog row; files stay | `DELETE` without `purgeRequested`: location deleted after 7 days |
+| Spark `DROP TABLE ... PURGE` | Spark deletes every file the table references, at once | the same drop, then Spark deletes the files itself, at once; undrop brings back no data |
+| Trino `DROP TABLE` (dbt drops through it) | Trino deletes the table's files and its directory, at once | `DELETE ?purgeRequested=true`: location deleted after 7 days |
+| Trino `CALL system.unregister_table` | removes the catalog row; files stay | `DELETE` without `purgeRequested`: location deleted after 7 days |
+| REST `DELETE .../tables/<t>` | no REST API | location deleted after 7 days |
+| REST `DELETE .../tables/<t>?purgeRequested=false` | no REST API | files stay; the table is hidden at once and leaves the catalog after 7 days |
+
+`force=true` on a REST `DELETE` skips both the 7 days and table protection: the table leaves the
+catalog at once and, unless `purgeRequested=false`, its whole location is deleted at once too.
+Protection, which makes Lakekeeper refuse the drop with 409 before Spark deletes anything, goes on
+bronze and silver with the cutover; until then nothing in Lakekeeper itself stops a drop. Today
+Spark writes through JDBC and Trino has no Lakekeeper catalog, so the right column is reached only
+by a REST call or by a Spark job started with `CATALOG_TYPE=rest`.
+
 ## Failure scenarios
 
 Each scenario is a `make chaos-<name>` target plus a written answer to five questions:

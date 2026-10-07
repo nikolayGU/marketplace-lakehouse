@@ -79,6 +79,9 @@ connector-status: ## debezium connector state
 iceberg-demo: ## snapshots, time travel, rollback, compaction, expiration on lake.demo.orders
 	$(COMPOSE) --profile core run --rm --no-deps spark-silver iceberg_demo
 
+lakekeeper-bootstrap: ## bootstrap Lakekeeper and create its warehouse (safe to re-run)
+	$(COMPOSE) --profile core --profile rest run --rm lakekeeper-bootstrap
+
 # ---------------------------------------------------------------- chaos (week 2+)
 chaos-%: ## run a failure scenario: make chaos-spark-kill
 	bash scripts/chaos/$*.sh
@@ -107,4 +110,4 @@ test-spark: ## the Spark unit tests, inside lakehouse/spark:dev because the host
 dbt-parse: ## dbt parse without a warehouse
 	cd dbt && uv run dbt parse --profiles-dir . --target ci
 
-.PHONY: help secrets hooks data migrate replay-load replay-start replay-reset up down status logs nuke replay replay-status silver psql trino kafka-topics kafka-groups cdc-snapshot connector-status iceberg-demo lint test test-spark dbt-parse
+.PHONY: help secrets hooks data migrate replay-load replay-start replay-reset up down status logs nuke replay replay-status silver psql trino kafka-topics kafka-groups cdc-snapshot connector-status iceberg-demo lakekeeper-bootstrap lint test test-spark dbt-parse
