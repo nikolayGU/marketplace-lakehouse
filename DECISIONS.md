@@ -9,7 +9,7 @@ superseded. Longer reasoning lives in `docs/planning/00-mini-architecture-review
 | ADR-002 | Two PostgreSQL instances: `postgres-oltp` (CDC source) and `postgres-meta` | accepted |
 | ADR-003 | Kafka 4 KRaft, single broker, RF=1, 3 partitions per topic, retention 24h | accepted |
 | ADR-004 | Object storage: MinIO, last community release pulled from quay.io (Docker Hub repo removed) | accepted |
-| ADR-005 | JDBC catalog in `postgres-meta` first; REST catalog (Lakekeeper) as should-have after the vertical slice | accepted; Lakekeeper side by side verified 2026-10-08, cutover next |
+| ADR-005 | JDBC catalog in `postgres-meta` first; REST catalog (Lakekeeper) as should-have after the vertical slice | accepted; Spark and Trino switched to Lakekeeper, cutover done 2026-10-08 |
 | ADR-006 | Spark 3.5 + Iceberg 1.11 runtime in `local[2]`, no standalone cluster | accepted |
 | ADR-007 | Bronze append-only streaming (at-least-once contract, idempotent epoch commit verified 2026-09-26 and 2026-10-07); silver via AvailableNow + foreachBatch MERGE is the no-duplicates guarantee | accepted |
 | ADR-008 | Bronze keeps payload as JSON string; typed schema applied in silver from contracts | accepted |
@@ -179,6 +179,76 @@ is protected yet; Lakekeeper also holds the REST-only sandbox `demo.orders`. Lak
 without authentication (`allow-all`, it logs a warning), so its port is bound to 127.0.0.1 only.
 The cutover is the next step: it runs after the owner approves its runbook, and its own commit
 records it here.
+
+### Cutover, 2026-10-08
+
+Spark and Trino read and write through Lakekeeper; nothing reads or writes the JDBC catalog any
+more. The cutover followed `docs/runbooks/catalog-cutover.md` on the live stack. Profile `rest`
+is gone: `lakekeeper-migrate`, `lakekeeper` and `lakekeeper-bootstrap` are in `core`, and
+`spark-bronze`, `spark-silver` and `trino` wait for `lakekeeper-bootstrap`. `CATALOG_TYPE` is
+`rest` in `.env.example` and as the code default, and an empty value is refused. Trino's
+`lake.properties` is on REST with vended credentials off; the JDBC version is the one in
+`5cf0fec`.
+
+Verified on the live stack:
+- Bronze stopped with batch 119 committed, then `register.sh` printed `same` for all 9 tables and
+  exited 0. Those lines are the rollback point in readable form.
+- The switch recreated only `spark-bronze`, and the one-shots `minio-init`, `lakekeeper-migrate`
+  and `lakekeeper-bootstrap` exited 0. Trino needed an explicit restart: compose does not see a
+  change in a bind-mounted file.
+- Before any write through Lakekeeper: bronze turned healthy and logged `Resuming at batch 120`
+  and no error, Trino's log showed catalog `lake` on REST, and row count and current `main`
+  snapshot of all 9 tables read through Lakekeeper equalled those read through JDBC at the stop.
+  `make silver` ran and Lakekeeper's pointers did not move.
+- The first commits through Lakekeeper came from one virtual day of replay (`replay_burst 120` at
+  speed 720). The pointer of `bronze.cdc_events` moved from `00121-d40d030c-...metadata.json` to
+  `00128-01a119cb-...gz.metadata.json`: Lakekeeper commits into an `s3a://` table and writes the
+  metadata file itself, gzip-compressed. The JDBC pointers stayed where they were. `make silver`
+  merged batch 16, 1275 input rows, through Lakekeeper. `bronze_offsets_report` found 0 duplicates
+  and 0 missing in all 21 partitions, and `reconcile` was ok on all 7 tables (orders 94 406,
+  order_items 106 994, payments 98 716, reviews 91 600, customers 99 441, products 32 951,
+  sellers 3 095).
+- `protect.sh` protected all 9 tables; a second run printed `already protected` for each.
+- Lakekeeper used 90.95 MiB of its 256 MiB limit, and the `lakekeeper` database is 12 MB.
+
+What changes with Lakekeeper as the live catalog:
+- Drops. Lakekeeper's reading of a `DELETE` without `purgeRequested` as a purge, against the REST
+  spec's default `false` (d), now applies to every engine: any `DROP TABLE` from Spark, Trino or
+  dbt deletes files. Soft delete keeps them 7 days, except after Spark `DROP ... PURGE`, and
+  protection makes Lakekeeper refuse the drop with 409 on the 9 bronze and silver tables; `demo`
+  and the coming `gold` stay unprotected. The blast-radius list in `CLAUDE.md` now names these
+  drops, `unregister_table`, a REST `DELETE`, removing protection, `force=true`, a new delete
+  profile, and deleting a warehouse or a namespace recursively.
+- Two schemes for good (a): the 9 registered tables on `s3a://`, every table Lakekeeper creates on
+  `s3://`. Bronze and silver commits now exercise the first, the side by side sandbox proved the
+  second.
+- File IO. Clients keep their own S3 keys: Spark through HadoopFileIO and S3A, Trino through its
+  native S3 file system with vended credentials off. Vended credentials are the next step and need
+  S3FileIO, because HadoopFileIO in Iceberg 1.11 does not implement `SupportsStorageCredentials`
+  and ignores any credential the catalog hands out. S3FileIO needs AWS SDK v2 in the Spark image,
+  and from then on `push-s3-delete-disabled: false` (b) is what keeps `expire_snapshots` and
+  `remove_orphan_files` working. A task of its own.
+- The key from (c), which never rotates, now sits on every commit, not only on Lakekeeper's own
+  deletes: Lakekeeper writes each new metadata file with the S3 credential it keeps encrypted
+  under `LAKEKEEPER_ENCRYPTION_KEY`, and it has no other S3 keys.
+- No authentication. Lakekeeper still runs `allow-all`, now as the catalog of every table. The
+  port stays on 127.0.0.1 and protection covers the tables that cannot be rebuilt: enough for a
+  one-user laptop, not for anything shared.
+- Idempotent commits. Idempotency keys are on by default in Lakekeeper and kept 30 minutes.
+  #1952, one of the two fixes that moved the pin from 0.13.1 to 0.13.6, advertises
+  `idempotency-key-lifetime` at the top level of `/v1/config`, the only place the Iceberg 1.11
+  client looks. With it the client sends an `Idempotency-Key` on every commit, so a commit retried
+  after a timeout gets the first attempt's answer instead of conflicting with its own change.
+  Whether the live config response carries the field was not checked.
+- The digest pin (f) holds, and with Lakekeeper in `core` an image change touches the critical
+  path: 0.14 waits for its own task and a backup of the `lakekeeper` database.
+
+Rollback: the free one ended with bronze's first commit through Lakekeeper. The JDBC rows in
+`iceberg_catalog` keep the pre-cutover pointers as the rollback point until the end of week 3;
+going back is DML on `iceberg_tables`, which only the owner runs (runbook, "Rollback"). Outside
+that procedure no Spark job runs with `CATALOG_TYPE=jdbc` and Trino does not get the JDBC
+`lake.properties` back: the two histories would fork, and maintenance on one side would delete
+files the other still reads. `register.sh` refuses now that `CATALOG_TYPE` is `rest`.
 
 ## ADR-007 Bronze streaming append, silver batch MERGE
 

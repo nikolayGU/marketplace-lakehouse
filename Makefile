@@ -80,7 +80,7 @@ iceberg-demo: ## snapshots, time travel, rollback, compaction, expiration on lak
 	$(COMPOSE) --profile core run --rm --no-deps spark-silver iceberg_demo
 
 lakekeeper-bootstrap: ## bootstrap Lakekeeper and create its warehouse (safe to re-run)
-	$(COMPOSE) --profile core --profile rest run --rm lakekeeper-bootstrap
+	$(COMPOSE) --profile core run --rm lakekeeper-bootstrap
 
 # ---------------------------------------------------------------- chaos (week 2+)
 chaos-%: ## run a failure scenario: make chaos-spark-kill

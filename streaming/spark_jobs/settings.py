@@ -13,9 +13,9 @@ class Settings(BaseSettings):
 
     kafka_bootstrap: str = "kafka:9092"
 
-    # jdbc: Iceberg JdbcCatalog in postgres-meta; rest: Lakekeeper (ADR-005). Anything else fails
-    # at startup.
-    catalog_type: Literal["jdbc", "rest"] = "jdbc"
+    # rest: Lakekeeper (ADR-005). jdbc: the pre-cutover JdbcCatalog in postgres-meta, only through
+    # the rollback in docs/runbooks/catalog-cutover.md. Anything else fails at startup.
+    catalog_type: Literal["jdbc", "rest"] = "rest"
     catalog_jdbc_url: str = "jdbc:postgresql://postgres-meta:5432/iceberg_catalog"
     catalog_jdbc_user: str = "meta"
     catalog_jdbc_password: str = ""

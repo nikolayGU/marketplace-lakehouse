@@ -12,8 +12,10 @@
 
 Never start `orchestrate` and `bi` together. Never start all profiles.
 
-Both images in `core` (`lakehouse/replayer:dev`, `lakehouse/spark:dev`) are built by
-`make up`. To work on one service without the replayer playing, start it by name:
+`core` includes Lakekeeper, the Iceberg catalog, since the cutover on 2026-10-08; there is no
+`rest` profile any more. Both images in `core` (`lakehouse/replayer:dev`, `lakehouse/spark:dev`)
+are built by `make up`. To work on one service without the replayer playing, start it by name
+(Spark and Trino bring Lakekeeper up first):
 
 ```
 docker compose --env-file .env -f docker/compose.yaml --profile core up -d spark-bronze
@@ -28,7 +30,7 @@ docker compose --env-file .env -f docker/compose.yaml --profile core up -d spark
 | kafka | 9092 |
 | kafka-connect | 8083 |
 | minio (S3 API) | 9000 |
-| lakekeeper (profile `rest`) | 8181 |
+| lakekeeper | 8181 |
 | spark-bronze UI | 4040 |
 | spark-bronze metrics | 4041 |
 | spark-silver UI (while `make silver` runs) | 4042 |
@@ -170,11 +172,11 @@ make trino   # select count(*) from silver.orders where not _is_deleted;  -- = s
 
 ## Query
 
-`trino` (profile `query`) reads the same JDBC catalog as Spark:
-`docker/trino/etc/catalog/lake.properties` points at `iceberg_catalog` in `postgres-meta` and at
-MinIO through the native S3 file system, which accepts the `s3a://` paths Spark writes. The
-PostgreSQL driver ships in the image's Iceberg plugin. Heap is `TRINO_XMX`, passed to the
-launcher as `-J-Xmx...`; the query memory limits in `config.properties` fit 2g as well.
+`trino` (profile `query`) reads the same catalog as Spark, Lakekeeper:
+`docker/trino/etc/catalog/lake.properties` points at its REST API and at MinIO through the native
+S3 file system, which accepts both the `s3a://` paths of the registered tables and the `s3://`
+paths of new ones. Trino uses its own S3 keys, no vended credentials. Heap is `TRINO_XMX`, passed
+to the launcher as `-J-Xmx...`; the query memory limits in `config.properties` fit 2g as well.
 
 Start it without the replayer and check it:
 
@@ -184,27 +186,36 @@ make trino           # trino> select source_table, count(*) from bronze.cdc_even
 ```
 
 Healthy means the image's `health-check` saw `"starting": false` on `/v1/info`, about 40 s
-after start. It does not prove the catalog works, because the JDBC connection opens on the
-first query: run one. The config is bind-mounted, so after editing `docker/trino/etc` restart
-the container (`docker compose ... restart trino`); `up -d` does not notice file changes.
+after start. It does not prove the catalog works: run one query. The config is bind-mounted, so
+after editing `docker/trino/etc` restart the container (`docker compose ... restart trino`);
+`up -d` does not notice file changes.
 
 Trino only reads what Spark committed: a bronze micro-batch shows up after its Iceberg commit,
 not when Kafka receives the event.
 
 ## Lakekeeper (REST catalog)
 
-Lakekeeper v0.13.6 runs side by side with the JDBC catalog until the cutover (ADR-005): Spark
-(`CATALOG_TYPE=jdbc`) and Trino `lake` still use `iceberg_catalog`, and nothing reads Lakekeeper
-yet. Its services are in profile `rest`, which compose accepts only together with `core`:
-`lakekeeper-migrate` (one-shot schema migration of the `lakekeeper` database in `postgres-meta`,
-128 MiB), `lakekeeper` (the API on `127.0.0.1:8181`, 256 MiB limit, under 100 MiB used) and
-`lakekeeper-bootstrap` (one-shot, 128 MiB). The API has no authentication (allow-all), which is why
-the port stays on 127.0.0.1.
+Lakekeeper v0.13.6 is the Iceberg catalog of Spark and Trino since the cutover on 2026-10-08
+(ADR-005; procedure and rollback in `docs/runbooks/catalog-cutover.md`). Its services are in
+profile `core`: `lakekeeper-migrate` (one-shot schema migration of the `lakekeeper` database in
+`postgres-meta`, 128 MiB), `lakekeeper` (the API on `127.0.0.1:8181`, 256 MiB limit) and
+`lakekeeper-bootstrap` (one-shot, 128 MiB). `spark-bronze`, `spark-silver` and `trino` wait for
+`lakekeeper-bootstrap`, so every `up` of them runs the one-shots again (`minio-init`,
+`lakekeeper-migrate`, `lakekeeper-bootstrap`), all idempotent. Without `lakekeeper` Spark cannot
+commit and Trino cannot load a table. The API has no authentication (allow-all), which is why the
+port stays on 127.0.0.1.
+
+`make silver` and `make iceberg-demo` run `spark-silver` with `--no-deps`: they never start
+Lakekeeper, so it must already be running (`make status`; `make lakekeeper-bootstrap` starts it).
+
+Measured on 2026-10-08 right after the cutover: `lakekeeper` 91 MiB of its 256 MiB, the
+`lakekeeper` database 12 MB (commands in the runbook's step 6). Bronze commits every 20 s and each
+commit now writes `postgres-meta` too: compare both a day later.
 
 ```
 make lakekeeper-bootstrap   # starts lakekeeper (migration first) if needed, creates warehouse lake
 curl -s '127.0.0.1:8181/catalog/v1/config?warehouse=lake'   # defaults.prefix is the warehouse id
-docker stop lakehouse-lakekeeper-1                          # JDBC does not need it
+docker stats --no-stream lakehouse-lakekeeper-1
 ```
 
 `make lakekeeper-bootstrap` is safe to re-run: the second time it prints `warehouse lake exists`
@@ -222,38 +233,30 @@ value`). Add it to an existing `.env` once, from the repo root; the command prin
 grep -q '^LAKEKEEPER_ENCRYPTION_KEY=' .env || printf 'LAKEKEEPER_ENCRYPTION_KEY=%s\n' "$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')" >> .env
 ```
 
-Never change the key once the warehouse exists: Lakekeeper could no longer decrypt its S3 keys and
-would lose access to MinIO. Sending the credential again
-(`POST /management/v1/warehouse/{id}/storage-credential`) should repair that; it is untested.
+Never change the key once the warehouse exists: Lakekeeper could no longer decrypt its S3 keys,
+and it writes every new metadata file with them, so commits depend on the key. Sending the
+credential again (`POST /management/v1/warehouse/{id}/storage-credential`) should repair that; it
+is untested.
 
-Registration. `scripts/lakekeeper/register.sh` registers every bronze and silver table of the JDBC
-catalog in Lakekeeper at its current metadata file, then reads JDBC again and loads each table
-back from Lakekeeper. It prints one `same <table> <metadata file>` line per table and `all N
-tables point at the same metadata file in both catalogs`, or `MISMATCH` lines and exits 1. Stop
-the writers first: a commit on either side while it runs forks the two catalogs. The script
-refuses while `spark-bronze` or any `spark-silver` container runs, and while `CATALOG_TYPE` in
-`.env` or in the shell is anything but `jdbc`.
+After the cutover. Never start a Spark job with `CATALOG_TYPE=jdbc` (in `.env`, as
+`-e CATALOG_TYPE=jdbc` or exported in a shell), and never give Trino the JDBC `lake.properties`
+back, except through the runbook's rollback. The JDBC rows in `iceberg_catalog` still point at
+the pre-cutover snapshots, kept as the rollback point until the end of week 3: a job on them would
+commit on top of an old snapshot, the two catalogs would fork, and `expire_snapshots` or
+`remove_orphan_files` on one side would delete files the other still reads. Compose takes
+`CATALOG_TYPE` from the shell over `.env`, so never source `.env` in a shell that runs compose.
 
-```
-make lakekeeper-bootstrap              # starts lakekeeper if stopped, waits until healthy
-docker stop lakehouse-spark-bronze-1   # and no make silver running
-bash scripts/lakekeeper/register.sh
-docker start lakehouse-spark-bronze-1  # its log says Resuming at batch N
-```
-
-Keep the stop short: Kafka keeps what bronze has not read for 24 h only. Re-running is safe,
-`overwrite` replaces Lakekeeper's pointer and never a file. The pointers go stale with bronze's
-next commit, which is harmless while nothing reads them; the cutover registers again. `lake.demo`
-is not registered: `make iceberg-demo` starts with `drop ... purge`, which on Lakekeeper would
-delete the files of the JDBC sandbox. Never undo a registration with any kind of drop. To back
-out, stop `lakekeeper`: its rows are inert while nothing reads them.
+Registration was the cutover's first step and is not repeated. `scripts/lakekeeper/register.sh`
+refuses while `CATALOG_TYPE` in `.env` or in the shell is anything but `jdbc`, and a protected
+table would refuse the overwrite with 409 anyway. Do not work around either: registering again
+puts the stale JDBC pointers over the live ones. A new cutover after a rollback starts at the
+runbook's step 1.
 
 What deletes files. Lakekeeper reads a REST `DELETE` without `purgeRequested` as a purge (the
 Iceberg REST spec defaults it to `false`), and warehouse `lake` soft-deletes for 7 days: the table
 disappears from the catalog at once, Lakekeeper deletes its whole location 7 days later, and until
-then `POST /management/v1/warehouse/{id}/deleted-tabulars/undrop` brings it back. The location of a
-registered table is the JDBC table's directory, so the right column hits the JDBC table's data
-too.
+then it can be undropped (below). The location of a registered table is also the JDBC table's
+directory, so the right column destroys the rollback point too.
 
 | Action | JDBC catalog | Lakekeeper (soft delete, 7 days) |
 |---|---|---|
@@ -266,10 +269,37 @@ too.
 
 `force=true` on a REST `DELETE` skips both the 7 days and table protection: the table leaves the
 catalog at once and, unless `purgeRequested=false`, its whole location is deleted at once too.
-Protection, which makes Lakekeeper refuse the drop with 409 before Spark deletes anything, goes on
-bronze and silver with the cutover; until then nothing in Lakekeeper itself stops a drop. Today
-Spark writes through JDBC and Trino has no Lakekeeper catalog, so the right column is reached only
-by a REST call or by a Spark job started with `CATALOG_TYPE=rest`.
+Since the cutover the right column is what every engine does; the left one applies again only
+after a rollback. All of it is on the blast-radius list.
+
+Protection. `scripts/lakekeeper/protect.sh` set `protected` on all 9 bronze and silver tables at
+the cutover. Lakekeeper then answers a drop of any of them with 409 before anything is deleted,
+Spark `DROP ... PURGE` included; commits are not affected. Run it again when a new bronze or
+silver table appears and after any registration, since a re-registered table comes back
+unprotected; it only ever sets the flag and reads it back. `demo` and `gold` stay unprotected.
+Removing protection is on the blast-radius list: the owner does it by hand, nothing else does. The
+flag lives under the warehouse id and the table's Iceberg `table-uuid`:
+
+```
+lk=http://127.0.0.1:8181; json() { python3 -c "import json, sys; print(json.load(sys.stdin)$1)"; }
+wid=$(curl -s "$lk/catalog/v1/config?warehouse=lake" | json '["defaults"]["prefix"]')
+tid=$(curl -s "$lk/catalog/v1/$wid/namespaces/silver/tables/orders?snapshots=refs" |
+  json '["metadata"]["table-uuid"]')
+curl -s "$lk/management/v1/warehouse/$wid/table/$tid/protection"   # {"protected":true,...}
+# POST {"protected": true} to the same URL sets it (protect.sh does);
+# {"protected": false} removes it: owner only
+```
+
+Undrop. A dropped table stays in Lakekeeper's list of deleted tables for 7 days and can be
+brought back with its files, unless Spark `DROP ... PURGE` already deleted them. Not tried on this
+stack yet; `lk` and `wid` as above:
+
+```
+curl -s "$lk/management/v1/warehouse/$wid/deleted-tabulars"   # id, name, expiration-date
+curl -sS -X POST -H 'Content-Type: application/json' \
+  -d '{"targets": [{"type": "table", "id": "<id from the list>"}]}' \
+  "$lk/management/v1/warehouse/$wid/deleted-tabulars/undrop"   # 204 on success
+```
 
 ## Failure scenarios
 
@@ -574,6 +604,7 @@ from silver."orders$snapshots" order by committed_at desc limit 2;
 | Spark job no batch for 5 minutes | `docs/runbooks/spark-stalled.md` |
 | Freshness above 15 minutes | `docs/runbooks/freshness.md` (week 4) |
 | Disk full | `docs/runbooks/disk-full.md` (week 4) |
+| Catalog cutover to Lakekeeper, or its rollback (owner only) | `docs/runbooks/catalog-cutover.md` |
 | Reset everything | `make nuke` (asks for confirmation; deletes volumes, checkpoints, data) |
 
 ## Backup

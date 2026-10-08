@@ -50,7 +50,7 @@ Requirements: Windows 11 with WSL2 + Docker Desktop (or any Linux with Docker), 
 make secrets                 # generates .env from .env.example
 make hooks                   # installs pre-commit hooks (ruff, yamllint, gitleaks)
 make data                    # downloads the Olist dataset into data/raw (Kaggle CLI or manual)
-make up PROFILE=core         # postgres x2, kafka, connect, minio, spark-bronze, replayer
+make up PROFILE=core         # postgres x2, kafka, connect, minio, lakekeeper, spark-bronze, replayer
 make up PROFILE=query        # trino
 make replay                  # initial load + start replaying history
 make psql                    # source database
@@ -62,8 +62,7 @@ Never start every profile at once on 16 GB. Working combinations are listed in
 
 | Profile | Services | RAM (limits) |
 |---|---|---|
-| `core` | postgres-oltp, postgres-meta (JDBC catalog), kafka, kafka-connect, minio, spark-bronze, oltp-replayer | ~7.3 GB |
-| `rest` | lakekeeper (REST catalog, should-have) | 0.25 GB |
+| `core` | postgres-oltp, postgres-meta (Lakekeeper's database), kafka, kafka-connect, minio, lakekeeper (Iceberg REST catalog), spark-bronze, oltp-replayer | ~7.5 GB |
 | `query` | trino | 3.5 GB |
 | `orchestrate` | airflow api-server / scheduler / dag-processor | ~1.8 GB |
 | `obs` | prometheus, grafana, exporters, cadvisor | ~0.9 GB |

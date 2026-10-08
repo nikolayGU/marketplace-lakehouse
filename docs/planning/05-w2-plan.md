@@ -45,7 +45,7 @@
 **Интерфейсы:**
 - Производит: колонку `source_sequence string` сразу после `lsn` в `lake.bronze.cdc_events`; функцию `ensure_table(spark: SparkSession) -> None` в `bronze_cdc_ingest`; константу `ADDED_COLUMNS: tuple[tuple[str, str, str], ...]`.
 
-- [ ] **Шаг 1: падающие тесты в `test_bronze_cdc_ingest.py`**
+- [x] **Шаг 1: падающие тесты в `test_bronze_cdc_ingest.py`**
 
 `envelope()` получает параметр `sequence`, в `source` он пишется только если не `None`:
 
@@ -113,12 +113,12 @@ def test_every_added_column_is_in_the_ddl_after_its_neighbour() -> None:
 
 Импорты: `import re`, `from spark_jobs.bronze_cdc_ingest import ADDED_COLUMNS, DDL, ENVELOPE, to_bronze`.
 
-- [ ] **Шаг 2: убедиться, что тесты падают**
+- [x] **Шаг 2: убедиться, что тесты падают**
 
 Run: `make test-spark`
 Expected: FAIL, `ImportError: cannot import name 'ADDED_COLUMNS'`.
 
-- [ ] **Шаг 3: реализация в `bronze_cdc_ingest.py`**
+- [x] **Шаг 3: реализация в `bronze_cdc_ingest.py`**
 
 В `ENVELOPE.source` добавить поле:
 
@@ -162,7 +162,7 @@ def ensure_table(spark: SparkSession) -> None:
 
 В `main()` заменить `spark.sql(DDL)` на `ensure_table(spark)`; импорт `SparkSession` из `pyspark.sql`.
 
-- [ ] **Шаг 4: контракт и фикстура**
+- [x] **Шаг 4: контракт и фикстура**
 
 `contracts/cdc-envelope.schema.json`, в `source.required` добавить `"sequence"`, в `source.properties`:
 
@@ -172,7 +172,7 @@ def ensure_table(spark: SparkSession) -> None:
 
 `orders_r_initial.json`: `"sequence": "[null,\"987654320\"]"` (так выглядит строка initial snapshot).
 
-- [ ] **Шаг 5: silver переживает новую колонку в bronze**
+- [x] **Шаг 5: silver переживает новую колонку в bronze**
 
 В `test_silver_upsert.py`: `BRONZE_COLUMNS` получает `source_sequence string` после `lsn bigint`, `event()` получает параметр `sequence: str | None = None` и поле `source_sequence=sequence` сразу после `lsn=lsn`. Новый тест:
 
@@ -206,12 +206,12 @@ def test_run_survives_a_column_added_to_bronze_between_runs(
     assert silver(spark)["o1"].order_status == "approved"
 ```
 
-- [ ] **Шаг 6: тесты зелёные**
+- [x] **Шаг 6: тесты зелёные**
 
 Run: `make test && make test-spark`
 Expected: всё PASS, новые тесты в числе прошедших.
 
-- [ ] **Шаг 7: ADR и OPERATIONS**
+- [x] **Шаг 7: ADR и OPERATIONS**
 
 `DECISIONS.md`: строка таблицы `| ADR-022 | Bronze keeps Debezium's source.sequence as text; silver keeps ordering by lsn until concurrent writers appear | accepted |` и раздел:
 
@@ -241,7 +241,7 @@ not from the stored offset; a sequence-based guard would have to tolerate that.
 
 `OPERATIONS.md`, раздел Bronze ingest, пункт: `Schema changes of bronze itself are additive and applied on start: ensure_table adds a missing column in its table position; the checkpoint is unaffected.`
 
-- [ ] **Шаг 8: живая проверка**
+- [x] **Шаг 8: живая проверка**
 
 ```bash
 docker compose --env-file .env -f docker/compose.yaml --profile core up -d --build spark-bronze
@@ -254,7 +254,7 @@ make silver  # отрабатывает без ошибок
 
 Ожидаемо: контейнер healthy, `Resuming at batch N` (checkpoint жив), у новых строк `source_sequence` заполнен.
 
-- [ ] **Шаг 9: ревью и коммит**
+- [x] **Шаг 9: ревью и коммит**
 
 Ревью-воркфлоу по диффу, правки, затем:
 
@@ -276,7 +276,7 @@ git commit -m "stream: source_sequence in bronze, commit position kept for later
 - Потребляет: `ensure_table(spark, contract)` из текущего `silver_upsert.py`.
 - Производит: `MERGE_ON_READ: dict[str, str]`, `PARTITIONS: dict[str, tuple[str, ...]]`, `PROPERTIES: dict[str, dict[str, str]]`, `partition_fields(spark, table) -> set[str]`, `converge_layout(spark, table, partitions, properties) -> None`; строка лога `batch %s: %s events merged into %s.%s in %.1f s`.
 
-- [ ] **Шаг 1: падающие тесты**
+- [x] **Шаг 1: падающие тесты**
 
 ```python
 from spark_jobs.silver_upsert import MERGE_ON_READ, METADATA, partition_fields
@@ -329,12 +329,12 @@ def test_existing_copy_on_write_orders_converges_once(spark: SparkSession) -> No
     assert partition_fields(spark, table) == {"months(order_purchase_timestamp)"}
 ```
 
-- [ ] **Шаг 2: убедиться, что тесты падают**
+- [x] **Шаг 2: убедиться, что тесты падают**
 
 Run: `make test-spark`
 Expected: FAIL, `ImportError: cannot import name 'MERGE_ON_READ'`.
 
-- [ ] **Шаг 3: реализация**
+- [x] **Шаг 3: реализация**
 
 После `METADATA`:
 
@@ -429,12 +429,12 @@ log.info(
     # one, so changing it takes effect only with a new checkpoint.
 ```
 
-- [ ] **Шаг 4: тесты зелёные**
+- [x] **Шаг 4: тесты зелёные**
 
 Run: `make test && make test-spark`
 Expected: PASS. Если `partition_fields` не видит поле, распечатать `describe table` в тесте и поправить фильтр по фактическому выводу.
 
-- [ ] **Шаг 5: замер CoW на живом стеке (образ ещё со старым silver)**
+- [x] **Шаг 5: замер CoW на живом стеке (образ ещё со старым silver)**
 
 ```bash
 PYTHONPATH=oltp REPLAY_SPEED=1440 timeout 120 .venv/bin/python -m replayer start; sleep 40
@@ -444,7 +444,7 @@ make trino   # select committed_at, operation, element_at(summary,'added-data-fi
 
 Записать: число событий orders, время MERGE, байты added/removed.
 
-- [ ] **Шаг 6: применить раскладку и замерить MoR**
+- [x] **Шаг 6: применить раскладку и замерить MoR**
 
 ```bash
 docker compose --env-file .env -f docker/compose.yaml --profile core build spark-bronze
@@ -455,7 +455,7 @@ make trino   # тот же запрос по $snapshots; select content, spec_id
 
 Ожидаемо: строки `set 'write.delete.granularity' ...` и `partitioned by months(...)` один раз, MERGE пишет новые файлы в spec 1 и position delete files вместо переписывания четырёх файлов.
 
-- [ ] **Шаг 7: compaction в Trino**
+- [x] **Шаг 7: compaction в Trino**
 
 ```bash
 make trino   # alter table silver.orders execute optimize;
@@ -465,11 +465,11 @@ make trino   # select content, spec_id, count(*) from silver."orders$files" grou
 
 Это снапшот `replace`, silver его не стримит, blast radius нет.
 
-- [ ] **Шаг 8: ADR-010 и OPERATIONS**
+- [x] **Шаг 8: ADR-010 и OPERATIONS**
 
 Статус ADR-010 в таблице: `accepted, measured 2026-09-26`. Раздел ADR-010 с цифрами из шагов 5-7 (время MERGE, bytes added/removed на порцию, delete files, результат optimize) и выводом. `OPERATIONS.md`, Silver upsert: `silver.orders is merge-on-read and partitioned by month; ensure_table converges an older table on the next run (metadata only). Delete files accumulate until compaction: alter table silver.orders execute optimize (Trino) folds them and rewrites old files into the current spec.`
 
-- [ ] **Шаг 9: ревью и коммит**
+- [x] **Шаг 9: ревью и коммит**
 
 ```bash
 git add streaming/spark_jobs/silver_upsert.py streaming/spark_jobs/settings.py tests/unit/test_silver_upsert.py DECISIONS.md OPERATIONS.md
@@ -490,7 +490,7 @@ git commit -m "lake: silver.orders merge-on-read, partitioned by month, adr-010 
 - Потребляет: `latest_per_key`, `merge_sql`, `ensure_table` из задачи 2.
 - Производит: `QUARANTINE`, `QUARANTINE_DDL`, `row_images(events, contract)` с колонками `_reason`, `_fields`, `_payload` и сохранёнными колонками bronze; `reason(contract) -> Column`; `unknown_fields(images, contract) -> list[str]`; `quarantine_rows(events, reason, payload, batch_id) -> DataFrame`; `quarantine(rows) -> None`; `merge_table(events, count, batch_id, contract) -> None`. Функция `valid` удаляется. В `lib.sh`: `trino`, `trino_value`, `psql_value`, `kafka`, `wait_until`, `run_silver`.
 
-- [ ] **Шаг 1: падающие тесты**
+- [x] **Шаг 1: падающие тесты**
 
 Хелперы в тесте:
 
@@ -608,12 +608,12 @@ def test_batch_of_only_invalid_events_changes_no_silver_row(spark: SparkSession)
     assert silver(spark)["o1"]._last_lsn == before["o1"]._last_lsn == 100
 ```
 
-- [ ] **Шаг 2: убедиться, что тесты падают**
+- [x] **Шаг 2: убедиться, что тесты падают**
 
 Run: `make test-spark`
 Expected: FAIL, `ImportError: cannot import name 'QUARANTINE'`.
 
-- [ ] **Шаг 3: реализация**
+- [x] **Шаг 3: реализация**
 
 Константы:
 
@@ -795,12 +795,12 @@ def merge_batch(batch: DataFrame, batch_id: int, contracts: dict[str, TableContr
 
 В `run()` после `create namespace`: `spark.sql(QUARANTINE_DDL)`. Докстринг модуля: одна фраза «Events silver cannot type go to `silver.quarantine` with a reason, keyed by Kafka coordinates.»
 
-- [ ] **Шаг 4: тесты зелёные**
+- [x] **Шаг 4: тесты зелёные**
 
 Run: `make lint && make test && make test-spark`
 Expected: PASS.
 
-- [ ] **Шаг 5: `scripts/chaos/lib.sh`**
+- [x] **Шаг 5: `scripts/chaos/lib.sh`**
 
 ```bash
 #!/usr/bin/env bash
@@ -838,7 +838,7 @@ run_silver() { make -C "$ROOT" --no-print-directory silver >/dev/null 2>&1 || ma
 
 `run_silver` запускает тихо, а при ошибке повторяет с полным выводом, чтобы причина была видна. Повтор безопасен: silver идемпотентен (ADR-021).
 
-- [ ] **Шаг 6: `scripts/chaos/poison-event.sh`**
+- [x] **Шаг 6: `scripts/chaos/poison-event.sh`**
 
 ```bash
 #!/usr/bin/env bash
@@ -861,7 +861,7 @@ echo "expected: one row, reason unparsed_envelope; silver_upsert exited 0"
 
 `chmod +x` не нужен: Makefile вызывает `bash scripts/chaos/$*.sh`.
 
-- [ ] **Шаг 7: живая проверка**
+- [x] **Шаг 7: живая проверка**
 
 ```bash
 docker compose --env-file .env -f docker/compose.yaml --profile core build spark-bronze
@@ -871,11 +871,11 @@ make chaos-poison-event     # вторая строка, первая не за�
 make trino                  # select reason, count(*) from silver.quarantine group by 1;  -> unparsed_envelope 2
 ```
 
-- [ ] **Шаг 8: документация**
+- [x] **Шаг 8: документация**
 
 `OPERATIONS.md`, Silver upsert: заменить фразу про `invalid ... events skipped` на описание карантина (причины, ключ, как смотреть: `select reason, source_table, count(*) from silver.quarantine group by 1, 2`, что после добавления контракта события `no_contract` не перечитываются сами). Таблица сценариев: chaos 7 `data half done (W2-T04), alert in week 4`. `contracts/README.md`: фраза «A field that fails to parse ... comes out null while the rest of the row survives» заменяется на «A field that is present in the payload but fails to parse or to fit its silver type sends the event to `silver.quarantine` (`type_mismatch`); a field that is absent or JSON null stays null.»
 
-- [ ] **Шаг 9: ревью и коммит**
+- [x] **Шаг 9: ревью и коммит**
 
 ```bash
 git add streaming/spark_jobs/silver_upsert.py tests/unit/test_silver_upsert.py scripts/chaos/lib.sh scripts/chaos/poison-event.sh OPERATIONS.md contracts/README.md
@@ -895,7 +895,7 @@ git commit -m "lake: silver.quarantine for events silver cannot type, poison-eve
 - Потребляет: `lib.sh` из задачи 3.
 - Производит: в `lib.sh` `replay_burst <seconds> [VAR=value ...]`, `no_other_replayer`, `bronze_caught_up`, `healthy <container>`, `bronze_offsets_report`.
 
-- [ ] **Шаг 1: падающий тест пропуска эпохи (`tests/unit/test_iceberg_sink.py`)**
+- [x] **Шаг 1: падающий тест пропуска эпохи (`tests/unit/test_iceberg_sink.py`)**
 
 ```python
 """The Iceberg streaming sink skips an epoch it already committed (ADR-007, chaos 1).
@@ -1002,12 +1002,12 @@ def test_replayed_epoch_is_skipped(spark: SparkSession, tmp_path: Path) -> None:
 
 Makefile: `SPARK_TESTS := ... test_iceberg_sink.py`.
 
-- [ ] **Шаг 2: прогнать тест**
+- [x] **Шаг 2: прогнать тест**
 
 Run: `make test-spark`
 Expected: тест проходит сразу (он проверяет поведение Iceberg, а не наш код). Чтобы убедиться, что он умеет падать, временно заменить удаление `commits/1` на удаление всего checkpoint (новый queryId, пропуска нет): тест должен упасть на `assert commit.exists()`, потому что новый checkpoint пишет только `commits/0`. Если убрать и проверки существования, падение будет на `[1, 1, 2, 2] == [1, 2]`. Вернуть.
 
-- [ ] **Шаг 3: `lib.sh`, добавить**
+- [x] **Шаг 3: `lib.sh`, добавить**
 
 ```bash
 healthy() { [ "$(docker inspect -f '{{.State.Health.Status}}' "$1" 2>/dev/null)" = healthy ]; }
@@ -1064,7 +1064,7 @@ bronze_offsets_report() {
 }
 ```
 
-- [ ] **Шаг 4: `scripts/chaos/spark-kill.sh`**
+- [x] **Шаг 4: `scripts/chaos/spark-kill.sh`**
 
 ```bash
 #!/usr/bin/env bash
@@ -1158,12 +1158,12 @@ fi
 echo "ok: every Kafka offset is in bronze exactly once; no epoch was committed twice"
 ```
 
-- [ ] **Шаг 5: прогон на живом стеке**
+- [x] **Шаг 5: прогон на живом стеке**
 
 Run: `make chaos-spark-kill`
 Expected: `Resuming at batch N`, отчёт по offsets с нулями, эпохи без повторов. Прогнать дважды; записать число событий в порции, время до healthy, N.
 
-- [ ] **Шаг 6: документация**
+- [x] **Шаг 6: документация**
 
 `OPERATIONS.md`: раздел `## 1. Spark bronze killed mid-batch` по шаблону (what happened, monitoring, data at risk, recovery, why no loss or duplication, verification SQL) с цифрами из шага 5 и ссылкой на `test_iceberg_sink.py`; статус в таблице `done`. Пункт в Bronze ingest про ручной `docker start` уже есть, дополнить: файлы отменённого батча остаются сиротами до `remove_orphan_files` (W5). ADR-007: абзац `Verified on 2026-09-26: ...` с результатом. `docs/runbooks/spark-stalled.md`:
 
@@ -1185,7 +1185,7 @@ restarting.
 4. Verify: `bronze_offsets_report` from `scripts/chaos/lib.sh` shows no duplicates and no holes.
 ```
 
-- [ ] **Шаг 7: ревью и коммит**
+- [x] **Шаг 7: ревью и коммит**
 
 ```bash
 git add scripts/chaos/lib.sh scripts/chaos/spark-kill.sh tests/unit/test_iceberg_sink.py docs/runbooks/spark-stalled.md Makefile OPERATIONS.md DECISIONS.md
@@ -1204,7 +1204,7 @@ git commit -m "stream: chaos-spark-kill, bronze exactly once across restarts pro
 **Интерфейсы:**
 - Производит: в `lib.sh` `connector_running`, `slot_reattached <pid>`, `reconcile`, `lsn_duplicates_since <utc timestamp>`.
 
-- [ ] **Шаг 1: `lib.sh`, добавить**
+- [x] **Шаг 1: `lib.sh`, добавить**
 
 ```bash
 connector_running() {
@@ -1249,7 +1249,7 @@ lsn_duplicates_since() {
 }
 ```
 
-- [ ] **Шаг 2: `scripts/chaos/connect-restart.sh`**
+- [x] **Шаг 2: `scripts/chaos/connect-restart.sh`**
 
 ```bash
 #!/usr/bin/env bash
@@ -1332,12 +1332,12 @@ echo "expected: MODE=restart no rows above; MODE=kill repeated events; reconcile
   "counts) either way"
 ```
 
-- [ ] **Шаг 3: прогон обоих режимов**
+- [x] **Шаг 3: прогон обоих режимов**
 
 Run: `make chaos-connect-restart`, затем `MODE=kill make chaos-connect-restart`.
 Expected: restart даёт 0 или единицы повторов, kill даёт повторы с теми же LSN; `reconcile` всё `ok` в обоих. Записать цифры.
 
-- [ ] **Шаг 4: документация**
+- [x] **Шаг 4: документация**
 
 `OPERATIONS.md`: разделы `## 2a. Kafka Connect restart` и `## 2b. Kafka Connect killed` по шаблону с цифрами, строки таблицы сценариев разделены на 2a/2b. ADR-007: абзац о фактическом числе дублей и о том, что их источник это `docker kill`, а не рестарт. `00-mini-architecture-review.md` §8: строка 2 делится на 2a (`docker restart`, ожидаем 0 дублей) и 2b (`docker kill` + `docker start`, дубли с теми же LSN в пределах 60 с). `docs/runbooks/connector-failed.md`:
 
@@ -1359,7 +1359,7 @@ growing while the replayer writes.
    snapshot and on the blast-radius list.
 ```
 
-- [ ] **Шаг 5: ревью и коммит**
+- [x] **Шаг 5: ревью и коммит**
 
 ```bash
 git add scripts/chaos/lib.sh scripts/chaos/connect-restart.sh docs/runbooks/connector-failed.md OPERATIONS.md DECISIONS.md docs/planning/00-mini-architecture-review.md
@@ -1374,7 +1374,7 @@ git commit -m "cdc: chaos-connect-restart, graceful restart vs kill measured"
 - Создать: `scripts/chaos/duplicates.sh`
 - Изменить: `OPERATIONS.md`, `docs/planning/00-mini-architecture-review.md` (§8, строка 3)
 
-- [ ] **Шаг 1: `scripts/chaos/duplicates.sh`**
+- [x] **Шаг 1: `scripts/chaos/duplicates.sh`**
 
 ```bash
 #!/usr/bin/env bash
@@ -1449,16 +1449,16 @@ echo "ok: $no_ops no-op UPDATEs on orders, none repeated by LSN; silver holds ev
   "matches Postgres"
 ```
 
-- [ ] **Шаг 2: прогон**
+- [x] **Шаг 2: прогон**
 
 Run: `make chaos-duplicates`
 Expected: напечатаны окно (`window: ingest_ts >= timestamp '...'`) и время догона bronze; у `orders` no-op UPDATE больше 0, их доля от UPDATE статуса около `REPLAY_DUPLICATE_RATIO` с разбросом (ratio выбирает заказы, а не UPDATE; первый прогон дал 15.0%, 16 из 114 заказов; прогон 07.10 (UTC) дал 9.8%, 90 из 926), повторов по LSN 0, silver держит LSN и статус повтора у каждого такого заказа, `reconcile` ok, последняя строка `ok: ...`. Скрипт выходит с кодом 2 (make печатает `Error 2`), если уже работает другой реплеер на `:8000`; FAIL-проверки дают `Error 1`.
 
-- [ ] **Шаг 3: документация**
+- [x] **Шаг 3: документация**
 
 `OPERATIONS.md`: `### 3. Duplicate events from the source` с цифрами; отдельной фразой, что проверка повторов по `(source_table, key, lsn)` (`lsn_duplicates_since`; `bronze_duplicate_ratio` в `dq_checks` это план W3-T05, метрики ещё нет) видит только повторы доставки (chaos 2b), а повторы источника видны как `before = after`. `00-mini-architecture-review.md` §8, строка 3: метрика по LSN такие повторы не видит и не растёт.
 
-- [ ] **Шаг 4: ревью и коммит**
+- [x] **Шаг 4: ревью и коммит**
 
 ```bash
 git add scripts/chaos/duplicates.sh OPERATIONS.md docs/planning/00-mini-architecture-review.md
@@ -1473,7 +1473,7 @@ git commit -m "oltp: chaos-duplicates, repeated source updates absorbed by silve
 - Создать: `scripts/chaos/late.sh`
 - Изменить: `oltp/replayer/settings.py` (комментарий), `OPERATIONS.md`, `docs/planning/00-mini-architecture-review.md` (§8, строка 4)
 
-- [ ] **Шаг 1: `scripts/chaos/late.sh`**
+- [x] **Шаг 1: `scripts/chaos/late.sh`**
 
 ```bash
 #!/usr/bin/env bash
@@ -1580,12 +1580,12 @@ fi
 echo "ok: the late event did not roll the order back"
 ```
 
-- [ ] **Шаг 2: прогон**
+- [x] **Шаг 2: прогон**
 
 Run: `make chaos-late`
 Expected: напечатаны окно (`window: ingest_ts >= timestamp '...'`) и время догона bronze; строка `re-sending` с заказом, старым LSN и `_last_lsn` silver больше него; две строки в bronze с одним LSN (исходная и повтор), второй прогон silver печатает строку `events merged into lake.silver.orders`, состояние silver до и после совпадает, последняя строка `ok: ...`. Прогон 07.10 (UTC) прошёл с первого раза, exit 0 за 3 мин 12.6 с: insert заказа (`created`, LSN 1401450968, партиция 1, offset 74825) повторён на offset 74855, silver до и после `approved` с `_last_lsn` 1401679552, `batch 15: 1 events merged into lake.silver.orders`; число в этой строке это события orders, которые батч silver прочитал из bronze (до quarantine и до одной строки на ключ), а не изменённые строки: snapshot второго прогона без изменённых партиций и без `added-records`. Скрипт выходит с кодом 2, если уже работает другой реплеер на `:8000`, и с кодом 1 до порции, если коннектор или его task не RUNNING или `spark-bronze` не healthy; сам `make` при любой ошибке возвращает 2 и показывает код скрипта как `Error 2` или `Error 1`. В Kafka 4.3.1 `--property` у консольных утилит помечен DEPRECATED, поэтому `--formatter-property` и `--reader-property` (проверено по `--help`).
 
-- [ ] **Шаг 3: комментарий в `oltp/replayer/settings.py`**
+- [x] **Шаг 3: комментарий в `oltp/replayer/settings.py`**
 
 ```python
     # Share of delivery updates pushed back by replay_late_delay_seconds of VIRTUAL time: late in
@@ -1595,11 +1595,11 @@ Expected: напечатаны окно (`window: ingest_ts >= timestamp '...'`)
 
 В том же файле исправлен комментарий `replay_duplicate_ratio` (находка проверки Задачи 6): ratio выбирает доли заказов по md5 `duplicate:<order_id>`, а не отдельные UPDATE.
 
-- [ ] **Шаг 4: документация**
+- [x] **Шаг 4: документация**
 
 `OPERATIONS.md`: `### 4. Late events` с цифрами прогона и объяснением двух смыслов «late» (приход не по порядку для silver и event time для W5-T01). Таблица сценариев: строка 4 `done <дата прогона>`. `00-mini-architecture-review.md` §8, строка 4: команда `make chaos-late`, guard по `_last_lsn`, ручка `REPLAY_LATE_RATIO` про event time; после прогона добавить «Проверено <дата>: ...».
 
-- [ ] **Шаг 5: ревью и коммит**
+- [x] **Шаг 5: ревью и коммит**
 
 ```bash
 git add scripts/chaos/late.sh oltp/replayer/settings.py OPERATIONS.md docs/planning/00-mini-architecture-review.md
@@ -1618,7 +1618,7 @@ git commit -m "lake: chaos-late, a stale change re-sent through kafka does not r
 - Потребляет: `build_session`, `CATALOG` из `catalog.py`; `lake.silver.orders` только на чтение.
 - Производит: `walkthrough(spark, rows=1000, appends=20) -> dict[str, int]` с ключами `rows`, `after_accident`, `after_rollback`, `files_before`, `files_after`, `snapshots_after_expire`.
 
-- [ ] **Шаг 1: падающий тест (`tests/unit/test_iceberg_demo.py`)**
+- [x] **Шаг 1: падающий тест (`tests/unit/test_iceberg_demo.py`)**
 
 Фикстура сессии такая же, как в `test_iceberg_sink.py` (локальный hadoop-каталог `lake`, `cache-enabled=false`), плюс `spark.sql.session.timeZone=UTC`. Тест:
 
@@ -1649,12 +1649,12 @@ def test_walkthrough_ends_compacted_with_one_snapshot(spark: SparkSession) -> No
     assert spark.table(f"{DEMO}.snapshots").count() == 1
 ```
 
-- [ ] **Шаг 2: убедиться, что тест падает**
+- [x] **Шаг 2: убедиться, что тест падает**
 
 Run: `make test-spark`
 Expected: FAIL, `ModuleNotFoundError: spark_jobs.iceberg_demo`.
 
-- [ ] **Шаг 3: `streaming/spark_jobs/iceberg_demo.py`**
+- [x] **Шаг 3: `streaming/spark_jobs/iceberg_demo.py`**
 
 ```python
 """`make iceberg-demo`: snapshots, time travel, rollback, small files and expiration, shown on a
@@ -1814,7 +1814,7 @@ if __name__ == "__main__":
     main()
 ```
 
-- [ ] **Шаг 4: Makefile и README**
+- [x] **Шаг 4: Makefile и README**
 
 ```make
 iceberg-demo: ## snapshots, time travel, rollback, compaction, expiration on lake.demo.orders
@@ -1823,12 +1823,12 @@ iceberg-demo: ## snapshots, time travel, rollback, compaction, expiration on lak
 
 `SPARK_TESTS` += `test_iceberg_demo.py`. `scripts/README.md`: строку про `iceberg/demo.sh` заменить на `make iceberg-demo` → `streaming/spark_jobs/iceberg_demo.py`. `streaming/README.md`: строка про `iceberg_demo.py`. `OPERATIONS.md`: `make iceberg-demo` в Daily commands уже есть, добавить фразу «works on lake.demo.orders only».
 
-- [ ] **Шаг 5: тесты зелёные**
+- [x] **Шаг 5: тесты зелёные**
 
 Run: `make lint && make test && make test-spark`
 Expected: PASS.
 
-- [ ] **Шаг 6: живой прогон**
+- [x] **Шаг 6: живой прогон**
 
 ```bash
 docker compose --env-file .env -f docker/compose.yaml --profile core build spark-bronze
@@ -1840,7 +1840,7 @@ make trino   # select count(*) from demo.orders; select * from demo."orders$snap
 
 Expected: все секции напечатаны, после первого rollback снова все строки, файлов после compaction 1, после expire снапшот 1, последняя секция показывает ошибку time travel.
 
-- [ ] **Шаг 7: ревью и коммит**
+- [x] **Шаг 7: ревью и коммит**
 
 ```bash
 git add streaming/spark_jobs/iceberg_demo.py tests/unit/test_iceberg_demo.py Makefile scripts/README.md streaming/README.md OPERATIONS.md
@@ -1858,7 +1858,7 @@ git commit -m "lake: iceberg demo on a sandbox table, snapshots to expiration"
 **Интерфейсы:**
 - Производит: `Settings.replay_schema_evolution_at: datetime | None`; `evolution_due(at, now, applied) -> bool`, `EVOLUTION: Path`, `INSERT_ORDER_WITH_CHANNEL` в `replay.py`; в `test_contracts.py` `evolution_columns() -> dict[str, list[tuple[str, str, str]]]`.
 
-- [ ] **Шаг 1: падающие тесты**
+- [x] **Шаг 1: падающие тесты**
 
 `tests/unit/test_replay_evolution.py`:
 
@@ -1956,12 +1956,12 @@ def test_evolution_migration_adds_sales_channel() -> None:
 
 Функция `source_tables()` использует `silver_types()` вместо своей ветки `if/elif`.
 
-- [ ] **Шаг 2: убедиться, что тесты падают**
+- [x] **Шаг 2: убедиться, что тесты падают**
 
 Run: `make test`
 Expected: FAIL, `ImportError: cannot import name 'EVOLUTION'` и `KeyError: 'orders'`.
 
-- [ ] **Шаг 3: миграция**
+- [x] **Шаг 3: миграция**
 
 `oltp/migrations/evolution/003_orders_sales_channel.sql`:
 
@@ -1975,7 +1975,7 @@ alter table shop.orders add constraint orders_sales_channel_check
 check (sales_channel in ('web', 'app', 'marketplace'));
 ```
 
-- [ ] **Шаг 4: настройки**
+- [x] **Шаг 4: настройки**
 
 `oltp/replayer/settings.py`:
 
@@ -1992,7 +1992,7 @@ def _empty_means_never(cls, value: object) -> object:
 
 Импорты `from datetime import datetime`, `from pydantic import Field, field_validator`.
 
-- [ ] **Шаг 5: реплеер**
+- [x] **Шаг 5: реплеер**
 
 В `replay.py`:
 
@@ -2039,12 +2039,12 @@ def has_column(conn: Conn, table: str, column: str) -> bool:
 
 В `execute()` для `order_insert`: `cur.execute(INSERT_ORDER_WITH_CHANNEL if self.channel else INSERT_ORDER, (event.order_id,))`. Колонка существует, значит миграция применена, поэтому рестарт её не повторяет.
 
-- [ ] **Шаг 6: тесты зелёные**
+- [x] **Шаг 6: тесты зелёные**
 
 Run: `make lint && make test && make test-spark`
 Expected: PASS (`sqlfluff` проверяет и новый файл).
 
-- [ ] **Шаг 7: проверка на одноразовом Postgres (живой стек не трогается)**
+- [x] **Шаг 7: проверка на одноразовом Postgres (живой стек не трогается)**
 
 Колонка на живом `shop.orders` это момент Modify-гейта владельца, поэтому механизм проверяется на отдельном контейнере:
 
@@ -2067,11 +2067,11 @@ docker stop evolution-probe && rm -rf "$probe"
 
 Ожидаемо: `applied 003_orders_sales_channel.sql at virtual ...`, в Postgres строки с `null` (старые) и с тремя значениями (новые). Контейнер запущен с `--rm`, его анонимный том удаляется вместе с ним; это одноразовый стенд, не данные проекта.
 
-- [ ] **Шаг 8: документация**
+- [x] **Шаг 8: документация**
 
 `oltp/README.md`: абзац про `migrations/evolution/` и `REPLAY_SCHEMA_EVOLUTION_AT` (формат ISO, виртуальное время, применяется один раз). `.env.example`: комментарий `# virtual time, ISO (2026-07-01T12:00:00), applies migrations/evolution/003; empty = never`.
 
-- [ ] **Шаг 9: ревью и коммит**
+- [x] **Шаг 9: ревью и коммит**
 
 ```bash
 git add oltp/migrations/evolution/003_orders_sales_channel.sql oltp/replayer/settings.py oltp/replayer/replay.py tests/unit/test_replay_evolution.py tests/unit/test_settings.py tests/unit/test_contracts.py oltp/README.md .env.example
@@ -2090,11 +2090,11 @@ git commit -m "oltp: schema evolution at a virtual time, orders gain sales_chann
 
 Таймер: старт фиксируется в начале шага 1. На 3:00 стоп и ADR-005 с причиной, если не пройден шаг 6.
 
-- [ ] **Шаг 1: решения владельца (всплывающий вопрос)**
+- [x] **Шаг 1: решения владельца (всплывающий вопрос)**
 
 Четыре вопроса: (a) новые таблицы на `s3://` с `fs.s3.impl` → S3A в Spark (рекомендация: стандартная схема, нужна и для `remove_orphan_files`) или принудительно `s3a://` в `ensure_table`; (b) warehouse `delete-profile: soft` на 7 дней (рекомендация: да); (c) отдельный `LAKEKEEPER_ENCRYPTION_KEY` в `.env` вместо `META_PASSWORD` (рекомендация: да, это изменение `.env`-контракта); (d) строка «DROP TABLE через REST-каталог удаляет файлы» в blast radius `CLAUDE.md` (рекомендация: да).
 
-- [ ] **Шаг 2: compose без переключения**
+- [x] **Шаг 2: compose без переключения**
 
 ```yaml
   lakekeeper-migrate:
@@ -2140,7 +2140,7 @@ git commit -m "oltp: schema evolution at a virtual time, orders gain sales_chann
 
 `.env.example`: `LAKEKEEPER_ENCRYPTION_KEY=change_me`; `scripts/make_env.py` генерирует его как остальные секреты (проверить, как он находит `change_me`). Проверка: `docker compose ... config -q`, затем `docker compose ... --profile rest up -d lakekeeper`, `docker inspect -f '{{.State.Health.Status}}' lakehouse-lakekeeper-1` → `healthy`.
 
-- [ ] **Шаг 3: bootstrap и warehouse (`scripts/lakekeeper/bootstrap.sh`)**
+- [x] **Шаг 3: bootstrap и warehouse (`scripts/lakekeeper/bootstrap.sh`)**
 
 ```bash
 #!/usr/bin/env bash
@@ -2183,7 +2183,7 @@ echo "warehouse lake created"
 
 Проверка: повторный запуск печатает `warehouse lake exists`; `curl -s '127.0.0.1:8181/catalog/v1/config?warehouse=lake'` отдаёт `defaults.prefix`.
 
-- [ ] **Шаг 4: Spark rest-ветка (TDD)**
+- [x] **Шаг 4: Spark rest-ветка (TDD)**
 
 Тест в `test_spark_settings.py` заменяет `test_rest_catalog_is_refused_until_w2_t09`:
 
@@ -2266,7 +2266,7 @@ def build_session(app_name: str, settings: Settings) -> SparkSession:
 
 Если в шаге 1 выбран вариант (b), строки `fs.s3.impl` нет, а `ensure_table` в silver и `DDL` в bronze получают явный `location 's3a://...'`. В compose сервисам `spark-bronze` и `spark-silver` передать `LAKEKEEPER_URI`, `LAKEKEEPER_WAREHOUSE` (у bronze уже есть). Run: `make test`. Expected: PASS.
 
-- [ ] **Шаг 5: регистрация и сверка side-by-side (без переключения)**
+- [x] **Шаг 5: регистрация и сверка side-by-side (без переключения)**
 
 `scripts/lakekeeper/register.sh`:
 
@@ -2305,11 +2305,11 @@ done
 
 Временный `docker/trino/etc/catalog/lake_rest.properties` (rest-конфиг), `docker restart lakehouse-trino-1`, сравнить для всех таблиц `count(*)` и последний `snapshot_id` в `lake` и `lake_rest`. Expected: совпадают. Если не совпали или не прошла регистрация и таймер за 3:00: удалить `lake_rest.properties`, `docker start lakehouse-spark-bronze-1`, записать ADR-005 с причиной, коммит `docs: adr-005, lakekeeper postponed`, задача закрыта.
 
-- [ ] **Шаг 6: переключение (отдельное «ок» владельца)**
+- [x] **Шаг 6: переключение (отдельное «ок» владельца)**
 
 Runbook `docs/runbooks/catalog-cutover.md` (шаги, откат до первого REST-коммита бесплатный, после него откат через `register` в JDBC, это blast radius). После «ок»: `CATALOG_TYPE=rest` в `.env`, `lake.properties` на rest (JDBC-ключи убрать), `lake_rest.properties` удалить, `docker compose ... --profile core --profile query --profile rest up -d spark-bronze trino lakekeeper`. Проверки: `Resuming at batch` в bronze, `make silver` без новых строк (checkpoint silver жив), короткая порция реплея, `bronze_offsets_report` без дублей, `reconcile` ok. `docker stats --no-stream lakehouse-lakekeeper-1` в OPERATIONS.
 
-- [ ] **Шаг 7: документация и коммит**
+- [x] **Шаг 7: документация и коммит**
 
 ADR-005: итог (принят REST с деталями или отложен с причиной), `00-mini-architecture-review.md` §5 версия v0.13.6, OPERATIONS (профиль `rest` теперь в рабочих комбинациях, порт 8181, bootstrap, DROP на REST).
 
@@ -2324,6 +2324,6 @@ git commit -m "lake: lakekeeper rest catalog, tables registered, spark and trino
 
 **Файлы:** `docs/HANDOFF.md`, `docs/planning/00-mini-architecture-review.md` (§6, `docker stats`)
 
-- [ ] **Шаг 1:** `docker stats --no-stream` в RAM-таблицу §6 с датой.
-- [ ] **Шаг 2:** `HANDOFF.md`: состояние задач W2, что живёт в стеке, израсходованный реплей (виртуальное время до и после), подсказка к Modify-гейту W2-T07 (файлы `contracts/silver/orders.json`, `ALTER TABLE lake.silver.orders ADD COLUMN sales_channel string` в Trino или Spark, затем `REPLAY_SCHEMA_EVOLUTION_AT` и проверка SQL), решения, ждущие владельца (раздел 6 спеки), следующий шаг W3.
-- [ ] **Шаг 3:** коммит `docs: handoff after week 2`.
+- [x] **Шаг 1:** `docker stats --no-stream` в RAM-таблицу §6 с датой.
+- [x] **Шаг 2:** `HANDOFF.md`: состояние задач W2, что живёт в стеке, израсходованный реплей (виртуальное время до и после), подсказка к Modify-гейту W2-T07 (файлы `contracts/silver/orders.json`, `ALTER TABLE lake.silver.orders ADD COLUMN sales_channel string` в Trino или Spark, затем `REPLAY_SCHEMA_EVOLUTION_AT` и проверка SQL), решения, ждущие владельца (раздел 6 спеки), следующий шаг W3.
+- [x] **Шаг 3:** коммит `docs: handoff after week 2`.

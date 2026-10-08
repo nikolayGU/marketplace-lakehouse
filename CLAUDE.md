@@ -50,6 +50,7 @@ Marketplace Lakehouse (mini): учебная, но production-like Data Platform
 - Ни один порт на `0.0.0.0`.
 - Перед коммитом: `gitleaks`, нет `.env`, нет данных из `data/raw`, нет имён владельца и работодателей. Репозиторий публичный.
 - Действия из списка blast radius требуют явного «ок» владельца, молчание не «ок»: `docker compose down -v`, `make nuke`, удаление checkpoint или volume, `DROP`, `DELETE`, `TRUNCATE`, `expire_snapshots`, `remove_orphan_files`, изменение retention Kafka, `rm -rf`.
+  - На REST-каталоге (Lakekeeper) файлы таблицы удаляют любой `DROP TABLE` (Spark с `PURGE` и без, Trino, dbt), `CALL system.unregister_table` и REST `DELETE` без `purgeRequested=false`. У таблиц, зарегистрированных из JDBC, это общие файлы. Сюда же: снятие `protected`, `force=true`, смена `delete-profile`, удаление warehouse или namespace с `recursive`.
 
 ## Правила коммитов
 

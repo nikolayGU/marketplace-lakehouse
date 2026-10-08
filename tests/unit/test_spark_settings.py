@@ -13,8 +13,22 @@ def test_unknown_catalog_type_is_refused(monkeypatch: pytest.MonkeyPatch) -> Non
         Settings()
 
 
+def test_empty_catalog_type_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Compose passes ${CATALOG_TYPE} as "" when .env lacks the line: fail, never fall back.
+    monkeypatch.setenv("CATALOG_TYPE", "")
+
+    with pytest.raises(ValidationError):
+        Settings()
+
+
 def test_rest_catalog_is_accepted(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CATALOG_TYPE", "rest")
+
+    assert Settings().catalog_type == "rest"
+
+
+def test_catalog_type_defaults_to_rest(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("CATALOG_TYPE", raising=False)
 
     assert Settings().catalog_type == "rest"
 
@@ -54,8 +68,8 @@ def test_rest_catalog_points_at_lakekeeper_through_hadoop_file_io(
 def test_jdbc_catalog_keeps_its_keys_and_gains_only_the_file_io_pair(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("CATALOG_TYPE", raising=False)
     for key, value in {
+        "CATALOG_TYPE": "jdbc",
         "CATALOG_JDBC_URL": "jdbc:postgresql://meta.test:5432/iceberg_catalog",
         "CATALOG_JDBC_USER": "jdbc-user",
         "CATALOG_JDBC_PASSWORD": "jdbc-secret",

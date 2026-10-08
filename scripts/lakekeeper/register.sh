@@ -3,6 +3,8 @@
 # metadata file, then check that both catalogs point at the same file. Runs on the host, before
 # the cutover, with the Spark writers stopped: a commit on either side forks the two catalogs.
 # Re-running is safe: `overwrite` replaces only Lakekeeper's catalog row, never a file.
+# The cutover runs it first and keeps its `same` lines as the rollback point
+# (docs/runbooks/catalog-cutover.md). A table protect.sh has protected refuses the overwrite (409).
 # Never undo a registration with DROP TABLE (Spark, Trino, dbt) or CALL system.unregister_table
 # through any engine on the REST catalog, or with a REST DELETE: the table's files then get
 # deleted, and those are the JDBC table's files too. Soft delete delays it, except Spark

@@ -2,21 +2,18 @@
 
 Обновляется в конце каждой недели или смыслового блока. Читать первым в каждой сессии.
 
-## Состояние на 08.10.2026, 08:30 (+04)
+## Состояние на 08.10.2026, после переключения каталога
 
-Неделя 2 закрыта по коду, кроме переключения на Lakekeeper (W2-T09, шаги 3-7 раннбука). Отставание от роадмапа около недели.
+Неделя 2 закрыта, включая переключение на Lakekeeper. Отставание от роадмапа около недели.
 
-### Сначала: живой стек в промежуточном состоянии
+### Lakekeeper
 
-Переключение каталога остановлено на шаге 1 раннбука `docs/runbooks/catalog-cutover.md` (файл пока не в git):
+Переключение каталога сделано 08.10.2026: Spark и Trino работают через Lakekeeper. Шаг 1 раннбука `docs/runbooks/catalog-cutover.md` выполнил агент, шаги 3-6 владелец руками, после того как классификатор auto mode агента их заблокировал. Все проверки зелёные, protection стоит на 9 таблицах bronze и silver, числа в ADR-005, раздел «Cutover, 2026-10-08».
 
-- `spark-bronze` **остановлен** с 04:25 UTC 08.10 (шаг 1: writers стоп, `register.sh` 9 из 9 `same`, rc 0). Реплеер не играет, новых событий в Kafka нет, retention 24 ч, поэтому данные не теряются, но bronze стоит.
-- `.env`: `CATALOG_TYPE=jdbc`. Trino работает на JDBC. Lakekeeper healthy, указатели 9 таблиц свежие. Логи шага 1 и `numbers-before.tsv` в `~/lakehouse-cutover/`.
-- Рабочее дерево содержит незакоммиченную подготовку этапа C: `docker/compose.yaml` (Lakekeeper в `core`, `depends_on` на `lakekeeper-bootstrap`), `docker/trino/etc/catalog/lake.properties` **уже на REST**, `.env.example` и умолчание `settings.py` на `rest`, тесты, `scripts/lakekeeper/protect.sh`, раннбук. Ревью подготовки пройдено (GO). Образ `lakehouse/spark:dev` пересобран под это дерево.
-- Шаг 3 (правка `.env` и пересоздание сервисов) и даже `docker start` bronze запретил классификатор auto mode агента. Решение за владельцем, два пути:
-  - **A. Довести переключение** (рекомендую, всё проверено): шаги 3-6 раннбука руками. Затем документация коммита 2 (ADR-005 раздел «Cutover», OPERATIONS, пункт blast radius в `CLAUDE.md` из `design-final.md` (d), README, §5 и §6 `00-mini-architecture-review.md`) и коммит `lake: spark and trino switched to lakekeeper`.
-  - **B. Отложить**: `docker start lakehouse-spark-bronze-1` (bronze продолжит на JDBC, указатели Lakekeeper станут инертны). **Не перезапускать Trino**, пока `lake.properties` в дереве на REST: после рестарта Trino прочтёт устаревшие указатели Lakekeeper. Перед любым рестартом вернуть файл: `git show HEAD:docker/trino/etc/catalog/lake.properties > docker/trino/etc/catalog/lake.properties`.
-- Решения по Lakekeeper (a)-(f) владелец делегировал агенту, итог в `.superpowers/sdd/05-w2-plan/design-final.md` (git-ignored) и в ADR-005 «Side by side, verified 2026-10-08».
+- Бесплатного отката больше нет: первый коммит bronze прошёл через Lakekeeper. JDBC-строки в `iceberg_catalog` держат указатели до переключения, откат только DML владельца по раннбуку.
+- Spark с `CATALOG_TYPE=jdbc` и JDBC-версия `lake.properties` для Trino запрещены вне отката: истории каталогов разойдутся.
+- Коммит `lake: spark and trino switched to lakekeeper`: конфиг, `protect.sh`, раннбук, документация, пункт blast radius в `CLAUDE.md`.
+- Решения (a)-(f) в ADR-005, подробности в `.superpowers/sdd/05-w2-plan/design-final.md` (git-ignored).
 
 ### Задачи
 
@@ -32,7 +29,7 @@
 | W2-T06 `make iceberg-demo` | сделано, abc3aa4 |
 | W2-T07 schema evolution, сторона реплеера | сделано, db3e27f; сторона silver это **Modify-гейт владельца** |
 | W2-T08 гейты Spark и Iceberg | **за владельцем** |
-| W2-T09 Lakekeeper | side by side сделано, 5cf0fec; переключение см. выше |
+| W2-T09 Lakekeeper | сделано: side by side 5cf0fec, переключение 08.10, коммит `lake: spark and trino switched to lakekeeper` |
 
 Цифры прогонов (все в OPERATIONS, ADR-007, ADR-010, ADR-005):
 
@@ -45,17 +42,17 @@
 
 ### Что живёт в стеке
 
-- Запущены: postgres-oltp, postgres-meta, kafka, kafka-connect, minio, trino, lakekeeper. Остановлен: spark-bronze (см. выше). Реплеер не запущен.
-- Реплей: виртуальное время 2026-07-10 10:00, осталось 32 033 события. За неделю 2 потрачено 13 виртуальных дней из 20 (с 2026-06-27).
-- Bronze 543 862 события; silver: orders 94 113, order_items 106 698, payments 98 415, reviews 91 608, customers 99 441, products 32 951, sellers 3 095, quarantine 3.
-- `.env`: новые строки `LAKEKEEPER_ENCRYPTION_KEY` (никогда не менять, им зашифрован S3-ключ warehouse) и `REPLAY_SCHEMA_EVOLUTION_AT=` без inline-комментария (старая форма ломает реплеер).
-- Память (`docker stats`, 08.10): trino 1.0 GiB, kafka 794 MiB, connect 566 MiB, postgres-oltp 236 MiB, minio 225 MiB, postgres-meta 164 MiB, lakekeeper 88 MiB из 256. В RAM-таблицу §6 архитектурного ревью не внесено.
+- Запущены: postgres-oltp, postgres-meta, kafka, kafka-connect, minio, lakekeeper (теперь в `core`), spark-bronze на REST, trino на REST. Реплеер не запущен (порция при переключении была разовой).
+- Реплей: виртуальное время 2026-07-11 09:58 (`make replay-status`), осталось 31 395 событий. Переключение потратило один виртуальный день, за неделю 2 потрачено 14 виртуальных дней из 20 (с 2026-06-27).
+- Silver после переключения, живые строки, равны Postgres (`reconcile` ok): orders 94 406, order_items 106 994, payments 98 716, reviews 91 600, customers 99 441, products 32 951, sellers 3 095. Bronze до переключения 543 862 события, после него плюс один виртуальный день (число не снималось); quarantine до переключения 3.
+- `.env`: `CATALOG_TYPE=rest` (назад только через откат раннбука), `LAKEKEEPER_ENCRYPTION_KEY` (никогда не менять: им зашифрован S3-ключ warehouse, которым Lakekeeper пишет metadata-файлы) и `REPLAY_SCHEMA_EVOLUTION_AT=` без inline-комментария (старая форма ломает реплеер).
+- Память (`docker stats`, 08.10): trino 1.0 GiB, kafka 794 MiB, connect 566 MiB, postgres-oltp 236 MiB, minio 225 MiB, postgres-meta 164 MiB, lakekeeper 91 MiB из 256 после переключения; БД `lakekeeper` 12 MB. Внесено в RAM-таблицу §6 архитектурного ревью.
 
 Проверки: `make lint`, `make test` (115 passed), `make test-spark` (132 passed).
 
 ## Следующие шаги по порядку
 
-1. **Закрыть W2-T09** путём A или B выше. При A после проверок запустить `scripts/lakekeeper/protect.sh` (защита bronze и silver от DROP). Затем отметить чекбоксы задач 1-10 в `docs/planning/05-w2-plan.md` и строку RAM в §6 ревью.
+1. **Lakekeeper через сутки**: сравнить память lakekeeper и размер БД `lakekeeper` с числами в OPERATIONS (bronze коммитит каждые 20 с, метаданные теперь пишутся и в Postgres).
 2. **Гейты владельца**: W1-T08 Kafka, W2-T08 Spark и Iceberg, Modify-гейт W2-T07: добавить `sales_channel` в `contracts/silver/orders.json` (`{"type": ["string", "null"], "x-silver-type": "string"}`), `ALTER TABLE lake.silver.orders ADD COLUMN sales_channel string`, затем порция реплея с `REPLAY_SCHEMA_EVOLUTION_AT` внутри неё и проверка: колонка в Postgres, поле в `after` bronze, значения в silver.
 3. **P0 из аудита: путь с чистого клона.** README «Run» не доводит до данных: нет `make migrate` и `make replay-load`, `make replay` запускает второй реплеер в контейнере, а `oltp-replayer` в `core` играет на полной скорости. Нужен ADR (вынести реплеер в профиль `replay` или старт по явной команде), затем `make bootstrap` и `make verify` (bronze `count > 0`, reconcile). Без этого W3 съест остаток реплея.
 4. **Спека W3** (`superpowers:brainstorming`, потом `writing-plans`, в `docs/planning/`). Решить до кода:
@@ -76,14 +73,14 @@
 
 ## Решения, которые ждут владельца
 
-- Путь A или B для W2-T09 (см. выше) и пункт blast radius в `CLAUDE.md` про DROP на REST-каталоге.
 - Порядок недель 3-6 (A или B) и ADR о профиле реплеера.
 - ADR-021: apache/iceberg#18000, `expire_snapshots` на bronze сломает AvailableNow-чтение silver. Решить до W5.
 - `source_sequence` есть в bronze (ADR-022), но silver его пока не использует: после простоя дольше retention `make cdc-snapshot` не перебивает streamed LSN (ADR-019).
 - MERGE без изменённых строк коммитит снапшот `silver.orders`; лог `events merged` считает входные события, а не изменённые строки.
 - `MODE=restart` в chaos 2a печатает повторы, но не валит сценарий (ADR-007 допускает повторы при медленной остановке).
-- Судьба `iceberg_catalog` (JDBC) после W3: пока это точка отката переключения.
-- S3FileIO и vended credentials в Lakekeeper отдельной задачей (сейчас HadoopFileIO, ключи у клиентов).
+- Судьба JDBC-строк в `iceberg_catalog`: до конца W3 это точка отката переключения (платный откат по раннбуку), потом решить, что с ними делать (удаление в blast radius).
+- S3FileIO и vended credentials в Lakekeeper отдельной задачей. Сейчас HadoopFileIO и ключи у клиентов: HadoopFileIO не реализует `SupportsStorageCredentials`, а для S3FileIO в образе Spark нужен AWS SDK v2. После перехода от `push-s3-delete-disabled: false` зависит работа `expire_snapshots` и `remove_orphan_files` (ADR-005 (b)).
+- dbt-trino `on_table_exists=replace` вместо `rename` теперь важнее: rename на каждом прогоне делает DROP бэкапа, а под soft delete Lakekeeper каждая такая копия живёт 7 дней. Решить в спеке W3.
 - Два анонимных тома от одноразовых контейнеров исследования (удаление в blast radius): `docker volume rm 24fddd5f9b3da04014cbf027b837239460bb1cd4c0ac4b425f927bd7f71f88e2 179eb31fb74b947039c3e78e8d9cecf3380fbe6ee0b32db240ee1ee52333924d`.
 
 ## Мелочи, отложенные в ревью

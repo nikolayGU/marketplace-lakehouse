@@ -174,13 +174,14 @@ services:
     logging: *logging
     networks: [lake]
 
-  # ADR-005: Iceberg REST catalog, side by side with the JDBC catalog until the cutover.
+  # ADR-005: Lakekeeper, the Iceberg REST catalog of Spark and Trino. The JDBC catalog in
+  # postgres-meta is kept as the rollback point (docs/runbooks/catalog-cutover.md).
   # Pinned by digest: a newer image migrates the schema on start and the old one then refuses it,
   # so there is no image rollback.
   # One-shot schema migration of the lakekeeper database; the exit code is the signal.
   lakekeeper-migrate:
     image: quay.io/lakekeeper/catalog:v0.13.6@sha256:d6829722cac0d00dfc5665b0955766387b93ccadd8b1e70e679b49619bc30ea5
-    profiles: [rest]
+    profiles: [core]
     depends_on:
       postgres-meta:
         condition: service_healthy
@@ -202,7 +203,7 @@ services:
   lakekeeper:
     <<: *common
     image: quay.io/lakekeeper/catalog:v0.13.6@sha256:d6829722cac0d00dfc5665b0955766387b93ccadd8b1e70e679b49619bc30ea5
-    profiles: [rest]
+    profiles: [core]
     depends_on:
       lakekeeper-migrate:
         condition: service_completed_successfully
@@ -224,13 +225,14 @@ services:
           memory: 256M
     networks: [lake]
 
-  # One-shot: bootstrap the server and create the warehouse; a re-run changes nothing.
-  # `make lakekeeper-bootstrap` runs it. The Spark image already has bash, curl and python3.
+  # One-shot: bootstrap the server and create the warehouse; a re-run changes nothing. Spark and
+  # Trino wait for it, so it runs on every `up` of them; `make lakekeeper-bootstrap` runs it alone.
+  # The Spark image already has bash, curl and python3.
   lakekeeper-bootstrap:
     image: lakehouse/spark:dev   # built by spark-bronze
     # A local tag only: compose must not pull a lakehouse/spark:dev from Docker Hub.
     pull_policy: never
-    profiles: [rest]
+    profiles: [core]
     depends_on:
       lakekeeper:
         condition: service_healthy
@@ -270,12 +272,15 @@ services:
         condition: service_healthy
       minio-init:
         condition: service_completed_successfully
+      lakekeeper-bootstrap:
+        condition: service_completed_successfully
     command: ["bronze_cdc_ingest"]   # run-job.sh spark-submits spark_jobs/<name>.py
     environment:
       SPARK_MASTER: ${SPARK_MASTER}
       SPARK_DRIVER_MEMORY: ${SPARK_DRIVER_MEMORY}
       KAFKA_BOOTSTRAP: kafka:9092
-      CATALOG_TYPE: ${CATALOG_TYPE}   # jdbc (week 1) | rest (after W2-T09)
+      CATALOG_TYPE: ${CATALOG_TYPE}   # rest; jdbc only through docs/runbooks/catalog-cutover.md
+      # CATALOG_JDBC_* and CATALOG_WAREHOUSE serve CATALOG_TYPE=jdbc only: kept for the rollback.
       CATALOG_JDBC_URL: jdbc:postgresql://postgres-meta:5432/${CATALOG_DB}
       CATALOG_JDBC_USER: ${META_USER}
       CATALOG_JDBC_PASSWORD: ${META_PASSWORD}
@@ -313,6 +318,7 @@ services:
   # One-shot: AvailableNow reads what bronze committed since the last run, merges it, exits.
   # `make silver` runs it by hand; Airflow schedules it from week 3. The exit code is the health
   # signal and a restart policy would loop it, so it has neither (same as minio-init).
+  # `make silver` uses --no-deps, so Lakekeeper must already run (spark-bronze's up starts it).
   spark-silver:
     image: lakehouse/spark:dev   # built by spark-bronze
     # A local tag only: compose must not pull a lakehouse/spark:dev from Docker Hub.
@@ -323,6 +329,8 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
+      lakekeeper-bootstrap:
+        condition: service_completed_successfully
     command: ["silver_upsert"]
     environment:
       SPARK_MASTER: ${SPARK_MASTER}
@@ -393,9 +401,12 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
+      lakekeeper-bootstrap:
+        condition: service_completed_successfully
     # jvm.config cannot read the environment, so the heap goes to the launcher as a JVM option.
     command: ["/usr/lib/trino/bin/run-trino", "-J-Xmx${TRINO_XMX:?TRINO_XMX must be set}"]
     environment:
+      # CATALOG_DB, META_* and S3_BUCKET serve only the JDBC lake.properties of the rollback.
       CATALOG_DB: ${CATALOG_DB}
       META_USER: ${META_USER}
       META_PASSWORD: ${META_PASSWORD}
@@ -406,7 +417,8 @@ services:
       S3_SECRET_KEY: ${S3_SECRET_KEY}
       S3_BUCKET: ${S3_BUCKET}
     volumes:
-      # catalog/lake.properties reads the JDBC catalog in postgres-meta, the one Spark writes.
+      # catalog/lake.properties is Lakekeeper, the catalog Spark writes. Trino reads catalog files
+      # only at startup: an edit there needs `docker restart lakehouse-trino-1`.
       - ./trino/etc:/etc/trino:ro
     ports:
       - "${BIND_IP}:8080:8080"
@@ -427,7 +439,7 @@ services:
   postgres-meta:
     <<: *common
     image: postgres:17
-    profiles: [core, orchestrate, bi]   # core: JDBC iceberg catalog (and lakekeeper backend)
+    profiles: [core, orchestrate, bi]   # core: lakekeeper's database and the JDBC rollback catalog
     environment:
       POSTGRES_USER: ${META_USER}
       POSTGRES_PASSWORD: ${META_PASSWORD}

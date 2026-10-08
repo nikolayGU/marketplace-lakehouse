@@ -58,9 +58,9 @@ skill gap this project targets. See DECISIONS.md.
 
 ## Resource model
 
-Compose profiles let the platform run in pieces: `core` always, `query` almost always,
-`orchestrate` only while batch work is being developed or demoed, `obs` from week 4, `rest`
-once the REST catalog is adopted, `bi` only if there is time left. Every container has a memory
+Compose profiles let the platform run in pieces: `core` always (the REST catalog Lakekeeper
+included), `query` almost always, `orchestrate` only while batch work is being developed or
+demoed, `obs` from week 4, `bi` only if there is time left. Every container has a memory
 limit, a real healthcheck, `restart: unless-stopped`, log rotation, and ports bound to
 `127.0.0.1` only. WSL2 is capped at 12 GB.
 
