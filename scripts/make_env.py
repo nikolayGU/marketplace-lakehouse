@@ -4,6 +4,7 @@ Refuses to overwrite an existing .env: regenerating secrets would lock the runni
 containers out of their own volumes (postgres passwords, minio keys).
 """
 
+import base64
 import secrets
 import sys
 from pathlib import Path
@@ -11,6 +12,14 @@ from pathlib import Path
 EXAMPLE = Path(".env.example")
 TARGET = Path(".env")
 PLACEHOLDER = "change_me"
+# Airflow decrypts connections with Fernet, which accepts only urlsafe base64 of 32 bytes.
+FERNET_KEY = "AIRFLOW_FERNET_KEY"
+
+
+def secret_for(key: str) -> str:
+    if key == FERNET_KEY:
+        return base64.urlsafe_b64encode(secrets.token_bytes(32)).decode()
+    return secrets.token_urlsafe(24)
 
 
 def render(example: str) -> tuple[str, int]:
@@ -20,7 +29,7 @@ def render(example: str) -> tuple[str, int]:
     for line in example.splitlines():
         key, sep, value = line.partition("=")
         if sep and value.split("#", 1)[0].strip() == PLACEHOLDER:
-            line = f"{key}={secrets.token_urlsafe(24)}"
+            line = f"{key}={secret_for(key)}"
             generated += 1
         lines.append(line)
     return "\n".join(lines) + "\n", generated

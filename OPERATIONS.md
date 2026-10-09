@@ -238,6 +238,16 @@ and it writes every new metadata file with them, so commits depend on the key. S
 credential again (`POST /management/v1/warehouse/{id}/storage-credential`) should repair that; it
 is untested.
 
+Airflow Fernet key. A `.env` from `make secrets` before the fix holds a 32-character
+`AIRFLOW_FERNET_KEY`, and Airflow accepts only urlsafe base64 of 32 bytes (44 characters).
+`make secrets` never rewrites an existing `.env`, so replace that one line from the repo root
+before Airflow first starts; the command prints nothing. Once Airflow has stored connections or
+variables, a new key makes them unreadable.
+
+```
+sed -i "s|^AIRFLOW_FERNET_KEY=.*|AIRFLOW_FERNET_KEY=$(python3 -c 'import base64, secrets; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())')|" .env
+```
+
 After the cutover. Never start a Spark job with `CATALOG_TYPE=jdbc` (in `.env`, as
 `-e CATALOG_TYPE=jdbc` or exported in a shell), and never give Trino the JDBC `lake.properties`
 back, except through the runbook's rollback. The JDBC rows in `iceberg_catalog` still point at

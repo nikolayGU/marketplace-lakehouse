@@ -1,9 +1,13 @@
+import base64
 import stat
+import string
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+
+from scripts.make_env import render
 
 REPO = Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "scripts" / "make_env.py"
@@ -69,3 +73,20 @@ def test_does_not_overwrite_existing_env(workdir: Path) -> None:
     assert result.returncode == 1
     assert "not overwriting" in result.stderr
     assert (workdir / ".env").read_text() == "OLTP_PASSWORD=keep_me\n"
+
+
+def test_airflow_fernet_key_is_32_urlsafe_base64_bytes() -> None:
+    text, _ = render("AIRFLOW_FERNET_KEY=change_me\n")
+
+    key = parse(text)["AIRFLOW_FERNET_KEY"]
+    assert len(base64.urlsafe_b64decode(key)) == 32
+
+
+def test_other_secrets_keep_the_token_urlsafe_format() -> None:
+    text, generated = render("OLTP_PASSWORD=change_me\nAIRFLOW_JWT_SECRET=change_me\n")
+
+    env = parse(text)
+    assert generated == 2
+    for key in ("OLTP_PASSWORD", "AIRFLOW_JWT_SECRET"):
+        assert len(env[key]) == 32
+        assert set(env[key]) <= set(string.ascii_letters + string.digits + "-_")
