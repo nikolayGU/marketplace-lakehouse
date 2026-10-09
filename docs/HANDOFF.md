@@ -55,7 +55,7 @@
 1. **Lakekeeper через сутки**: сравнить память lakekeeper и размер БД `lakekeeper` с числами в OPERATIONS (bronze коммитит каждые 20 с, метаданные теперь пишутся и в Postgres).
 2. **Гейты владельца**: W1-T08 Kafka, W2-T08 Spark и Iceberg, Modify-гейт W2-T07: добавить `sales_channel` в `contracts/silver/orders.json` (`{"type": ["string", "null"], "x-silver-type": "string"}`), `ALTER TABLE lake.silver.orders ADD COLUMN sales_channel string`, затем порция реплея с `REPLAY_SCHEMA_EVOLUTION_AT` внутри неё и проверка: колонка в Postgres, поле в `after` bronze, значения в silver.
 3. **P0 из аудита: путь с чистого клона.** README «Run» не доводит до данных: нет `make migrate` и `make replay-load`, `make replay` запускает второй реплеер в контейнере, а `oltp-replayer` в `core` играет на полной скорости. Нужен ADR (вынести реплеер в профиль `replay` или старт по явной команде), затем `make bootstrap` и `make verify` (bronze `count > 0`, reconcile). Без этого W3 съест остаток реплея.
-4. **Спека W3** (`superpowers:brainstorming`, потом `writing-plans`, в `docs/planning/`). Решить до кода:
+4. **Спека W3**: черновик `docs/planning/07-w3-spec.md` от 09.10 по стандарту `06-spec-standard.md`, вопросы ниже и путь с чистого клона (п. 3, карточка W3-T00) сведены в решения D1-D13, ждут «ок» владельца. Исходный список:
    - грейн клиента `customer_unique_id` (89 234), а не `customer_id` (на заказ);
    - 738 заказов без позиций, 277 заказов с расхождением payments и items (тест `warn`, не `error`);
    - фильтр soft delete по моделям, а не одним правилом в staging;
