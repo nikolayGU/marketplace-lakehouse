@@ -37,6 +37,11 @@ clock as real transactions with injectable late, duplicate and schema-change eve
 Consequences: realistic seasonality and categories; a replayer service to maintain; dataset
 license must be checked before shipping a sample.
 
+`REPLAY_DATA` (`.env`, `raw` or `sample`, default `raw`) picks the directory under `DATA_DIR` that
+`make replay-load` reads: the full download in `data/raw` or the committed 2 000-order slice in
+`data/sample`, for a fresh clone and CI smoke. Both come from `Settings`, so `.env` applies without
+exporting it into the shell.
+
 ## ADR-004 Object storage
 
 Context: MinIO stopped publishing community images and removed the web console. Checked on

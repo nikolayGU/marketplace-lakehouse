@@ -1,6 +1,8 @@
 """Configuration for the OLTP side: everything comes from the environment or `.env`."""
 
 from datetime import datetime
+from pathlib import Path
+from typing import Literal
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -36,6 +38,10 @@ class Settings(BaseSettings):
     replay_duplicate_ratio: float = 0.0
     # Virtual time at which evolution/003 is applied; empty means never.
     replay_schema_evolution_at: datetime | None = None
+
+    data_dir: Path = Path("./data")
+    # Subdirectory of data_dir the loader reads: the full Olist download or the committed sample.
+    replay_data: Literal["raw", "sample"] = "raw"
 
     http_port: int = 8000
     # How many due events one pass of the loop claims. Bounds memory and transaction size.

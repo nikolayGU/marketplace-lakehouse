@@ -7,7 +7,6 @@ stays staged and becomes the schedule the replayer works through.
 """
 
 import csv
-import os
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -112,8 +111,8 @@ where substr(md5(r.review_id), 1, 2) = '00'
 )
 
 
-def raw_dir() -> Path:
-    return Path(os.environ.get("DATA_DIR", "./data")) / "raw"
+def raw_dir(settings: Settings) -> Path:
+    return settings.data_dir / settings.replay_data
 
 
 Conn = state.Conn
@@ -197,7 +196,7 @@ def promote_initial(conn: Conn, cutoff: datetime) -> dict[str, int]:
 
 def main() -> int:
     settings = Settings()
-    directory = raw_dir()
+    directory = raw_dir(settings)
     missing = [n for _, n in (*REFERENCE, *HISTORY) if not (directory / n).is_file()]
     if missing:
         print(f"missing in {directory}: {', '.join(missing)}; run `make data`", file=sys.stderr)
