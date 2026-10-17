@@ -1,4 +1,5 @@
 .env
+.verify-stamp
 data/raw/
 data/checkpoints/
 *.zip

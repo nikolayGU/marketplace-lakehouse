@@ -20,14 +20,15 @@ bronze, Spark silver (`MERGE`), Iceberg в Lakekeeper, dbt на Trino (gold). К
 |---|---|
 | `make start` | `core` без контейнера реплея плюс `trino` |
 | `make verify` | ждёт bronze, один `make silver`, offsets Kafka в bronze, `reconcile`, 7 таблиц в bronze; последняя строка `verify ok` |
-| `make verify-fast` | цели нет. Аналог без записи: `bash -c '. scripts/chaos/lib.sh && bronze_caught_up && bronze_offsets_ok && reconcile'` |
-| `bash -c '. scripts/chaos/lib.sh && reconcile'` | Postgres против живых строк silver по 7 таблицам: количество, md5 набора PK, суммы decimal |
+| `make verify-fast` | то же без `make silver`: только чтение, в lake ничего не пишет |
+| `make reconcile` | Postgres против живых строк silver по 7 таблицам: количество, md5 набора PK, суммы decimal |
 | `make dbt-build` | seed, run, test в `lake.gold` |
 | `make lint`, `make test` | ruff, mypy, yamllint, sqlfluff, compose config; unit-тесты |
 | `make test-spark`, `make dbt-parse` | Spark-тесты в образе; dbt без хранилища |
 
 `make verify` пишет в silver, только если в bronze есть снапшоты, которых silver ещё не видел
-(после реплея). Тогда это запись в silver: нужен «ок».
+(после реплея). Тогда это запись в silver: нужен «ок». Оба `verify` при успехе пишут
+`.verify-stamp`: режим и git tree id рабочего дерева (`scripts/agent_state.py`).
 
 ## Цикл
 
