@@ -2,6 +2,47 @@
 
 Обновляется в конце каждой недели или смыслового блока. Читать первым в каждой сессии.
 
+## Состояние на 17.10.2026, конец сессии
+
+Аудит проекта, путь с чистого клона (W3-T00) и ядро dbt (W3-T01) сделаны. Следующая задача W3-T02, витрины: стартовый промпт в `docs/NEXT_SESSION.md`, правила агентов в `AGENTS.md` и `docs/agent-rules.md`.
+
+### Что сделано
+
+| Коммит | Что |
+|---|---|
+| `846429b docs: idle stack checks of 2026-10-17, adr-020 reconcile wording` | проверки на простое (раздел ниже), формулировка ADR-020 |
+| `afa0584 infra: make start, bootstrap, verify and replay-burst` | W3-T00; healthcheck реплеера без curl (D16); `reconcile` по количеству, набору PK и суммам decimal во всех 7 таблицах (D17, `scripts/reconcile_sql.py`); README и OPERATIONS описывают реальный путь запуска; ADR-016 |
+| `59dec70 dbt: project, staging and core models` | W3-T01: `lake.gold`, 7 staging views, `int_orders_enriched`, `fct_orders`, `fct_order_items`, `dim_customers`, `dim_products`, `dim_sellers`, seed `category_translation` |
+
+### Стек на конец сессии
+
+- Запущены `make start`: postgres-oltp, postgres-meta, kafka, kafka-connect, minio, lakekeeper, spark-bronze, trino; рестартов и OOM нет. Контейнера реплея нет.
+- Реплей не тратился: `virtual_now` 2026-07-11 09:58:25, как 08.10. Бюджет W3 по D2 (10 виртуальных дней) не начат.
+- Bronze и silver без новых коммитов с 2026-10-08 04:36 UTC; `make verify` в этой сессии ничего в silver не записал (снапшоты silver до и после те же).
+- Gold: namespace `lake.gold` создан W3-T01; soft-deleted таблиц в Lakekeeper нет.
+- Одноразовый проект `lakehouse-fresh` (проверка W3-T00) удалён вместе с томами, с «ок» владельца.
+
+### Проверки 17.10.2026, после `make dbt-build`
+
+| Что | Результат |
+|---|---|
+| `make dbt-build`, первый и второй прогон | `PASS=51 WARN=0 ERROR=0 SKIP=0 TOTAL=51` оба раза |
+| `fct_orders` против `silver.orders` | 94 406 = 94 406 живых строк |
+| `dim_customers` против `customer_unique_id` живых заказов | 91 259 = 91 259 |
+| Заказы без живых позиций | 765: 735 без позиций вообще, 30 потеряли все при отмене |
+| Второй прогон без DROP | снапшотов `fct_orders` 1 → 2 (CREATE OR REPLACE, D6), `category_translation` 2 → 4 (TRUNCATE и INSERT, D14), в seed 71 строка, soft-deleted пуст |
+| `make verify` после dbt | 7 из 7 таблиц `rows ok`, `keys ok`, суммы ok (`order_items` 12 917 340.13 и 2 137 203.35, `payments` 15 218 867.61), `verify ok` |
+| `make lint`, `make test`, `make dbt-parse` | зелёные; 135 passed, 62 skipped |
+
+Проверки на простое, до реплея и до dbt, в разделе «Проверки 17.10.2026, на простое, до реплея» ниже.
+
+### Открытые вопросы
+
+- **Сдвигает ли heartbeat Debezium слот без изменений в `shop`: не определено.** На простое WAL не пишется вообще, сравнивать нечего. Проверять во время порции реплея: `confirmed_flush_lsn` против `pg_current_wal_lsn()` дважды с паузой.
+- **Retention Kafka 24 ч против простоя Spark.** Если bronze стоит дольше 24 ч, а источник пишет, непрочитанное удаляется, `failOnDataLoss=true` (`bronze_cdc_ingest.py:134`) роняет запрос, Docker перезапускает его по кругу (OPERATIONS.md, Bronze ingest; `docs/runbooks/spark-stalled.md`). Выход только удаление checkpoint (blast radius) или правка кода; `make cdc-snapshot` не чинит ключи с LSN в silver и не возвращает удаления (ADR-019). Если источник молчит, потерь нет: retention удаляет только прочитанное, это видно сейчас. Простой реплеера безопасен: часы продолжают с `replay.state.virtual_now`. Выбор `failOnDataLoss=true` и цикл рестартов не записаны ни в одном ADR, ADR-003 есть только строкой индекса, Consequences ADR-019 («no blast radius») обещают больше, чем путь даёт. Решение за владельцем.
+- **dbt-core 1.10.23 печатает «This version of dbt is deprecated».** Версии закреплены решениями W3 (`uv.lock`); обновлять или нет, решает владелец.
+- **765 заказов без живых позиций** (735 без позиций вообще, 30 потеряли все при отмене): в `mart_daily_sales` по D15 735 идут в штат `unknown`; порог и формулировка теста аномалии в W3-T03.
+
 ## Состояние на 08.10.2026, после переключения каталога
 
 Неделя 2 закрыта, включая переключение на Lakekeeper. Отставание от роадмапа около недели.
@@ -30,7 +71,8 @@
 | W2-T07 schema evolution, сторона реплеера | сделано, db3e27f; сторона silver это **Modify-гейт владельца** |
 | W2-T08 гейты Spark и Iceberg | **за владельцем** |
 | W2-T09 Lakekeeper | сделано: side by side 5cf0fec, переключение 08.10, коммит `lake: spark and trino switched to lakekeeper` |
-| W3-T00 путь с чистого клона | сделано 2026-10-17: `make bootstrap` на сэмпле 4 мин при собранных образах (повтор 75 с), холодная сборка образа Spark ещё около 80 с при скачанном базовом образе; healthcheck реплеера без curl (D16), `reconcile` по ключам и суммам (D17) |
+| W3-T00 путь с чистого клона | сделано 2026-10-17, afa0584: `make bootstrap` на сэмпле 4 мин при собранных образах (повтор 75 с), холодная сборка образа Spark ещё около 80 с при скачанном базовом образе; healthcheck реплеера без curl (D16), `reconcile` по ключам и суммам (D17) |
+| W3-T01 dbt: проект, staging, ядро | сделано 2026-10-17, 59dec70: 51 тест PASS, `fct_orders` равен живым строкам silver, повторный прогон без DROP |
 
 Цифры прогонов (все в OPERATIONS, ADR-007, ADR-010, ADR-005):
 
@@ -83,7 +125,7 @@ docker compose --env-file .env -f docker/compose.yaml exec -T trino trino --cata
 
 1. **Lakekeeper через сутки**: сравнить память lakekeeper и размер БД `lakekeeper` с числами в OPERATIONS (bronze коммитит каждые 20 с, метаданные теперь пишутся и в Postgres).
 2. **Гейты владельца**: W1-T08 Kafka, W2-T08 Spark и Iceberg, Modify-гейт W2-T07: добавить `sales_channel` в `contracts/silver/orders.json` (`{"type": ["string", "null"], "x-silver-type": "string"}`), `ALTER TABLE lake.silver.orders ADD COLUMN sales_channel string`, затем порция реплея с `REPLAY_SCHEMA_EVOLUTION_AT` внутри неё и проверка: колонка в Postgres, поле в `after` bronze, значения в silver.
-3. **P0 из аудита: путь с чистого клона.** README «Run» не доводит до данных: нет `make migrate` и `make replay-load`, `make replay` запускает второй реплеер в контейнере, а `oltp-replayer` в `core` играет на полной скорости. Нужен ADR (вынести реплеер в профиль `replay` или старт по явной команде), затем `make bootstrap` и `make verify` (bronze `count > 0`, reconcile). Без этого W3 съест остаток реплея.
+3. **Сделано 17.10 (W3-T00, afa0584).** Было: P0 из аудита, путь с чистого клона. README «Run» не доводит до данных: нет `make migrate` и `make replay-load`, `make replay` запускает второй реплеер в контейнере, а `oltp-replayer` в `core` играет на полной скорости. Нужен ADR (вынести реплеер в профиль `replay` или старт по явной команде), затем `make bootstrap` и `make verify` (bronze `count > 0`, reconcile). Без этого W3 съест остаток реплея.
 4. **Спека W3**: `docs/planning/07-w3-spec.md` от 09.10 по стандарту `06-spec-standard.md`, вопросы ниже и путь с чистого клона (п. 3, карточка W3-T00) сведены в решения D1-D13; вместе с D14 и D15 приняты владельцем 09.10. План для исполнителей по задачам: `docs/planning/08-w3-plan/`, начинать с W3-T00. Исходный список:
    - грейн клиента `customer_unique_id` (89 234), а не `customer_id` (на заказ);
    - 738 заказов без позиций, 277 заказов с расхождением payments и items (тест `warn`, не `error`);
@@ -93,7 +135,7 @@ docker compose --env-file .env -f docker/compose.yaml exec -T trino trino --cata
    - dbt-trino `on_table_exists=replace` вместо `rename`: rename это DROP бэкапа на каждом прогоне, а под soft delete Lakekeeper ещё и 7 дней копии;
    - Airflow: латентный баг `AIRFLOW_FERNET_KEY` (32 символа, Fernet требует 44), DockerOperator с docker.sock против `compose run` (ADR), pool на 1 слот для `silver_upsert` и optimize (ADR-010);
    - две метрики дублей: повтор LSN (транспорт) и `before = after` (источник).
-5. **W3**: dbt gold (W3-T01..T03), профиль `orchestrate` (нет `airflow/Dockerfile` и DAG), DAG (W3-T05).
+5. **W3**: dbt gold (W3-T01 сделан 17.10, дальше T02 и T03), профиль `orchestrate` (нет `airflow/Dockerfile` и DAG), DAG (W3-T05).
 6. **W4**: в `observability/` нет `prometheus.yml`, правил алертов, provisioning Grafana; chaos 5-8; `StreamingQueryListener`.
 7. **W5**: stateful job, CI (`make test-spark` в CI, `uv sync --locked`, digest образов), smoke, reconciliation, maintenance. Ограничения: `expire_snapshots` на bronze запрещён до решения по apache/iceberg#18000 (ADR-021); `metadata.json` bronze копятся; MERGE без изменений всё равно коммитит снапшот `silver.orders`.
 8. **W6 и витрина** (аудит предлагает дешёвую часть раньше): честный README со статусом done/measured/planned и ссылками на доказательства, диаграмма в `docs/img/`, страница доказательств, 3 бизнес-SQL на gold, `interview-notes.md`.
@@ -102,14 +144,14 @@ docker compose --env-file .env -f docker/compose.yaml exec -T trino trino --cata
 
 ## Решения, которые ждут владельца
 
-- Порядок недель 3-6 (A или B) и ADR о профиле реплеера.
+- Порядок недель 3-6 (A или B). ADR о реплеере принят: ADR-016, `make start`.
 - ADR-021: apache/iceberg#18000, `expire_snapshots` на bronze сломает AvailableNow-чтение silver. Решить до W5.
 - `source_sequence` есть в bronze (ADR-022), но silver его пока не использует: после простоя дольше retention `make cdc-snapshot` не перебивает streamed LSN (ADR-019).
 - MERGE без изменённых строк коммитит снапшот `silver.orders`; лог `events merged` считает входные события, а не изменённые строки.
 - `MODE=restart` в chaos 2a печатает повторы, но не валит сценарий (ADR-007 допускает повторы при медленной остановке).
 - Судьба JDBC-строк в `iceberg_catalog`: до конца W3 это точка отката переключения (платный откат по раннбуку), потом решить, что с ними делать (удаление в blast radius).
 - S3FileIO и vended credentials в Lakekeeper отдельной задачей. Сейчас HadoopFileIO и ключи у клиентов: HadoopFileIO не реализует `SupportsStorageCredentials`, а для S3FileIO в образе Spark нужен AWS SDK v2. После перехода от `push-s3-delete-disabled: false` зависит работа `expire_snapshots` и `remove_orphan_files` (ADR-005 (b)).
-- dbt-trino `on_table_exists=replace` вместо `rename` теперь важнее: rename на каждом прогоне делает DROP бэкапа, а под soft delete Lakekeeper каждая такая копия живёт 7 дней. Решить в спеке W3.
+- dbt-trino `on_table_exists=replace` вместо `rename`: решено (D6), работает с W3-T01, повторный прогон без DROP.
 - Два анонимных тома от одноразовых контейнеров исследования (удаление в blast radius): `docker volume rm 24fddd5f9b3da04014cbf027b837239460bb1cd4c0ac4b425f927bd7f71f88e2 179eb31fb74b947039c3e78e8d9cecf3380fbe6ee0b32db240ee1ee52333924d`.
 
 ## Мелочи, отложенные в ревью
