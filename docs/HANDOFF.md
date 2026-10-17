@@ -30,6 +30,7 @@
 | W2-T07 schema evolution, сторона реплеера | сделано, db3e27f; сторона silver это **Modify-гейт владельца** |
 | W2-T08 гейты Spark и Iceberg | **за владельцем** |
 | W2-T09 Lakekeeper | сделано: side by side 5cf0fec, переключение 08.10, коммит `lake: spark and trino switched to lakekeeper` |
+| W3-T00 путь с чистого клона | сделано 2026-10-17: `make bootstrap` на сэмпле 4 мин при собранных образах (повтор 75 с), холодная сборка образа Spark ещё около 80 с при скачанном базовом образе; healthcheck реплеера без curl (D16), `reconcile` по ключам и суммам (D17) |
 
 Цифры прогонов (все в OPERATIONS, ADR-007, ADR-010, ADR-005):
 

@@ -1,6 +1,15 @@
 # scripts
 
 - `make_env.py`: generates `.env`.
+- `bootstrap.sh` (W3-T00, `make bootstrap`): fresh clone to verified data; start, migrate,
+  connector, load unless a replay state exists, verify, protect. Safe to re-run, deletes nothing.
+- `verify.sh` (W3-T00, `make verify`): waits for bronze to catch up with Kafka, runs one silver
+  merge, checks Kafka offsets in bronze, silver against Postgres and all seven tables in bronze;
+  prints `verify ok`. Refuses while `airflow-scheduler` runs or a replayer plays.
+- `replay-burst.sh` (W3-T00, `make replay-burst SECONDS=<n> [SPEED=720]`): plays `n` real
+  seconds of the replay schedule on the host, prints the virtual clock before and after.
+- `reconcile_sql.py`: the Postgres and Trino queries `reconcile` (`chaos/lib.sh`) runs per silver
+  contract: live row count, md5 of the sorted primary keys, sum of every decimal column.
 - `fetch_data.py` (W1-T03): downloads Olist into `data/raw` via Kaggle CLI or explains manual download.
 - `chaos/<name>.sh`: failure scenarios, one per file, each prints the verification SQL at the end.
 - `make iceberg-demo` is not a script here: it runs `streaming/spark_jobs/iceberg_demo.py`.

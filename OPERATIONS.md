@@ -4,22 +4,24 @@
 
 | Situation | Command | RAM (limits) |
 |---|---|---|
-| Daily work on ingestion | `make up PROFILE=core,query` | ~11 GB limits, ~7 GB real |
-| Working on dbt / Airflow | `make up PROFILE=core,query,orchestrate` (Trino `Xmx` drops to 2g via `TRINO_XMX`); stop `orchestrate` when not working on batch | ~13 GB limits, ~9 GB real |
-| Full pipeline with monitoring | `make up PROFILE=core,query,orchestrate,obs` | ~14 GB limits, ~10 GB real |
+| Daily work on ingestion | `make start` | ~11 GB limits, ~7 GB real |
+| Working on dbt / Airflow | `make start && make up PROFILE=orchestrate` (Trino `Xmx` drops to 2g via `TRINO_XMX`); stop `orchestrate` when not working on batch | ~13 GB limits, ~9 GB real |
+| Full pipeline with monitoring | `make start && make up PROFILE=orchestrate,obs` | ~14 GB limits, ~10 GB real |
 | Demo dashboard (optional Superset) | `make down PROFILE=orchestrate && make up PROFILE=bi` | swap orchestrate for bi |
 | Debugging Kafka visually | `make up PROFILE=tools` for 15 minutes, then `make down PROFILE=tools` | +0.4 GB |
 
 Never start `orchestrate` and `bi` together. Never start all profiles.
 
 `core` includes Lakekeeper, the Iceberg catalog, since the cutover on 2026-10-08; there is no
-`rest` profile any more. Both images in `core` (`lakehouse/replayer:dev`, `lakehouse/spark:dev`)
-are built by `make up`. To work on one service without the replayer playing, start it by name
-(Spark and Trino bring Lakekeeper up first):
-
-```
-docker compose --env-file .env -f docker/compose.yaml --profile core up -d spark-bronze
-```
+`rest` profile any more. `make start` brings up `core` without `oltp-replayer`, plus `trino`: it
+names `spark-bronze kafka-connect trino`, and their `depends_on` pull in the rest of `core`
+(ADR-016). `make up` refuses any `PROFILE` that contains `core`, because that would start the
+replayer container, which plays at `REPLAY_SPEED` (2880, one virtual day per 30 s) until stopped.
+The rest of the history is a budget for the remaining weeks (D2 in
+`docs/planning/07-w3-spec.md`), so traffic comes in bursts from the host:
+`make replay-burst SECONDS=<n>` plays `n` real seconds at 720x and stops. `make replay-live`
+starts the container on purpose, for a continuous demo; stop it with
+`docker compose --env-file .env -f docker/compose.yaml stop oltp-replayer`.
 
 ## Ports (all on 127.0.0.1)
 
@@ -43,13 +45,31 @@ docker compose --env-file .env -f docker/compose.yaml --profile core up -d spark
 
 ## Daily commands
 
-First run, source side:
+First run, from a fresh clone:
 
 ```
-make data            # download Olist into data/raw
-make migrate         # create schema shop
-make replay-load     # shift dates onto today, load the initial share, build the schedule
-make replay-start    # play the rest on the virtual clock (REPLAY_SPEED, default 1 day / 30 s)
+make secrets         # .env with generated passwords; REPLAY_DATA=sample skips the download
+make data            # download Olist into data/raw (not needed with REPLAY_DATA=sample)
+make bootstrap       # start, migrate, connector, replay-load, verify, protect; safe to re-run
+```
+
+`make bootstrap` runs, in order: `make start`; a wait of up to 5 minutes for `spark-bronze`,
+`kafka-connect` and `trino` to turn healthy; `make migrate`; `connect/register.sh`;
+`make replay-load` unless a replay state exists (`replay state exists, load skipped`);
+`make verify`; `scripts/lakekeeper/protect.sh`. None of the steps deletes anything. From a fresh
+clone on the sample it took 4 minutes with the images built, a re-run 75 seconds; the first build
+of the Spark image adds about 80 seconds with its base image already pulled (2026-10-17).
+
+`make verify` refuses (exit 2) while `airflow-scheduler` runs or a replayer answers on port 8000.
+Otherwise it waits up to `VERIFY_WAIT` seconds (default 900) for bronze to catch up with Kafka,
+runs one silver merge, and checks that every Kafka offset is in bronze exactly once, that live
+silver rows equal Postgres for all seven tables (row count, set of primary keys, sum of every
+decimal column; `reconcile`), and that all seven tables reached bronze. The last line is
+`verify ok` or `verify failed: <reason>`.
+
+```
+make replay-burst SECONDS=60   # about 12 virtual hours at 720x; prints virtual_now before and after
+make replay-start              # plays until ctrl-c at REPLAY_SPEED (1 day / 30 s): spends the budget
 ```
 
 `replay-load` refuses to touch non-empty tables. Starting over means `make replay-reset`, which
@@ -220,7 +240,7 @@ docker stats --no-stream lakehouse-lakekeeper-1
 
 `make lakekeeper-bootstrap` is safe to re-run: the second time it prints `warehouse lake exists`
 and changes nothing, since it never updates an existing warehouse. It runs in
-`lakehouse/spark:dev` with `pull_policy: never`, so build that image first (`make up` does);
+`lakehouse/spark:dev` with `pull_policy: never`, so build that image first (`make start` does);
 otherwise compose stops with `No such image`.
 
 Encryption key. `LAKEKEEPER_ENCRYPTION_KEY` encrypts the warehouse's S3 keys inside the
@@ -620,5 +640,5 @@ from silver."orders$snapshots" order by committed_at desc limit 2;
 ## Backup
 
 Local laptop, nothing irreplaceable: the dataset is re-downloadable, the platform is
-re-creatable from the repo. `make nuke && make up && make replay` is the restore procedure and
-is itself a test that the repo is complete.
+re-creatable from the repo. `make nuke && make bootstrap` is the restore procedure and is itself
+a test that the repo is complete.

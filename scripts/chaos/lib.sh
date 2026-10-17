@@ -45,6 +45,13 @@ run_silver() {
 
 healthy() { [ "$(docker inspect -f '{{.State.Health.Status}}' "$1" 2>/dev/null)" = healthy ]; }
 
+# service_healthy <service>: the container of a compose service reports healthy. Looked up by id,
+# so it works under any COMPOSE_PROJECT_NAME (a fresh clone runs as lakehouse-fresh).
+service_healthy() {
+  local id
+  id=$("${COMPOSE[@]}" --profile '*' ps -q "$1") && [ -n "$id" ] && healthy "$id"
+}
+
 # replay_burst <real seconds> [VAR=value ...]: play the schedule on the host, then stop. The
 # replayer resumes from its saved virtual clock, so a burst spends only what it plays. It never
 # exits by itself, so any status but timeout's 124 is a failure and shows the log tail.
@@ -62,6 +69,12 @@ replay_burst() {
     return 1
   fi
   rm -f "$log"
+}
+
+# The replayer's virtual clock; fails when there is no replay state (`replayer status` exits 1).
+virtual_now() {
+  (cd "$ROOT" && PYTHONPATH=oltp .venv/bin/python -m replayer status) |
+    python3 -c 'import json, sys; print(json.load(sys.stdin)["virtual_now"])'
 }
 
 # Returns 2, so a script under set -e stops with 2 before it touches anything.
@@ -96,6 +109,18 @@ bronze_offsets_report() {
          from bronze.cdc_events group by 1, 2 order by 1, 2"
 }
 
+# bronze_offsets_report for scripts: 1 when some topic partition holds an offset twice or misses
+# one between its lowest and highest offset, 2 when the query fails.
+bronze_offsets_ok() {
+  local bad
+  bad=$(trino_value "select count(*) from (
+                       select 1 from bronze.cdc_events group by topic, kafka_partition
+                       having count(*) > count(distinct kafka_offset)
+                          or max(kafka_offset) - min(kafka_offset) + 1
+                            > count(distinct kafka_offset))") || return 2
+  [ "$bad" = 0 ]
+}
+
 connector_running() {
   curl -sf http://127.0.0.1:8083/connectors/shop-connector/status | python3 -c '
 import json, sys
@@ -111,17 +136,26 @@ slot_reattached() {
                    where slot_name = 'shop_slot'")" = t ]
 }
 
-# Live row counts per table, Postgres against silver: 1 when any table differs, 2 when a count
-# query fails.
+# Every silver contract, Postgres against silver's live rows: row count, md5 of the sorted
+# primary keys, and the sum of each decimal column (scripts/reconcile_sql.py). 1 when any table
+# differs, 2 when a query fails. Counts alone miss a lost row that an undeleted one offsets.
 reconcile() {
-  local t pg lake status=0
-  for t in customers sellers products orders order_items payments reviews; do
-    pg=$(psql_value "select count(*) from shop.$t") || return 2
-    lake=$(trino_value "select count(*) from silver.$t where not _is_deleted") || return 2
-    printf '%-12s postgres %8s  silver %8s  %s\n' "$t" "$pg" "$lake" \
-      "$([ "$pg" = "$lake" ] && echo ok || echo DIFF)"
+  local t pg_sql lake_sql pg lake sql status=0
+  local -a p l
+  sql=$(python3 "$ROOT/scripts/reconcile_sql.py" "$ROOT/contracts/silver") || return 2
+  # fd 3: docker compose exec inside the loop would otherwise read the remaining lines.
+  while IFS=$'\t' read -r -u 3 t pg_sql lake_sql; do
+    pg=$(psql_value "$pg_sql") || return 2
+    lake=$(trino_value "$lake_sql") || return 2
+    read -r -a p <<<"$pg"
+    read -r -a l <<<"$lake"
+    printf '%-12s postgres %8s  silver %8s  rows %-4s keys %-4s sums %s\n' "$t" "${p[0]}" \
+      "${l[0]}" "$([ "${p[0]}" = "${l[0]}" ] && echo ok || echo DIFF)" \
+      "$([ "${p[1]}" = "${l[1]}" ] && echo ok || echo DIFF)" \
+      "$(if [ ${#p[@]} -eq 2 ]; then echo -; elif [ "${p[*]:2}" = "${l[*]:2}" ]; then
+           echo "ok (${p[*]:2})"; else echo "DIFF (postgres ${p[*]:2}, silver ${l[*]:2})"; fi)"
     [ "$pg" = "$lake" ] || status=1
-  done
+  done 3<<<"$sql"
   return "$status"
 }
 

@@ -1,6 +1,7 @@
 .DEFAULT_GOAL := help
 COMPOSE := docker compose --env-file .env -f docker/compose.yaml
 PROFILE ?= core
+SPEED ?= 720
 comma := ,
 PROFILE_FLAGS = $(foreach p,$(subst $(comma), ,$(PROFILE)),--profile $(p))
 
@@ -31,7 +32,13 @@ replay-reset: ## DESTRUCTIVE: empty shop and drop replay staging (asks first)
 	PYTHONPATH=oltp uv run python -m replayer reset --yes
 
 # ---------------------------------------------------------------- lifecycle
-up: ## start profiles: make up PROFILE=core,query
+start: ## core without the replayer container, plus trino (ADR-016)
+	$(COMPOSE) --profile core --profile query up -d --build spark-bronze kafka-connect trino
+
+up: ## start profiles other than core: make up PROFILE=orchestrate (core goes through make start)
+	@case ",$(PROFILE)," in *,core,*) \
+	  echo "PROFILE=$(PROFILE) includes core, whose oltp-replayer plays at REPLAY_SPEED;" \
+	    "use make start (ADR-016)" >&2; exit 2;; esac
 	$(COMPOSE) $(PROFILE_FLAGS) up -d --build
 
 down: ## stop profiles (volumes kept): make down PROFILE=bi
@@ -47,10 +54,18 @@ nuke: ## destroy everything including volumes, checkpoints and data (asks first)
 	@read -p "This deletes all volumes and checkpoints. Type 'yes' to continue: " a && [ "$$a" = "yes" ]
 	$(COMPOSE) --profile '*' down -v --remove-orphans
 
+bootstrap: ## fresh clone to verified data: start, migrate, connector, load, verify, protect
+	@bash scripts/bootstrap.sh
+
 # ---------------------------------------------------------------- operate
-replay: ## register debezium connector and start the replayer
-	bash connect/register.sh
-	$(COMPOSE) exec oltp-replayer python -m replayer start
+verify: ## bronze holds every Kafka record once and silver equals Postgres: prints verify ok
+	@bash scripts/verify.sh
+
+replay-burst: ## play SECONDS of history on the host, then stop: make replay-burst SECONDS=60 [SPEED=720]
+	@bash scripts/replay-burst.sh "$(SECONDS)" "$(SPEED)"
+
+replay-live: ## spends the replay budget: the oltp-replayer container plays at REPLAY_SPEED until stopped
+	$(COMPOSE) --profile core up -d --build oltp-replayer
 
 replay-status: ## replayer position and virtual clock
 	PYTHONPATH=oltp uv run python -m replayer status
@@ -110,4 +125,4 @@ test-spark: ## the Spark unit tests, inside lakehouse/spark:dev because the host
 dbt-parse: ## dbt parse without a warehouse
 	cd dbt && uv run dbt parse --profiles-dir . --target ci
 
-.PHONY: help secrets hooks data migrate replay-load replay-start replay-reset up down status logs nuke replay replay-status silver psql trino kafka-topics kafka-groups cdc-snapshot connector-status iceberg-demo lakekeeper-bootstrap lint test test-spark dbt-parse
+.PHONY: help secrets hooks data migrate replay-load replay-start replay-reset start up down status logs nuke bootstrap verify replay-burst replay-live replay-status silver psql trino kafka-topics kafka-groups cdc-snapshot connector-status iceberg-demo lakekeeper-bootstrap lint test test-spark dbt-parse

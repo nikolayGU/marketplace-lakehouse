@@ -20,7 +20,7 @@ superseded. Longer reasoning lives in `docs/planning/00-mini-architecture-review
 | ADR-013 | Spark metrics via custom StreamingQueryListener, because kafka-exporter cannot see Spark offsets | accepted |
 | ADR-014 | Superset optional; marts are shown through Grafana + Trino datasource, dbt docs and SQL | accepted |
 | ADR-015 | Removed: ClickHouse, k8s, Terraform, Ansible, Loki, Alertmanager delivery, Cosmos | accepted |
-| ADR-016 | Compose profiles and the rule "never all profiles at once" as the RAM strategy | accepted |
+| ADR-016 | Compose profiles and the rule "never all profiles at once" as the RAM strategy; `core` starts without the replayer container (`make start`) | accepted |
 | ADR-017 | Stateful windowed job `orders_per_minute` (watermark, state, update mode) is mandatory, not optional | accepted |
 | ADR-018 | `REPLICA IDENTITY FULL` on all `shop` tables so CDC `before` carries the whole previous row | accepted |
 | ADR-019 | Debezium signal table `cdc.debezium_signal` for incremental snapshots, the recovery path when Kafka retention outlives a consumer outage | accepted |
@@ -356,6 +356,27 @@ exposes `spark_streaming_input_rows_total`, `spark_streaming_batch_duration_seco
 `prometheus_client` on the driver's HTTP port. Consequences: ~60 lines of Python, a real
 "how do you monitor a Spark stream" answer.
 
+## ADR-016 Compose profiles; the replayer container only on request
+
+Context: on a 16 GB laptop the services run in profiles (`core`, `query`, `orchestrate`, `obs`,
+`bi`, `tools`), never all at once (OPERATIONS.md, "Profiles"). `oltp-replayer` is in `core`, so
+`make up PROFILE=core` also started the replayer container, which plays at `REPLAY_SPEED` (2880,
+one virtual day per 30 s). From week 3 the rest of the history is a budget for weeks 3-6 (D2 in
+`docs/planning/07-w3-spec.md`): on 2026-10-09 about 72 virtual days, 36 minutes at that speed.
+
+Decision (2026-10-09, D1 of the week 3 spec): compose stays as it is. `make start` brings up
+`core` without `oltp-replayer`, plus `trino`, by naming `spark-bronze kafka-connect trino`; their
+`depends_on` pull in the rest of `core`. `make up` refuses any `PROFILE` that contains `core`.
+Traffic comes from `make replay-burst SECONDS=<n>`, which plays `n` real seconds on the host and
+stops; the container starts only through `make replay-live`.
+
+Alternatives: a profile `replay` for `oltp-replayer` (one line of compose, but a change of
+infrastructure); keeping `make up PROFILE=core` with a warning (the failure stays one command
+away).
+
+Consequences: `make up PROFILE=core` from older notes now fails with a hint instead of spending
+the replay; a fresh clone starts with `make bootstrap`.
+
 ## ADR-018 REPLICA IDENTITY FULL on the source tables
 
 Context: Debezium fills the `before` field of an event from whatever Postgres wrote into the
@@ -433,7 +454,8 @@ live topics are validated against both schemas.
 Consequences: no time zone is invented, and a value reads the same in Spark, Trino and Postgres
 up to the millisecond. The microseconds are gone already in Kafka, because `connect` precision is
 milliseconds, so a silver timestamp can differ from Postgres by less than 1 ms; reconciliation
-(`reconcile` in `scripts/chaos/lib.sh`) compares live row counts, not timestamps. Changing a column type in the source is a contract
+(`reconcile` in `scripts/chaos/lib.sh`) compares live row counts, the set of primary keys and the
+sums of decimal columns, not timestamps. Changing a column type in the source is a contract
 change here and an Iceberg type promotion in silver.
 
 ## ADR-021 Silver upsert: one AvailableNow job, idempotent MERGE per table

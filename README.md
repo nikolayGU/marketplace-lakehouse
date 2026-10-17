@@ -5,7 +5,9 @@ A small but real data platform that replays two years of real marketplace transa
 lakehouse. Built to run on a 16 GB laptop, to be broken on purpose, and to be explained
 at a Senior Data Engineer interview.
 
-Status: planning. Week 0 of 6.
+Status: weeks 1-2 of 6 done: CDC into bronze, typed silver with MERGE, the Lakekeeper REST
+catalog, failure scenarios 1-4 measured. Week 3 (dbt gold, Airflow) is in progress; observability,
+the stateful job and CI for the Spark tests are planned. Current state: [docs/HANDOFF.md](docs/HANDOFF.md) (ru).
 
 ## Pipeline
 
@@ -47,22 +49,29 @@ Requirements: Windows 11 with WSL2 + Docker Desktop (or any Linux with Docker), 
 (`.wslconfig`), 20 GB disk, Python 3.12 with `uv`.
 
 ```bash
-make secrets                 # generates .env from .env.example
-make hooks                   # installs pre-commit hooks (ruff, yamllint, gitleaks)
-make data                    # downloads the Olist dataset into data/raw (Kaggle CLI or manual)
-make up PROFILE=core         # postgres x2, kafka, connect, minio, lakekeeper, spark-bronze, replayer
-make up PROFILE=query        # trino
-make replay                  # initial load + start replaying history
-make psql                    # source database
-make trino                   # trino cli
+make secrets                  # generates .env from .env.example
+make hooks                    # installs pre-commit hooks (ruff, yamllint, gitleaks)
+make data                     # downloads the Olist dataset into data/raw (Kaggle CLI or manual)
+make bootstrap                # core + trino, schema, connector, initial load; ends with "verify ok"
+make replay-burst SECONDS=60  # plays about 12 virtual hours of the remaining history, then stops
+make verify                   # bronze holds every Kafka record once, silver equals Postgres
+make psql                     # source database
+make trino                    # trino cli
 ```
 
-Never start every profile at once on 16 GB. Working combinations are listed in
+Without a Kaggle account, skip `make data` and set `REPLAY_DATA=sample` in `.env`: the
+committed 2 000-order slice in `data/sample`. From a fresh clone on the sample, `make bootstrap`
+took 4 minutes with the images built; the first build of the Spark image adds about 80 seconds
+with its base image already pulled, mostly 400 MB of jars (2026-10-17).
+
+`make start` brings up `core` and `query` without the replayer container, which would play the
+rest of the history at full speed; `make up` refuses any `PROFILE` that contains `core`
+(ADR-016). Never start every profile at once on 16 GB. Working combinations are listed in
 [OPERATIONS.md](OPERATIONS.md).
 
 | Profile | Services | RAM (limits) |
 |---|---|---|
-| `core` | postgres-oltp, postgres-meta (Lakekeeper's database), kafka, kafka-connect, minio, lakekeeper (Iceberg REST catalog), spark-bronze, oltp-replayer | ~7.5 GB |
+| `core` | postgres-oltp, postgres-meta (Lakekeeper's database), kafka, kafka-connect, minio, lakekeeper (Iceberg REST catalog), spark-bronze; oltp-replayer only through `make replay-live` | ~7.5 GB |
 | `query` | trino | 3.5 GB |
 | `orchestrate` | airflow api-server / scheduler / dag-processor | ~1.8 GB |
 | `obs` | prometheus, grafana, exporters, cadvisor | ~0.9 GB |
@@ -81,7 +90,7 @@ airflow/        DAGs and Airflow image
 observability/  prometheus config, alert rules, grafana provisioning
 docker/         compose.yaml and per-service configs
 scripts/        chaos scenarios, helpers
-tests/          unit tests (parsers, dedup logic, replayer), compose/config tests
+tests/          unit tests (parsers, dedup logic, MERGE, quarantine, replayer, Makefile)
 docs/           planning (ru), interview notes, images
 ```
 
@@ -93,15 +102,17 @@ which data is at risk, how the system recovers, and why nothing is lost or dupli
 
 ## Data quality
 
-dbt tests (unique, not_null, relationships, accepted_values, freshness) on gold;
-a `dq_checks` DAG reconciles row counts source vs silver vs gold, measures freshness
-per table and duplicate ratio in bronze; invalid events land in `silver.quarantine`.
+Now: invalid events land in `silver.quarantine`, and `make verify` checks that bronze holds
+every Kafka offset exactly once and that silver's live rows match Postgres per table by row count,
+set of primary keys and sums of decimal columns. Planned (weeks 3 and 5): dbt tests on gold and a
+`dq_checks` DAG for freshness and duplicate ratios.
 
 ## Testing and CI
 
-`ruff`, `mypy`, `sqlfluff`, `yamllint`, `hadolint`, `pytest tests/unit`, `dbt parse`,
-`docker compose config`, `gitleaks`, image build. A manual smoke workflow boots the
-`core` profile and checks that bronze receives rows.
+CI runs `ruff`, `mypy`, `sqlfluff`, `yamllint`, `pytest tests/unit`, `docker compose config`,
+the Spark image build and `gitleaks`. The Spark tests that need the Iceberg runtime are skipped
+there and run locally with `make test-spark`; running them in CI, `dbt parse`, `hadolint` and a
+smoke workflow on the sample are planned (weeks 3 and 5).
 
 ## What I learned
 
