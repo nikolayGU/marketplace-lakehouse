@@ -13,5 +13,21 @@
     "feature-dev@claude-plugins-official": true,
     "pr-review-toolkit@claude-plugins-official": true,
     "claude-md-management@claude-plugins-official": true
+  },
+  "permissions": {
+    "deny": ["Edit(.env)", "Edit(**/*.pem)", "Edit(**/*.key)"]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Write|Edit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/guard.py\""
+          }
+        ]
+      }
+    ]
   }
 }
