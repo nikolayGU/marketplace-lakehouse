@@ -50,6 +50,34 @@
 
 Проверки: `make lint`, `make test` (115 passed), `make test-spark` (132 passed).
 
+### Проверки 17.10.2026, на простое, до реплея
+
+Стек `core` без реплеера плюс `trino`, контейнеры подняты 8-10 дней, записей в источник и в lake нет с 08.10 (последний коммит bronze 2026-10-08 04:35 UTC). Все команды только читают.
+
+| Что | Результат |
+|---|---|
+| Топики `oltp.shop.*` | 3 партиции, RF 1, `retention.ms=86400000` |
+| Служебные топики Connect | `connect-offsets`, `connect-configs`, `connect-status`: `cleanup.policy=compact`, retention их не удаляет |
+| Коннектор | `RUNNING`, Debezium 3.5.2.Final |
+| Kafka после простоя | `oltp.shop.orders`: начало лога равно концу (74871, 75045, 75138 по партициям), в каталоге партиции пустой сегмент от 09.10. Retention удалил прочитанную историю вместе с активным сегментом, bronze прочитал её раньше |
+| Слот `shop_slot` | `active`, `wal_status=reserved`, держит 1800 kB WAL; `max_slot_wal_keep_size = -1`; `pg_wal` 193 MB |
+| Сдвигает ли heartbeat слот без изменений в `shop` | не определено: за минуту не сдвинулись ни `confirmed_flush_lsn`, ни `pg_current_wal_lsn()`, на простое WAL не пишется вообще. Проверять во время порции реплея |
+| Образ реплеера | `curl` нет (`docker run --rm --entrypoint sh lakehouse/replayer:dev -c 'command -v curl \|\| echo no-curl'` печатает `no-curl`), healthcheck в compose всегда падает |
+| Bronze | 127 снапшотов, все `append`, с 2026-09-22 по 2026-10-08; 459 файлов, медиана 17 KB, среднее 94 KB |
+| `silver.orders` | 44 файла данных и 14 файлов position deletes, все на spec 1; снапшоты: 16 `overwrite`, 1 `replace`, 1 `append` |
+| `reconcile` | 7 из 7 `ok` |
+| Деньги, Postgres и silver | `payments`: 98 716 строк, `sum(payment_value)` 15 218 867.61; `order_items`: 106 994 строки, `sum(price)` 12 917 340.13, `sum(freight_value)` 2 137 203.35. Совпадают |
+| Набор ключей `orders` | md5 отсортированных `order_id` `b4490c4e27ec2b6890ed1e20c1c46e17` в Postgres и в живых строках silver |
+| `silver.quarantine` | `orders`, `unparsed_envelope`: 3 |
+| Часовой пояс сессии Trino | `UTC` |
+| Отсечение партиций `silver.orders` | 17 из 44 splits, 8 546 из 94 406 строк (команда ниже) |
+
+Даты в silver сдвинуты реплеером: `order_purchase_timestamp` от 2024-08-09 до 2026-07-11. Фильтр по датам Olist (2016-2018) проходит все строки и отсечения не показывает. Проверка отсечения:
+
+```
+docker compose --env-file .env -f docker/compose.yaml exec -T trino trino --catalog lake --execute "explain analyze select count(*) from silver.orders where order_purchase_timestamp >= timestamp '2026-06-01 00:00:00'"
+```
+
 ## Следующие шаги по порядку
 
 1. **Lakekeeper через сутки**: сравнить память lakekeeper и размер БД `lakekeeper` с числами в OPERATIONS (bronze коммитит каждые 20 с, метаданные теперь пишутся и в Postgres).

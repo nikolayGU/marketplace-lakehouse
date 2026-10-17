@@ -433,7 +433,7 @@ live topics are validated against both schemas.
 Consequences: no time zone is invented, and a value reads the same in Spark, Trino and Postgres
 up to the millisecond. The microseconds are gone already in Kafka, because `connect` precision is
 milliseconds, so a silver timestamp can differ from Postgres by less than 1 ms; reconciliation
-compares counts and keys, not timestamps. Changing a column type in the source is a contract
+(`reconcile` in `scripts/chaos/lib.sh`) compares live row counts, not timestamps. Changing a column type in the source is a contract
 change here and an Iceberg type promotion in silver.
 
 ## ADR-021 Silver upsert: one AvailableNow job, idempotent MERGE per table
