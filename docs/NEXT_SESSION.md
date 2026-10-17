@@ -40,7 +40,8 @@ mart_seller_performance и макрос safe_divide, по плану docs/planni
 - make lint, make test, make dbt-parse зелёные; make verify печатает verify ok;
 - коммит dbt: marts and incremental daily sales только после моего «ок» на diff, без push.
 
-Отчёт:
+Отчёт (начни с make report; хуки .claude/hooks не дадут закончить ход с изменённым кодом без
+make verify-fast и закоммитить без полного make verify):
 - по каждому утверждению команда и её вывод;
 - «не проверено» явно, с командой проверки;
 - факт, вывод и гипотеза раздельно;

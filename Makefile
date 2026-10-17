@@ -67,6 +67,9 @@ verify-fast: ## make verify without the silver merge: reads only, writes nothing
 reconcile: ## Postgres against live silver rows: count, set of primary keys, decimal sums
 	@bash -c '. scripts/chaos/lib.sh && reconcile'
 
+report: ## facts for a session report: git, verify stamp, containers, replay clock; reads only
+	@bash scripts/report.sh
+
 replay-burst: ## play SECONDS of history on the host, then stop: make replay-burst SECONDS=60 [SPEED=720]
 	@bash scripts/replay-burst.sh "$(SECONDS)" "$(SPEED)"
 
@@ -134,4 +137,4 @@ dbt-parse: ## dbt parse without a warehouse
 dbt-build: ## seed, run and test lake.gold through Trino on 127.0.0.1:8080 (needs make start)
 	cd dbt && uv run dbt build --profiles-dir . --target dev
 
-.PHONY: help secrets hooks data migrate replay-load replay-start replay-reset start up down status logs nuke bootstrap verify verify-fast reconcile replay-burst replay-live replay-status silver psql trino kafka-topics kafka-groups cdc-snapshot connector-status iceberg-demo lakekeeper-bootstrap lint test test-spark dbt-parse dbt-build
+.PHONY: help secrets hooks data migrate replay-load replay-start replay-reset start up down status logs nuke bootstrap verify verify-fast reconcile report replay-burst replay-live replay-status silver psql trino kafka-topics kafka-groups cdc-snapshot connector-status iceberg-demo lakekeeper-bootstrap lint test test-spark dbt-parse dbt-build

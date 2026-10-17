@@ -7,6 +7,8 @@
   merge, checks Kafka offsets in bronze, silver against Postgres and all seven tables in bronze;
   prints `verify ok`. Refuses while `airflow-scheduler` runs or a replayer plays. `--no-merge`
   (`make verify-fast`) skips the merge. On success writes `.verify-stamp` (`agent_state.py`).
+- `report.sh` (`make report`): git state, verify stamp, containers and the replay clock for a
+  session report. Reads only.
 - `agent_state.py`: the verify stamp, mode plus the git tree id of the working tree, which the
   agent hooks in `.claude/hooks/` check.
 - `replay-burst.sh` (W3-T00, `make replay-burst SECONDS=<n> [SPEED=720]`): plays `n` real

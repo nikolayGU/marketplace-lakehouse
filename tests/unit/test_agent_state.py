@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from scripts.agent_state import code_changes, read_stamp, tree_hash, write_stamp
+from scripts.agent_state import code_changes, describe_stamp, read_stamp, tree_hash, write_stamp
 
 REPO = Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "scripts" / "agent_state.py"
@@ -84,6 +84,19 @@ def test_code_changes_skip_markdown_and_docs(repo: Path) -> None:
 
     (repo / "job.py").write_text("x = 4\n")
     assert code_changes(repo) == ["job.py"]
+
+
+def test_describe_stamp(repo: Path) -> None:
+    assert describe_stamp(repo) == "none"
+    write_stamp(repo, "full")
+    assert describe_stamp(repo).startswith("full at ") and describe_stamp(repo).endswith("fresh")
+    (repo / "job.py").write_text("x = 5\n")
+    assert describe_stamp(repo).endswith("stale")
+
+
+def test_cli_refuses_an_unknown_command(repo: Path) -> None:
+    result = subprocess.run([sys.executable, str(SCRIPT), "erase", str(repo)], capture_output=True)
+    assert result.returncode != 0
 
 
 def test_cli_writes_a_stamp(repo: Path) -> None:

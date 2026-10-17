@@ -59,6 +59,13 @@ def read_stamp(root: Path) -> Stamp | None:
     return Stamp(mode, written_at, digest == tree_hash(root))
 
 
+def describe_stamp(root: Path) -> str:
+    stamp = read_stamp(root)
+    if stamp is None:
+        return "none"
+    return f"{stamp.mode} at {stamp.written_at}, {'fresh' if stamp.fresh else 'stale'}"
+
+
 def code_changes(root: Path) -> list[str]:
     """Changed or untracked paths other than Markdown and `docs/`: what a check must cover."""
     lines = _git(root, "status", "--porcelain", "--untracked-files=all").decode().splitlines()
@@ -67,10 +74,14 @@ def code_changes(root: Path) -> list[str]:
 
 
 def main() -> None:
-    command, mode, root = sys.argv[1], sys.argv[2], Path(sys.argv[3])
-    if command != "stamp":
-        sys.exit(f"usage: {sys.argv[0]} stamp fast|full <repo root>")
-    write_stamp(root, mode)
+    usage = f"usage: {sys.argv[0]} stamp fast|full <repo root> | show <repo root>"
+    match sys.argv[1:]:
+        case ["stamp", mode, root]:
+            write_stamp(Path(root), mode)
+        case ["show", root]:
+            print(describe_stamp(Path(root)))
+        case _:
+            sys.exit(usage)
 
 
 if __name__ == "__main__":
