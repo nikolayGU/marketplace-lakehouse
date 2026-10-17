@@ -1,0 +1,73 @@
+models:
+  - name: fct_orders
+    description: >
+      One row per live order. 765 orders have no live item (2026-10-09): 735 never had one, 30
+      lost all of them when the order was canceled.
+    columns:
+      - name: order_id
+        data_tests: [unique, not_null]
+      - name: customer_unique_id
+        description: The person; customer_id is issued per order (D3).
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_customers')
+                field: customer_unique_id
+      - name: is_late
+        description: >
+          Delivered after the estimated date, by calendar date. Null unless the order is
+          delivered and has a delivery date.
+      - name: delivery_days
+        description: Calendar days from purchase to delivery to the customer.
+      - name: items_value
+        description: Sum of price over live items.
+      - name: updated_at
+        description: >
+          The latest silver merge time of the order, its items (deleted ones too) and payments.
+          Processing time: the watermark of mart_daily_sales, never a date for reports.
+  - name: fct_order_items
+    description: One row per order item, deleted items included (`is_deleted`).
+    data_tests:
+      - unique_combination:
+          arguments:
+            columns: [order_id, order_item_id]
+    columns:
+      - name: order_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('fct_orders')
+                field: order_id
+      - name: order_item_id
+        data_tests: [not_null]
+      - name: product_id
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('dim_products')
+                field: product_id
+      - name: seller_id
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('dim_sellers')
+                field: seller_id
+  - name: dim_customers
+    description: >
+      One row per person (customer_unique_id) with at least one order in silver (D3); the address
+      is the one of the latest order.
+    columns:
+      - name: customer_unique_id
+        data_tests: [unique, not_null]
+  - name: dim_products
+    description: One row per product; product_category is English, else Portuguese, else unknown.
+    columns:
+      - name: product_id
+        data_tests: [unique, not_null]
+  - name: dim_sellers
+    description: One row per seller.
+    columns:
+      - name: seller_id
+        data_tests: [unique, not_null]

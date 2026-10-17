@@ -1,0 +1,23 @@
+# No secrets here: Trino runs without authentication, on 127.0.0.1 only.
+lakehouse:
+  target: dev
+  outputs:
+    dev:
+      type: trino
+      method: none
+      user: dbt
+      host: "{{ env_var('TRINO_HOST', '127.0.0.1') }}"
+      port: "{{ env_var('TRINO_PORT', '8080') | as_number }}"
+      database: lake
+      schema: gold
+      threads: 2
+    # dbt parse in CI: never connects.
+    ci:
+      type: trino
+      method: none
+      user: dbt
+      host: "{{ env_var('TRINO_HOST', '127.0.0.1') }}"
+      port: "{{ env_var('TRINO_PORT', '8080') | as_number }}"
+      database: lake
+      schema: gold
+      threads: 2

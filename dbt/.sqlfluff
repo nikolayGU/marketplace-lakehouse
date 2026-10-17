@@ -1,0 +1,13 @@
+# Linted from this directory (make lint runs `cd dbt && sqlfluff lint ...`): sqlfluff 4 refuses
+# to switch the templater in a .sqlfluff below the working directory.
+[sqlfluff]
+dialect = trino
+templater = jinja
+max_line_length = 100
+
+[sqlfluff:templater:jinja]
+apply_dbt_builtins = True
+load_macros_from_path = macros
+
+[sqlfluff:rules:capitalisation.keywords]
+capitalisation_policy = lower

@@ -1,0 +1,60 @@
+models:
+  - name: stg_orders
+    description: One row per order in silver, deleted ones included (`is_deleted`, D4).
+    columns:
+      - name: order_id
+        data_tests: [unique, not_null]
+  - name: stg_order_items
+    description: >
+      One row per order item, deleted ones included: the replayer deletes the items of an order
+      canceled before shipping, and canceled GMV is counted from them (D4, D8).
+    data_tests:
+      - unique_combination:
+          arguments:
+            columns: [order_id, order_item_id]
+    columns:
+      - name: order_id
+        data_tests: [not_null]
+      - name: order_item_id
+        data_tests: [not_null]
+  - name: stg_payments
+    description: One row per payment of an order.
+    data_tests:
+      - unique_combination:
+          arguments:
+            columns: [order_id, payment_sequential]
+    columns:
+      - name: order_id
+        data_tests: [not_null]
+      - name: payment_sequential
+        data_tests: [not_null]
+  - name: stg_reviews
+    description: >
+      One row per review and order: review_id repeats across orders in the source
+      (oltp/migrations/001_schema.sql). Removed reviews stay with `is_deleted`.
+    data_tests:
+      - unique_combination:
+          arguments:
+            columns: [review_id, order_id]
+    columns:
+      - name: review_id
+        data_tests: [not_null]
+      - name: order_id
+        data_tests: [not_null]
+  - name: stg_customers
+    description: >
+      One row per customer_id. Olist issues a customer_id per order; the person is
+      customer_unique_id (D3).
+    columns:
+      - name: customer_id
+        data_tests: [unique, not_null]
+  - name: stg_sellers
+    description: One row per seller.
+    columns:
+      - name: seller_id
+        data_tests: [unique, not_null]
+  - name: stg_products
+    description: One row per product; `lenght` columns renamed to `length`.
+    columns:
+      - name: product_id
+        data_tests: [unique, not_null]

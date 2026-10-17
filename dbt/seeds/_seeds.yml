@@ -1,0 +1,12 @@
+seeds:
+  - name: category_translation
+    description: >
+      Portuguese product category to English, 71 rows, a copy of
+      data/sample/product_category_name_translation.csv (D5).
+    config:
+      column_types:
+        product_category_name: varchar
+        product_category_name_english: varchar
+    columns:
+      - name: product_category_name
+        data_tests: [unique, not_null]

@@ -153,7 +153,7 @@ Postgres (Olist загружен) → Debezium snapshot + streaming → Kafka `o
 5. Chaos-ручки реплеера: `LATE_RATIO` (часть UPDATE delivered задерживается на N минут), `DUPLICATE_RATIO` (повторный идентичный UPDATE), `SCHEMA_EVOLUTION_AT` (в заданный момент реплеер применяет миграцию `ALTER TABLE orders ADD COLUMN sales_channel`, и новые события идут с новым полем).
 6. Реплеер идемпотентен по перезапуску: хранит позицию в таблице `replay_state`, повторный запуск продолжает, а не начинает заново.
 
-Схема OLTP (`shop` schema в Postgres): `customers`, `sellers`, `products`, `orders`, `order_items`, `payments`, `reviews`. Geolocation и перевод категорий грузятся как справочники в dbt seeds.
+Схема OLTP (`shop` schema в Postgres): `customers`, `sellers`, `products`, `orders`, `order_items`, `payments`, `reviews`. Перевод категорий грузится справочником в dbt seed (71 строка); geolocation не моделируется, витрины на уровне штата (D5 спеки W3).
 
 Что это даёт для интервью: «я воспроизвёл два года реальных транзакций маркетплейса через CDC с ускорением в 3000 раз, с управляемой долей поздних и дублирующихся событий» звучит сильнее, чем «генератор случайных заказов».
 
@@ -294,7 +294,7 @@ processors=8
 
 Bronze и дубли: источников дублей два. Debezium после рестарта (at-least-once) шлёт повторные события с теми же `lsn`, и они честно попадают в bronze как новые Kafka-записи с новыми offsets. Spark-рестарт посреди батча: Iceberg-sink пропускает уже закоммиченный epoch (проверить в chaos 1). Поэтому контракт такой: bronze это at-least-once журнал, дубли в нём допустимы и измеряются метрикой `bronze_duplicate_ratio` по `(source_table, key, lsn)`; silver гарантирует отсутствие дублей.
 
-Late events: silver сравнивает `lsn` входящего события с `_last_lsn` строки и не откатывает более новое состояние. Дубли: внутри батча остаётся одно событие на ключ (наибольший LSN, null последним, ADR-021), между батчами MERGE сравнивает с `_last_lsn`. DELETE: `op='d'` ставит `_is_deleted=true` (soft delete в silver, чтобы факты не исчезали из истории; имя `_deleted` Iceberg резервирует, ADR-009); удалённые строки фильтрует dbt, где именно, решает спека W3 (D4).
+Late events: silver сравнивает `lsn` входящего события с `_last_lsn` строки и не откатывает более новое состояние. Дубли: внутри батча остаётся одно событие на ключ (наибольший LSN, null последним, ADR-021), между батчами MERGE сравнивает с `_last_lsn`. DELETE: `op='d'` ставит `_is_deleted=true` (soft delete в silver, чтобы факты не исчезали из истории; имя `_deleted` Iceberg резервирует, ADR-009); staging отдаёт удалённые строки с `is_deleted`, фильтрует модель-потребитель; `fct_order_items` хранит удалённые позиции, из них считается отменённый GMV (D4 спеки W3).
 
 Schema evolution: bronze не ломается, потому что `after` это строка. Silver job читает схему из `contracts/silver/<table>.json`; новая колонка добавляется через `ALTER TABLE silver.orders ADD COLUMN sales_channel` и правку контракта. Это Modify-гейт недели 2.
 

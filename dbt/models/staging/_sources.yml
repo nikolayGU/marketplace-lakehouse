@@ -1,0 +1,25 @@
+sources:
+  - name: silver
+    description: >
+      Current state of the source tables, merged from bronze by silver_upsert (ADR-021). Deleted
+      rows stay with `_is_deleted = true`; `_updated_at` is when silver merged the row, not a
+      business time.
+    database: lake
+    schema: silver
+    loaded_at_field: _updated_at
+    tables:
+      # Only the replayer's tables get freshness: customers, sellers and products were loaded
+      # once, and their _updated_at stays at that first load.
+      - name: orders
+        freshness: &replayed
+          warn_after: {count: 30, period: minute}
+          error_after: {count: 2, period: hour}
+      - name: order_items
+        freshness: *replayed
+      - name: payments
+        freshness: *replayed
+      - name: reviews
+        freshness: *replayed
+      - name: customers
+      - name: sellers
+      - name: products

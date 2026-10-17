@@ -106,8 +106,8 @@ lint: ## ruff, mypy, yamllint, sqlfluff, compose config
 	uv run ruff check . && uv run ruff format --check .
 	uv run mypy
 	uv run yamllint -c .yamllint docker observability airflow .github
-	@paths=$$(ls -d dbt/models oltp/migrations 2>/dev/null || true); \
-	  [ -n "$$paths" ] && uv run sqlfluff lint $$paths || echo "no SQL directories yet"
+	uv run sqlfluff lint oltp/migrations
+	cd dbt && uv run sqlfluff lint models macros tests
 	$(COMPOSE) --profile '*' config -q
 
 test: ## unit tests (Spark ones skip on a host without Java)
@@ -125,4 +125,7 @@ test-spark: ## the Spark unit tests, inside lakehouse/spark:dev because the host
 dbt-parse: ## dbt parse without a warehouse
 	cd dbt && uv run dbt parse --profiles-dir . --target ci
 
-.PHONY: help secrets hooks data migrate replay-load replay-start replay-reset start up down status logs nuke bootstrap verify replay-burst replay-live replay-status silver psql trino kafka-topics kafka-groups cdc-snapshot connector-status iceberg-demo lakekeeper-bootstrap lint test test-spark dbt-parse
+dbt-build: ## seed, run and test lake.gold through Trino on 127.0.0.1:8080 (needs make start)
+	cd dbt && uv run dbt build --profiles-dir . --target dev
+
+.PHONY: help secrets hooks data migrate replay-load replay-start replay-reset start up down status logs nuke bootstrap verify replay-burst replay-live replay-status silver psql trino kafka-topics kafka-groups cdc-snapshot connector-status iceberg-demo lakekeeper-bootstrap lint test test-spark dbt-parse dbt-build

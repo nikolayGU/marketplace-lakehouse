@@ -20,12 +20,12 @@ jobs:
       - run: uv run ruff check . && uv run ruff format --check .
       - run: uv run mypy
       - run: uv run yamllint -c .yamllint docker observability airflow .github
-      # dbt/models is still empty, and git does not carry empty directories, so a fresh
-      # checkout has no such path. Lint whatever SQL directories the checkout actually has.
-      - name: sqlfluff
-        run: |
-          paths=$(ls -d dbt/models oltp/migrations 2>/dev/null || true)
-          [ -n "$paths" ] && uv run sqlfluff lint $paths || echo "no SQL directories yet"
+      - run: uv run sqlfluff lint oltp/migrations
+      # dbt/.sqlfluff switches to the jinja templater, which sqlfluff takes only from the
+      # working directory.
+      - run: uv run sqlfluff lint models macros tests
+        working-directory: dbt
+      - run: make dbt-parse
       - run: uv run pytest tests/unit -q
       - name: compose config
         run: cp .env.example .env && docker compose --env-file .env -f docker/compose.yaml --profile '*' config -q
@@ -36,6 +36,5 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-# Re-enable as the pieces land: `dbt parse` with W3-T01, the airflow image build with W3-T04,
-# hadolint with W5-T02.
+# Re-enable as the pieces land: the airflow image build and hadolint with W5-T02.
 # smoke: manual/nightly, boots `core`, replays 60 s, asserts bronze rows via trino cli. Week 5.

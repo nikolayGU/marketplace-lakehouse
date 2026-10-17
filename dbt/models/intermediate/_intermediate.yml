@@ -1,0 +1,8 @@
+models:
+  - name: int_orders_enriched
+    description: >
+      One row per live order with its customer, aggregates of live items and payments, and the
+      processing times of the order, its items (deleted ones too) and payments.
+    columns:
+      - name: order_id
+        data_tests: [unique, not_null]

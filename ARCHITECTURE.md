@@ -24,7 +24,7 @@ operations, observability and failure recovery treated as first-class.
    It reads bronze incrementally (Iceberg streaming source), parses payloads against contracts,
    deduplicates by `(table, key, lsn)`, sends unparsable rows to `silver.quarantine`, and
    `MERGE INTO silver.<table>` with `WHEN MATCHED AND source.lsn > target._last_lsn`. Deletes are
-   soft (`_deleted = true`). Late events never overwrite newer state. Re-running a batch yields
+   soft (`_is_deleted = true`). Late events never overwrite newer state. Re-running a batch yields
    the same result. Bronze itself is an at-least-once journal: duplicates there are allowed and
    measured, silver is where the no-duplicates guarantee lives.
 5. Spark job `orders_per_minute` (mandatory, week 5) keeps a 1-minute window with a 5-minute

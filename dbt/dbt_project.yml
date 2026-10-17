@@ -1,0 +1,26 @@
+name: marketplace
+version: "1.0.0"
+profile: lakehouse
+
+model-paths: ["models"]
+seed-paths: ["seeds"]
+test-paths: ["tests"]
+macro-paths: ["macros"]
+
+flags:
+  # dbt would write .user.yml into the profiles directory, which Airflow mounts read-only.
+  send_anonymous_usage_stats: false
+  # Trino is plain http here: the flag only silences dbt-trino's warning on every connection.
+  require_certificate_validation: true
+
+models:
+  marketplace:
+    # dbt-trino's default `rename` drops the backup table on every run; on Lakekeeper a drop is a
+    # soft delete that keeps the files for 7 days. `replace` is CREATE OR REPLACE TABLE (D6).
+    +on_table_exists: replace
+    staging:
+      +materialized: view
+    intermediate:
+      +materialized: view
+    marts:
+      +materialized: table
