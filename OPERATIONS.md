@@ -416,7 +416,7 @@ why nothing is lost or duplicated (or where it can be). Filled in as scenarios a
 | 6 | Connector down for 30 minutes (WAL growth) | `chaos-connect-pause` | planned (week 4) |
 | 7 | Corrupted event in topic | `chaos-poison-event` | data half done (W2-T04), alert in week 4 |
 | 8 | Kafka down | `chaos-kafka-down` | planned (week 4) |
-| 9 (optional) | Airflow task failure (dbt test) | `chaos-break-dbt-test` | planned (week 3) |
+| 9 | Airflow task failure (dbt test) | `chaos-break-dbt-test` | done 2026-10-18 |
 | 10 (optional) | Partial processing (Trino memory) | `chaos-trino-memory` | planned (week 3) |
 
 ### Template
@@ -691,6 +691,32 @@ select committed_at, summary['changed-partition-count'] as changed_partitions,
        element_at(summary, 'added-records') as added_records,
        summary['total-records'] as total_records
 from silver."orders$snapshots" order by committed_at desc limit 2;
+```
+
+### 9. Airflow task failure (dbt test)
+
+```
+make chaos-break-dbt-test   # orchestrate up, dbt_build unpaused, no replay running
+```
+
+What happened: `dbt_build` ran with the conf `{"dbt_vars": "{chaos_break_test: true}"}`. The
+singular test `assert_chaos_break_test` on `fct_orders` returned every order under that switch and
+failed.
+What monitoring shows: `dbt_build` red in the Airflow UI; the task log names the test
+(`Failure in test assert_chaos_break_test`). Alert `AirflowDagFailed` comes with week 4. Seen when
+the run ends, 16 s after the trigger.
+Data at risk: none. `fct_orders` was rebuilt before its test ran; every model after it was skipped,
+so the marts kept their previous snapshot (`mart_daily_sales`: 9 snapshots before
+and after).
+Recovery: manual. Remove the cause (here the switch) and trigger `dbt_build`; the next silver merge
+triggers it too. The run without the switch was green.
+Why no loss or duplication: `dbt build` skips the children of a failed test, and a mart is either
+replaced atomically (`CREATE OR REPLACE`) or not touched.
+Verification SQL:
+
+```
+select committed_at, operation from gold."mart_daily_sales$snapshots"
+order by committed_at desc limit 3;
 ```
 
 ## Runbooks

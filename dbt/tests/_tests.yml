@@ -20,3 +20,7 @@ data_tests:
     description: >
       Source anomaly. 2 categories without an English name (2026-10-09). warn above 0, error
       above var untranslated_categories_error_if (default 5).
+  - name: assert_chaos_break_test
+    description: >
+      Chaos 9 switch: returns every order, so fails, only when dbt runs with
+      --vars '{chaos_break_test: true}'; otherwise returns nothing.

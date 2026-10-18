@@ -317,7 +317,7 @@ Schema evolution: bronze не ломается, потому что `after` эт
 | 6 | Коннектор мёртв 30 минут | `make chaos-connect-pause` | `pg_replication_slots.wal_status` и retained WAL растут: алерт `SlotWalRetainedHigh`; после старта догоняет |
 | 7 | Corrupted event | `make chaos-poison-event` (ручной produce мусора в топик) | Bronze принимает как есть (строка), silver отправляет в `silver.quarantine` и не падает; алерт по `quarantine_rows` |
 | 8 | Kafka down | `docker stop kafka` | Connect и Spark в retry; после старта оба продолжают; проверка `count` до/после |
-| 9 (optional) | Airflow task failure (dbt test) | `make chaos-break-dbt-test` | DAG красный, marts не обновлены, предыдущая версия видна; алерт `AirflowDagFailed` |
+| 9 | Airflow task failure (dbt test) | `make chaos-break-dbt-test` | DAG красный, marts не обновлены, предыдущая версия видна; алерт `AirflowDagFailed` |
 | 10 (optional) | Partial processing (Trino OOM в dbt) | Лимит памяти Trino вниз | dbt падает на модели, incremental не повреждён; повтор доделывает |
 
 ---
