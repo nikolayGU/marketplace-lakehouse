@@ -21,6 +21,13 @@
 | W3-T06 chaos 9 | `21e43b6` | `dbt_build` красный за 16 с, снапшотов `mart_daily_sales` 9 до и 9 после, повтор зелёный; chaos 10 не делался (optional) |
 | W3-T07 гейты dbt и Airflow | | **за владельцем** |
 
+### После закрытия недели, 18.10
+
+- `434e2c1`: поправки по независимому ревью. `dq_checks` падает, если запрос freshness упал (`runtime error` в `sources.json`), и запускает dbt в своём `target-path`; `run_dag` сразу возвращает ошибку trigger; chaos 9 проверяет, что упал именно `assert_chaos_break_test`; у `airflow-api-server` больше нет сокета Docker. Chaos 9 и `dq_checks` перепрогнаны зелёными.
+- D20, `MALLOC_ARENA_MAX=4` у Trino (ниже, «Открытые вопросы»).
+- Хвост WAL слота Debezium разобран `pg_waldump`: изменений `shop` в нём нет, в основном `PRUNE_ON_ACCESS` по `shop.orders`, autoanalyze (`pg_statistic`) и checkpoint, `replay.*` 25 записей из 111; слот держит 24 MB, пока коннектор жив, не опасно.
+- Спека W4: `docs/planning/09-w4-spec.md`, решения W4-D* ждут «ок» владельца.
+
 ### Отклонения от плана, найденные живыми шагами
 
 - `mart_daily_sales.sql`: `ref('fct_orders')` только внутри `is_incremental()`, dbt не видел зависимость; первый инкрементальный прогон падал на компиляции. Добавлен `-- depends_on: {{ ref('fct_orders') }}`. Статические проверки плана инкрементальную ветку не компилируют.
@@ -40,8 +47,8 @@
 
 ### Открытые вопросы
 
-- **Heartbeat Debezium слот без изменений в `shop` не сдвигает.** Замеры 18.10: после 20 ч простоя `confirmed_flush_lsn` 0/54B8CFB0 при `pg_current_wal_lsn()` 0/54B94298; после порции слот стоял на 0/55F9D7E8 при WAL 0/56CDDC58 и за 47 с (4 heartbeat по 10 с) не сдвинулся. `heartbeat.action.query` не задан. Гипотеза: хвост WAL пишут `replay.schedule` и `replay.state`, их нет в публикации, и `pg_wal` растёт до следующего изменения в `shop`. Проверка: `pg_waldump` по этому диапазону.
-- **Trino на 96% лимита контейнера** (3.35 из 3.5 GiB при куче 2 GB) и minio на 85%: OOM не было, следить в W4.
+- **Heartbeat Debezium слот без изменений в `shop` не сдвигает.** Замеры 18.10: после 20 ч простоя `confirmed_flush_lsn` 0/54B8CFB0 при `pg_current_wal_lsn()` 0/54B94298; после порции слот стоял на 0/55F9D7E8 при WAL 0/56CDDC58 и за 47 с (4 heartbeat по 10 с) не сдвинулся. `heartbeat.action.query` не задан. Проверено `pg_waldump` 18.10: хвост пишут `PRUNE_ON_ACCESS` по `shop.orders`, autoanalyze и checkpoint, `replay.*` лишь 25 записей из 111. Слот держит 24 MB; опасно только при долгом простое `shop` и записи в другие таблицы. Варианты на W4: `heartbeat.action.query` в таблицу из публикации или алерт по удержанному WAL с условием трафика.
+- **Память Trino** (D20): было 3.35 из 3.5 GiB при куче 2 GB. NMT показал 0.55 GiB вне учёта JVM, арены glibc malloc при 659 потоках; с `MALLOC_ARENA_MAX=4` при той же нагрузке 2.91 вместо 3.18 GiB. Запас всё ещё около 17%, minio на 85%: замер всех профилей сразу в W4.
 - Сутки наблюдения W3-T05b B6 не пройдены: через сутки `af dags list-runs <dag> --state failed` по четырём DAG (ожидаются только упомянутые выше красные запуски до правки и chaos 9) и `docker stats`.
 
 ## Состояние на 17.10.2026, конец сессии
