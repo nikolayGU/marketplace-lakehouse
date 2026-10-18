@@ -377,6 +377,10 @@ Decision (2026-10-09, D9 and D12 of the week 3 spec):
   has no snapshot that silver has not merged, so no JVM starts for nothing and no Asset event
   wakes dbt; `dbt_build` on the Asset `lake.silver`; `dq_checks` every 15 minutes on time (moving
   it onto the Asset is the owner's Modify gate).
+- Maintenance in week 3 (D11): only `optimize` of the silver tables, in the pool `lake_writers`
+  (1 slot) together with the silver merge, since two commits to `silver.orders` at once fail one
+  of them (ADR-010). `expire_snapshots` and `remove_orphan_files` wait for the policy of week 5
+  (ADR-021).
 
 Consequences: an image of 3.47 GB to build, the socket as the price of DockerOperator,
 the dbt version pinned twice (`uv.lock` and `airflow/Dockerfile`).

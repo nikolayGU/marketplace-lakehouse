@@ -34,9 +34,10 @@ operations, observability and failure recovery treated as first-class.
    `dim_*`, `mart_daily_sales` incremental by purchase date, `mart_seller_performance`,
    `mart_delivery_sla`) after every silver merge, triggered by the Asset `lake.silver`. Tests run
    with it; docs are generated on demand (`make dbt-docs`).
-7. `dq_checks` reconciles counts source vs silver vs gold, measures freshness and duplicate
-   ratio, and exports gauges to Prometheus. `iceberg_maintenance` compacts files, rewrites
-   position deletes, expires snapshots and removes orphans.
+7. `dq_checks` fails on a duplicate key in silver and on silver differing from Postgres at rest,
+   and logs delivery repeats, source no-ops, quarantine growth and freshness (exported to
+   Prometheus in week 4). `iceberg_maintenance` compacts the silver tables daily (`optimize`);
+   snapshot expiry and orphan removal wait for week 5.
 8. Prometheus scrapes Kafka, Connect, PostgreSQL (slot lag, retained WAL), the Spark driver
    (custom `StreamingQueryListener` metrics: input rows, batch duration, Kafka lag), Airflow
    (StatsD) and cAdvisor. Grafana shows "Pipeline health" and "Infra". Six alert rules.

@@ -382,12 +382,22 @@ DAGs live in `airflow/dags/`; their shared code is `airflow/dags/lakehouse/`, wh
 |---|---|---|
 | `silver_upsert` | every 5 min, `max_active_runs=1`, 1 retry | `bronze_has_new_snapshot` skips the run when bronze has no snapshot silver has not merged; `merge` starts spark-silver (DockerOperator, pool `lake_writers`) and publishes the Asset `lake.silver`; `remember_snapshot` stores the merged snapshot id in the Variable `silver_upsert_last_bronze_snapshot` |
 | `dbt_build` | Asset `lake.silver` | `dbt build` of `lake.gold` from `/opt/dbt-venv`, no retries; a manual run takes dbt vars from its conf, `{"dbt_vars": "{...}"}` |
+| `dq_checks` | every 15 min | fails on a primary key twice in silver, or on silver differing from Postgres at rest; logs `dq <name>=<value>` lines: delivery repeats and source no-ops of the last hour, new quarantine rows, freshness of each silver table, `dbt source freshness` |
+| `iceberg_maintenance` | daily | `optimize` of each silver table through Trino, in pool `lake_writers`; bronze is not touched (D11) |
 
 One silver writer. While `silver_upsert` is unpaused, `make silver` and `make verify` must not
 run: two processes on one checkpoint (`make verify` refuses while the scheduler runs). For a
 manual merge: `airflow dags pause silver_upsert` in the scheduler container, wait until its
 running `merge` ends, `make silver`, then `airflow dags unpause silver_upsert`. The first run from
 Airflow continues from the checkpoint of the last `make silver`.
+
+A red `dq_checks` means one of two things. `silver_keys_unique`: silver holds a primary key
+twice, which MERGE must never produce; read the last `silver_upsert` log and the quarantine.
+`silver_matches_postgres`: counts differ although bronze has been quiet for 5 minutes and silver
+merged its latest snapshot, so a change never reached silver; `make verify` (with the scheduler
+stopped) shows the offsets and the counts. Differences with `at_rest=False` are normal during a
+replay burst. A stale `dbt source freshness` (exit code 1) is logged, not failed: no traffic is not
+a broken pipeline.
 
 ## Failure scenarios
 

@@ -1,12 +1,17 @@
 # airflow
 
-Airflow 3, LocalExecutor, batch only. The bronze stream is not a DAG.
+Airflow 3.3.2, LocalExecutor, batch only: the bronze stream is not a DAG (ADR-011). How to run it:
+OPERATIONS.md, "Airflow".
 
 | DAG | Schedule | Does |
 |---|---|---|
-| `silver_upsert` | every 5 min, `max_active_runs=1` | DockerOperator runs `spark-silver` with `Trigger.AvailableNow` |
-| `dbt_build` | on Asset `silver` | `dbt build` (BashOperator), then `dbt docs generate` |
-| `dq_checks` | every 15 min | freshness per table, reconciliation source vs silver vs gold, duplicate ratio, quarantine rows; pushes gauges |
-| `iceberg_maintenance` | daily | `rewrite_data_files`, `rewrite_position_delete_files`, `expire_snapshots`, `remove_orphan_files` |
+| `silver_upsert` | every 5 min, `max_active_runs=1`, 1 retry | skips without a new bronze snapshot; DockerOperator starts spark-silver (`Trigger.AvailableNow`) in pool `lake_writers`; publishes Asset `lake.silver` |
+| `dbt_build` | Asset `lake.silver` | `dbt build` of `lake.gold` (BashOperator, `/opt/dbt-venv`), no retries |
+| `dq_checks` | every 15 min | a duplicate key in silver, or silver against Postgres at rest, fails it; repeats, no-ops, quarantine and freshness are logged |
+| `iceberg_maintenance` | daily | `optimize` of the silver tables through Trino, in pool `lake_writers` |
 
-`Dockerfile`: `apache/airflow:3.3.2` + `dbt-trino` + `apache-airflow-providers-docker`.
+- `dags/lakehouse/`: settings from the environment, SQL, decisions, clients. It imports no
+  airflow, so `tests/unit/test_dags.py` runs it on the host; `.airflowignore` keeps it out of DAG
+  parsing.
+- `Dockerfile`: `apache/airflow:3.3.2-python3.12`, the docker provider of the image, the clients
+  the DAGs import, dbt in `/opt/dbt-venv`.

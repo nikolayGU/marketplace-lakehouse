@@ -11,6 +11,20 @@ SILVER_ASSET_NAME = "lake.silver"
 LAST_BRONZE_SNAPSHOT = "silver_upsert_last_bronze_snapshot"
 LAKE_WRITERS_POOL = "lake_writers"
 
+# Primary keys of the silver tables, as contracts/silver/<table>.json declares them; quarantine
+# holds one row per Kafka record. tests/unit/test_dags.py compares them with the contracts.
+SILVER_KEYS: dict[str, tuple[str, ...]] = {
+    "customers": ("customer_id",),
+    "sellers": ("seller_id",),
+    "products": ("product_id",),
+    "orders": ("order_id",),
+    "order_items": ("order_id", "order_item_id"),
+    "payments": ("order_id", "payment_sequential"),
+    "reviews": ("review_id", "order_id"),
+    "quarantine": ("topic", "kafka_partition", "kafka_offset"),
+}
+SOURCE_TABLES = tuple(t for t in SILVER_KEYS if t != "quarantine")
+
 # The environment compose gives spark-silver (docker/compose.yaml); the DAG passes the same to
 # the container it starts. The secrets go to DockerOperator's private_environment, which the
 # Airflow UI does not render.
