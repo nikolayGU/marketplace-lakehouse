@@ -407,6 +407,9 @@ services:
     # jvm.config cannot read the environment, so the heap goes to the launcher as a JVM option.
     command: ["/usr/lib/trino/bin/run-trino", "-J-Xmx${TRINO_XMX:?TRINO_XMX must be set}"]
     environment:
+      # glibc gives each busy thread a malloc arena of up to 64 MB; with hundreds of Trino threads
+      # that grew RSS about 0.55 GiB past what the JVM tracks (NMT, 2026-10-18, D20).
+      MALLOC_ARENA_MAX: "4"
       # CATALOG_DB, META_* and S3_BUCKET serve only the JDBC lake.properties of the rollback.
       CATALOG_DB: ${CATALOG_DB}
       META_USER: ${META_USER}
