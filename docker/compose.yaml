@@ -471,7 +471,7 @@ services:
       postgres-meta:
         condition: service_healthy
     command: api-server
-    env_file: ./airflow/airflow.env   # TODO(W3): executor, db url, fernet, jwt, statsd
+    env_file: ./airflow/airflow.env   # TODO(W4-T01): statsd
     volumes:
       - ../airflow/dags:/opt/airflow/dags:ro
       - ../dbt:/opt/dbt:ro
@@ -499,6 +499,9 @@ services:
         condition: service_healthy
     command: scheduler
     env_file: ./airflow/airflow.env
+    # Tasks run here (LocalExecutor), DockerOperator among them: the socket's group, root on the
+    # host in effect (ADR-011).
+    group_add: ["${DOCKER_GID:-0}"]
     volumes:
       - ../airflow/dags:/opt/airflow/dags:ro
       - ../dbt:/opt/dbt:ro

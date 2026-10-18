@@ -106,6 +106,10 @@ iceberg-demo: ## snapshots, time travel, rollback, compaction, expiration on lak
 lakekeeper-bootstrap: ## bootstrap Lakekeeper and create its warehouse (safe to re-run)
 	$(COMPOSE) --profile core run --rm lakekeeper-bootstrap
 
+airflow-init: ## pool lake_writers, 1 slot, for silver_upsert and optimize (safe to re-run)
+	$(COMPOSE) exec airflow-scheduler airflow pools set lake_writers 1 \
+	  "silver writers: the silver_upsert merge and iceberg_maintenance optimize (ADR-010)"
+
 # ---------------------------------------------------------------- chaos (week 2+)
 chaos-%: ## run a failure scenario: make chaos-spark-kill
 	bash scripts/chaos/$*.sh
@@ -140,4 +144,4 @@ dbt-build: ## seed, run and test lake.gold through Trino on 127.0.0.1:8080 (need
 dbt-docs: ## dbt docs generate into dbt/target (needs Trino)
 	cd dbt && uv run dbt docs generate --profiles-dir . --target dev
 
-.PHONY: help secrets hooks data migrate replay-load replay-start replay-reset start up down status logs nuke bootstrap verify verify-fast reconcile report replay-burst replay-live replay-status silver psql trino kafka-topics kafka-groups cdc-snapshot connector-status iceberg-demo lakekeeper-bootstrap lint test test-spark dbt-parse dbt-build dbt-docs
+.PHONY: help secrets hooks data migrate replay-load replay-start replay-reset start up down status logs nuke bootstrap verify verify-fast reconcile report replay-burst replay-live replay-status silver psql trino kafka-topics kafka-groups cdc-snapshot connector-status iceberg-demo lakekeeper-bootstrap airflow-init lint test test-spark dbt-parse dbt-build dbt-docs

@@ -170,3 +170,41 @@ lsn_duplicates_since() {
                group by 1, 2, 3 having count(*) > 1)
          group by 1 order by 1"
 }
+
+# The Airflow CLI inside the scheduler container.
+airflow_cli() { "${COMPOSE[@]}" exec -T airflow-scheduler airflow "$@"; }
+
+# dag_run_state <dag_id> <run_id>: queued, running, success or failed; missing before it exists.
+dag_run_state() {
+  airflow_cli dags list-runs "$1" -o json 2>/dev/null | python3 -c '
+import json, sys
+lines = sys.stdin.read().splitlines()
+start = next((i for i, line in enumerate(lines)
+              if line.strip() in ("[", "[]") or line.lstrip().startswith("[{")), None)
+runs = json.loads("\n".join(lines[start:])) if start is not None else []
+print(next((r["state"] for r in runs if r["run_id"] == sys.argv[1]), "missing"))' "$2"
+}
+
+# run_dag <dag_id> <run_id> [conf json]: trigger one run and wait up to RUN_DAG_WAIT seconds
+# (default 900) for it to end: 0 on success, 1 when it failed or did not end in time. It never
+# unpauses: a run of a paused DAG stays queued, and unpausing silver_upsert is the caller's call.
+run_dag() {
+  local dag=$1 run=$2 conf=${3:-"{}"} state limit=${RUN_DAG_WAIT:-900}
+  local deadline=$((SECONDS + limit))
+  airflow_cli dags trigger "$dag" --run-id "$run" --conf "$conf" >/dev/null
+  while :; do
+    state=$(dag_run_state "$dag" "$run")
+    case $state in
+      success) return 0 ;;
+      failed)
+        echo "$dag run $run failed" >&2
+        return 1
+        ;;
+    esac
+    if ((SECONDS >= deadline)); then
+      echo "$dag run $run still $state after $limit s (a paused DAG keeps runs queued)" >&2
+      return 1
+    fi
+    sleep 10
+  done
+}

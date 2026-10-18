@@ -258,16 +258,6 @@ and it writes every new metadata file with them, so commits depend on the key. S
 credential again (`POST /management/v1/warehouse/{id}/storage-credential`) should repair that; it
 is untested.
 
-Airflow Fernet key. A `.env` from `make secrets` before the fix holds a 32-character
-`AIRFLOW_FERNET_KEY`, and Airflow accepts only urlsafe base64 of 32 bytes (44 characters).
-`make secrets` never rewrites an existing `.env`, so replace that one line from the repo root
-before Airflow first starts; the command prints nothing. Once Airflow has stored connections or
-variables, a new key makes them unreadable.
-
-```
-sed -i "s|^AIRFLOW_FERNET_KEY=.*|AIRFLOW_FERNET_KEY=$(python3 -c 'import base64, secrets; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())')|" .env
-```
-
 After the cutover. Never start a Spark job with `CATALOG_TYPE=jdbc` (in `.env`, as
 `-e CATALOG_TYPE=jdbc` or exported in a shell), and never give Trino the JDBC `lake.properties`
 back, except through the runbook's rollback. The JDBC rows in `iceberg_catalog` still point at
@@ -330,6 +320,60 @@ curl -sS -X POST -H 'Content-Type: application/json' \
   -d '{"targets": [{"type": "table", "id": "<id from the list>"}]}' \
   "$lk/management/v1/warehouse/$wid/deleted-tabulars/undrop"   # 204 on success
 ```
+
+## Airflow
+
+Profile `orchestrate`: `airflow-api-server` (UI and REST API on `127.0.0.1:8090`, no login, every
+visitor is admin: D12), `airflow-scheduler` (LocalExecutor: tasks run as processes inside this
+container) and `airflow-dag-processor`. One image, `lakehouse/airflow:dev` from
+`airflow/Dockerfile`: Airflow 3.3.2 on Python 3.12, dbt in `/opt/dbt-venv`. Config is
+`docker/airflow/airflow.env`, values from `.env`. Metadata lives in the `airflow` database of
+`postgres-meta`; the same instance holds `lakekeeper` and `iceberg_catalog`, which nothing here
+touches.
+
+Before the first start, once per `.env`, from the repo root (each command prints nothing):
+
+```
+sed -i "s|^AIRFLOW_FERNET_KEY=.*|AIRFLOW_FERNET_KEY=$(python3 -c 'import base64, secrets; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())')|" .env
+grep -q '^AIRFLOW_API_SECRET_KEY=' .env || printf 'AIRFLOW_API_SECRET_KEY=%s\n' "$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')" >> .env
+grep -q '^DOCKER_GID=' .env || printf 'DOCKER_GID=%s\n' "$(stat -c %g /var/run/docker.sock)" >> .env
+```
+
+- Fernet key: a `.env` from `make secrets` before 2026-10-09 holds a 32-character
+  `AIRFLOW_FERNET_KEY`, and Airflow accepts only urlsafe base64 of 32 bytes (44 characters).
+  Replace it only before Airflow first starts: once Airflow has stored connections or variables,
+  a new key makes them unreadable.
+- `AIRFLOW_API_SECRET_KEY` signs the api-server's requests for task logs, which the scheduler
+  container serves. Without it each process makes up its own, and the UI shows no task log.
+- `DOCKER_GID` is the group of `/var/run/docker.sock`; the scheduler joins it (`group_add`) to
+  start spark-silver through DockerOperator. Without it: `permission denied` on the socket.
+
+Start, with Trino on a 2 GB heap (RAM, `docs/planning/00-mini-architecture-review.md` §6):
+
+```
+TRINO_XMX=2g make start          # recreates trino with -J-Xmx2g
+make up PROFILE=orchestrate      # builds lakehouse/airflow:dev on the first run
+make airflow-init                # pool lake_writers, 1 slot; safe to re-run
+```
+
+While `orchestrate` runs, every `make start` needs `TRINO_XMX=2g` in front: compose takes it from
+the shell over `.env`, and without it recreates Trino with the 2500m of `.env`. Stop Airflow with
+`make down PROFILE=orchestrate`; the next plain `make start` puts Trino back on 2500m.
+
+Check it:
+
+```
+docker compose --env-file .env -f docker/compose.yaml exec airflow-scheduler airflow pools list
+docker compose --env-file .env -f docker/compose.yaml exec airflow-scheduler airflow dags list-import-errors
+docker compose --env-file .env -f docker/compose.yaml exec airflow-scheduler \
+  python -c "import docker; print(docker.from_env().ping())"   # True
+```
+
+A new DAG starts paused (`AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION`): unpause it in the UI or
+with `airflow dags unpause <dag_id>` in the scheduler container. A trigger of a paused DAG stays
+queued. A new DAG file shows up within a minute (`AIRFLOW__DAG_PROCESSOR__REFRESH_INTERVAL=60`).
+
+Measured on 2026-10-18 (`docker stats`, idle, Trino at 2g): airflow-scheduler 386.5 MiB of 600 MiB, airflow-api-server 353.9 MiB of 700 MiB, airflow-dag-processor 202 MiB of 500 MiB, trino 756.3 MiB of 3.5 GiB.
 
 ## Failure scenarios
 

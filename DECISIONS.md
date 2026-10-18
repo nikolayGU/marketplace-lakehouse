@@ -15,7 +15,7 @@ superseded. Longer reasoning lives in `docs/planning/00-mini-architecture-review
 | ADR-008 | Bronze keeps payload as JSON string; typed schema applied in silver from contracts | accepted |
 | ADR-009 | Soft deletes in silver (`_is_deleted`; Iceberg reserves `_deleted`), filtered in dbt | accepted |
 | ADR-010 | `silver.orders` merge-on-read, partitioned by month; other silver tables copy-on-write | accepted, measured 2026-09-26 |
-| ADR-011 | Airflow 3 LocalExecutor, batch only, BashOperator for dbt (no Cosmos) | accepted |
+| ADR-011 | Airflow 3 LocalExecutor, batch only, BashOperator for dbt (no Cosmos), DockerOperator for Spark silver | accepted |
 | ADR-012 | No Schema Registry until week 6; JSON envelopes + JSON Schema contracts | accepted |
 | ADR-013 | Spark metrics via custom StreamingQueryListener, because kafka-exporter cannot see Spark offsets | accepted |
 | ADR-014 | Superset optional; marts are shown through Grafana + Trino datasource, dbt docs and SQL | accepted |
@@ -346,6 +346,35 @@ commits at the same time: the MERGE's position deletes point at files optimize r
 commit fails, and silver replays the batch on its next run. `iceberg_maintenance` therefore must
 not overlap `silver_upsert`.
 The partition does not prune the MERGE itself, whose `on` clause has only the primary key.
+
+## ADR-011 Airflow 3: LocalExecutor, dbt through BashOperator, Spark through DockerOperator
+
+Context: Airflow orchestrates batch only (silver merge, dbt, data quality, maintenance); the bronze
+stream is not a DAG. On a 16 GB laptop there is no room for Celery, a triggerer or Cosmos
+(ADR-015).
+
+Decision (2026-10-09, D9 and D12 of the week 3 spec):
+
+- LocalExecutor; api-server, scheduler and dag-processor run one image, `lakehouse/airflow:dev`
+  (`apache/airflow:3.3.2-python3.12`, the Python of the host). Tasks are processes in the
+  scheduler container; `[core] parallelism` is 2 to fit its 600 MB.
+- dbt through BashOperator: `dbt build` from a venv of its own in the image (`/opt/dbt-venv`,
+  versions from `uv.lock`), because dbt next to Airflow fights it over shared dependencies. The
+  project is mounted read-only, so target and log paths go to `/tmp`.
+- Spark silver through DockerOperator: the scheduler starts `lakehouse/spark:dev` on the network
+  `<COMPOSE_PROJECT_NAME>_lake` with the environment compose gives `spark-silver`, through the
+  Docker socket. The socket is root on the host in effect; accepted for a single-user laptop with
+  every port on 127.0.0.1. Only the scheduler joins the socket's group (`group_add`, `DOCKER_GID`
+  in `.env`). The alternative, BashOperator with `docker compose run`, needs the compose CLI and
+  the repo with its `.env` inside the image.
+- No login (D12): SimpleAuthManager with `simple_auth_manager_all_admins`. Any process on the
+  laptop can drive the DAGs, which is acceptable here. `AIRFLOW_ADMIN_PASSWORD` is gone from
+  `.env.example`.
+- `.env` gains `AIRFLOW_API_SECRET_KEY` (the api-server signs task-log requests to the scheduler
+  with it; without a shared value the UI shows no task log) and `DOCKER_GID`.
+
+Consequences: an image of 3.47 GB to build, the socket as the price of DockerOperator,
+the dbt version pinned twice (`uv.lock` and `airflow/Dockerfile`).
 
 ## ADR-013 Spark metrics
 

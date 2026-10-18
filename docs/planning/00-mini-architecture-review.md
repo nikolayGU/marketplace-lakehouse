@@ -249,6 +249,8 @@ kafka-connect на простое занимает 65% лимита, но это
 
 Замер 08.10.2026 (W2-T09, `docker stats`), конец недели 2, реплеер не играет: trino 1.0 GiB, kafka 794 MiB, kafka-connect 566 MiB, postgres-oltp 236 MiB, minio 225 MiB, postgres-meta 164 MiB, lakekeeper 91 MiB из лимита 256 MiB (36%, замер сразу после переключения каталога). spark-bronze в этот момент не замерялся.
 
+Замер 18.10.2026 (W3-T04, `docker stats`, `orchestrate` в простое, Trino на 2g): airflow-scheduler 386.5 MiB из 600 MiB, airflow-api-server 353.9 MiB из 700 MiB, airflow-dag-processor 202 MiB из 500 MiB, trino 756.3 MiB из 3.5 GiB.
+
 | Сервис | Лимит | Профиль |
 |---|---|---|
 | postgres-oltp | 768 MB | core |
