@@ -1,0 +1,48 @@
+models:
+  - name: mart_daily_sales
+    description: >
+      Sales per purchase date and seller state, incremental: delete+insert of every purchase date
+      with an order changed since the last run (D7). An order counts in the state of each of its
+      sellers, deleted items included; an order that never had an item counts in 'unknown'. So
+      orders_count summed over states can exceed the orders of the day. Check against silver:
+      `select sum(i.price) from lake.silver.order_items i join lake.silver.orders o
+      on i.order_id = o.order_id where not i._is_deleted and not o._is_deleted
+      and o.order_status not in ('canceled', 'unavailable')` equals sum(gmv)
+      (12 885 140.03 on 2026-10-18).
+    data_tests:
+      - unique_combination:
+          arguments:
+            columns: [purchase_date, seller_state]
+    columns:
+      - name: purchase_date
+        data_tests: [not_null]
+      - name: seller_state
+        data_tests: [not_null]
+      - name: source_updated_at
+        description: The latest fct_orders.updated_at among the orders of the row; the watermark.
+  - name: mart_delivery_sla
+    description: Delivery against the estimated date, per purchase month and customer state.
+    data_tests:
+      - unique_combination:
+          arguments:
+            columns: [purchase_month, customer_state]
+    columns:
+      - name: purchase_month
+        data_tests: [not_null]
+      - name: customer_state
+        data_tests: [not_null]
+      - name: p90_delivery_days
+        description: approx_percentile of delivery_days over delivered orders.
+  - name: mart_seller_performance
+    description: >
+      Orders, GMV, reviews, lateness and cancellations per seller and purchase month. A seller's
+      orders are those with any of its items, deleted items included.
+    data_tests:
+      - unique_combination:
+          arguments:
+            columns: [seller_id, purchase_month]
+    columns:
+      - name: seller_id
+        data_tests: [not_null]
+      - name: purchase_month
+        data_tests: [not_null]

@@ -1,0 +1,5 @@
+data_tests:
+  - name: assert_mart_daily_sales_matches_full_recompute
+    description: >
+      The incremental mart_daily_sales equals int_daily_sales, its full recompute (D7). Error on
+      any row.

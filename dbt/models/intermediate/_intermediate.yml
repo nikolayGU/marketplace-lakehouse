@@ -6,3 +6,11 @@ models:
     columns:
       - name: order_id
         data_tests: [unique, not_null]
+  - name: int_daily_sales
+    description: >
+      mart_daily_sales computed over every date, as a view: the full recompute that the mart
+      filters and that its test compares against.
+    data_tests:
+      - unique_combination:
+          arguments:
+            columns: [purchase_date, seller_state]
