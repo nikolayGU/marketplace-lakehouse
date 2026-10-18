@@ -191,7 +191,12 @@ print(next((r["state"] for r in runs if r["run_id"] == sys.argv[1]), "missing"))
 run_dag() {
   local dag=$1 run=$2 conf=${3:-"{}"} state limit=${RUN_DAG_WAIT:-900}
   local deadline=$((SECONDS + limit))
-  airflow_cli dags trigger "$dag" --run-id "$run" --conf "$conf" >/dev/null
+  # Called as `run_dag ... || true`, errexit is off here: a failed trigger must return itself,
+  # or the loop below waits the whole limit for a run that does not exist.
+  airflow_cli dags trigger "$dag" --run-id "$run" --conf "$conf" >/dev/null || {
+    echo "could not trigger $dag run $run" >&2
+    return 1
+  }
   while :; do
     state=$(dag_run_state "$dag" "$run")
     case $state in
@@ -207,4 +212,16 @@ run_dag() {
     fi
     sleep 10
   done
+}
+
+# task_log <dag_id> <run_id> <task_id> [try]: the task's log lines through the REST API of the
+# api-server, as the UI shows them. No login (D12): /auth/token hands out a token.
+task_log() {
+  local api="http://${BIND_IP:-127.0.0.1}:8090" token
+  token=$(curl -sf "$api/auth/token" | python3 -c 'import json, sys; print(json.load(sys.stdin)["access_token"])')
+  curl -sf -H "Authorization: Bearer $token" -H 'Accept: application/json' \
+    "$api/api/v2/dags/$1/dagRuns/$2/taskInstances/$3/logs/${4:-1}" | python3 -c '
+import json, sys
+for entry in json.load(sys.stdin).get("content") or []:
+    print(entry.get("event", "") if isinstance(entry, dict) else entry)'
 }

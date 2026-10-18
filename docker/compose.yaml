@@ -475,7 +475,6 @@ services:
     volumes:
       - ../airflow/dags:/opt/airflow/dags:ro
       - ../dbt:/opt/dbt:ro
-      - /var/run/docker.sock:/var/run/docker.sock   # DockerOperator launches spark-silver
     ports:
       - "${BIND_IP}:8090:8080"
     healthcheck:
@@ -505,7 +504,8 @@ services:
     volumes:
       - ../airflow/dags:/opt/airflow/dags:ro
       - ../dbt:/opt/dbt:ro
-      - /var/run/docker.sock:/var/run/docker.sock
+      # Only the scheduler runs tasks: the api-server has no socket (every UI visitor is admin).
+      - /var/run/docker.sock:/var/run/docker.sock   # DockerOperator launches spark-silver
     healthcheck:
       test: ["CMD-SHELL", "airflow jobs check --job-type SchedulerJob --local"]
       interval: 30s

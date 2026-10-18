@@ -84,9 +84,9 @@ def spark_silver_environment(environ: Mapping[str, str]) -> tuple[dict[str, str]
     return public, private
 
 
-def dbt_command(subcommand: str) -> str:
+def dbt_command(subcommand: str, target_path: str = "/tmp/dbt/target") -> str:
     """dbt inside Airflow: the project is mounted read-only, so target and logs go to /tmp."""
     return (
         f"{DBT} {subcommand} --project-dir {DBT_PROJECT} --profiles-dir {DBT_PROJECT}"
-        " --target dev --target-path /tmp/dbt/target --log-path /tmp/dbt/logs"
+        f" --target dev --target-path {target_path} --log-path /tmp/dbt/logs"
     )

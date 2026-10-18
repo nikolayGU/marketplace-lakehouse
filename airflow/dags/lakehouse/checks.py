@@ -2,6 +2,7 @@
 
 from collections.abc import Mapping
 from datetime import datetime, timedelta
+from typing import Any
 
 # Bronze commits every 20 s while Kafka has events; five quiet minutes mean the source stopped.
 QUIET = timedelta(minutes=5)
@@ -34,3 +35,10 @@ def count_differences(
 ) -> dict[str, tuple[int, int]]:
     """Tables whose live row counts differ, as {table: (postgres, silver)}."""
     return {t: (n, silver.get(t, 0)) for t, n in postgres.items() if silver.get(t, 0) != n}
+
+
+def freshness_query_failures(sources: Mapping[str, Any]) -> list[str]:
+    """Sources whose freshness query failed, from dbt's target/sources.json. dbt exits 1 for a
+    stale source too; that one (status warn or error) is no traffic, not a broken check."""
+    results = sources.get("results", [])
+    return [r["unique_id"] for r in results if r.get("status") == "runtime error"]

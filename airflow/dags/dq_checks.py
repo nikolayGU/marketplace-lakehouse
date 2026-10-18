@@ -6,9 +6,12 @@ exports: the same differences while work is in flight, delivery repeats and sour
 last hour, new quarantine rows, freshness per silver table, dbt source freshness.
 """
 
+import json
+import shlex
+import subprocess
 from datetime import UTC, datetime
+from pathlib import Path
 
-from airflow.providers.standard.operators.bash import BashOperator
 from airflow.sdk import Variable, dag, task
 from lakehouse import checks, sql
 from lakehouse.clients import postgres_value, trino_rows, trino_value
@@ -21,6 +24,7 @@ from lakehouse.settings import (
 )
 
 settings = Settings()
+FRESHNESS_TARGET = "/tmp/dbt/freshness"
 
 
 @dag(
@@ -69,17 +73,26 @@ def dq_checks() -> None:
             seconds = trino_value(settings, sql.freshness_seconds(table))
             print(f"dq silver_freshness_seconds{{table={table}}}={seconds}")
 
-    source_freshness = BashOperator(
-        task_id="dbt_source_freshness",
-        # Exit code 1 is a stale source: no traffic, which is logged, not a failure. 2 is dbt
-        # itself failing.
-        bash_command=(
-            dbt_command("source freshness") + "; rc=$?; "
-            'echo "dq dbt_source_freshness_exit_code=$rc"; [ "$rc" -le 1 ]'
-        ),
-    )
+    @task
+    def dbt_source_freshness() -> None:
+        # Exit code 1 is a stale source (no traffic, logged) or a freshness query that failed;
+        # only sources.json tells them apart. A target path of its own: dbt_build may run now.
+        result = subprocess.run(
+            shlex.split(dbt_command("source freshness", target_path=FRESHNESS_TARGET)),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        print(result.stdout + result.stderr)
+        print(f"dq dbt_source_freshness_exit_code={result.returncode}")
+        if result.returncode > 1:
+            raise RuntimeError(f"dbt source freshness failed, exit code {result.returncode}")
+        sources = json.loads((Path(FRESHNESS_TARGET) / "sources.json").read_text())
+        failed = checks.freshness_query_failures(sources)
+        if failed:
+            raise RuntimeError(f"the freshness query failed for {failed}")
 
-    [silver_keys_unique(), silver_matches_postgres(), report(), source_freshness]
+    [silver_keys_unique(), silver_matches_postgres(), report(), dbt_source_freshness()]
 
 
 dq_checks()

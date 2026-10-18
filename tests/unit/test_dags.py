@@ -115,6 +115,29 @@ def test_count_differences_lists_only_tables_that_differ() -> None:
     assert checks.count_differences(postgres, silver) == {"payments": (7, 6)}
 
 
+def test_freshness_query_failures_are_told_apart_from_stale_sources() -> None:
+    # dbt exits 1 both for a stale source and for a freshness query that failed: only the
+    # status in target/sources.json tells them apart.
+    sources = {
+        "results": [
+            {"unique_id": "source.marketplace.silver.orders", "status": "pass"},
+            {"unique_id": "source.marketplace.silver.order_items", "status": "warn"},
+            {"unique_id": "source.marketplace.silver.payments", "status": "error"},
+            {"unique_id": "source.marketplace.silver.reviews", "status": "runtime error"},
+        ]
+    }
+
+    assert checks.freshness_query_failures(sources) == ["source.marketplace.silver.reviews"]
+
+
+def test_freshness_runs_in_a_target_path_of_its_own() -> None:
+    # dq_checks and dbt_build run dbt at the same time in one container.
+    command = dbt_command("source freshness", target_path="/tmp/dbt/freshness")
+
+    assert "--target-path /tmp/dbt/freshness" in command
+    assert "/tmp/dbt/target" not in command
+
+
 def test_freshness_reads_the_time_column_each_table_has() -> None:
     # quarantine has no _updated_at: dq_checks' report failed on it with COLUMN_NOT_FOUND.
     assert "max(quarantined_at)" in sql.freshness_seconds("quarantine")

@@ -28,6 +28,11 @@ if [ "$state" != failed ]; then
   echo "FAIL: the run with the switch ended $state, expected failed" >&2
   exit 1
 fi
+# Red for another reason (Trino down, a broken profile) would leave the marts alone too.
+if ! task_log dbt_build "$run-broken" dbt_build | grep -q 'Failure in test assert_chaos_break_test'; then
+  echo "FAIL: dbt_build failed, but not on assert_chaos_break_test; see its task log" >&2
+  exit 1
+fi
 if [ "$before" != "$after" ]; then
   echo "FAIL: mart_daily_sales changed although a test upstream of it failed" >&2
   exit 1
