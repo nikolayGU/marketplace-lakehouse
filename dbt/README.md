@@ -27,3 +27,15 @@ days. The only drops dbt does are its own: the temporary `mart_daily_sales__dbt_
 incremental run (D13).
 
 SQL is linted from this directory: `cd dbt && uv run sqlfluff lint models macros tests`.
+
+Tests: keys and relationships on every model; `assert_mart_daily_sales_matches_full_recompute`
+(D7); four tests on known anomalies of the source (`tests/assert_*.sql`), each warning above 0
+and failing above a threshold from a dbt var, with the number and the date in its description
+(`tests/_tests.yml`). `make dbt-docs` writes the docs, the metric glossary of `models/docs.md`
+included, to `target/`.
+
+Freshness: `dbt source freshness` checks `orders`, `order_items`, `payments` and `reviews`, the
+tables the replayer changes (`_updated_at`; warn after 30 minutes, error after 2 hours).
+`customers`, `sellers` and `products` were loaded once and are not checked. With the replay
+stopped, a warn after 30 minutes and an error with exit code 1 after 2 hours mean "no traffic",
+not a broken pipeline.

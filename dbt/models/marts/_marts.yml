@@ -4,20 +4,28 @@ models:
       Sales per purchase date and seller state, incremental: delete+insert of every purchase date
       with an order changed since the last run (D7). An order counts in the state of each of its
       sellers, deleted items included; an order that never had an item counts in 'unknown'. So
-      orders_count summed over states can exceed the orders of the day. Check against silver:
+      orders_count summed over states can exceed the orders of the day. Known limit (D18): a
+      soft-deleted order or a seller moved to another state leaves its old dates stale, since
+      neither moves fct_orders.updated_at. The replayer does neither; if it happens, the full
+      recompute test fails and `--full-refresh` rebuilds the mart. Check against silver:
       `select sum(i.price) from lake.silver.order_items i join lake.silver.orders o
       on i.order_id = o.order_id where not i._is_deleted and not o._is_deleted
       and o.order_status not in ('canceled', 'unavailable')` equals sum(gmv)
-      (12 885 140.03 on 2026-10-18).
+      (12 894 209.50 on 2026-10-18).
     data_tests:
       - unique_combination:
           arguments:
             columns: [purchase_date, seller_state]
     columns:
       - name: purchase_date
+        description: "{{ doc('purchase_date') }}"
         data_tests: [not_null]
       - name: seller_state
         data_tests: [not_null]
+      - name: gmv
+        description: "{{ doc('gmv') }}"
+      - name: canceled_gmv
+        description: "{{ doc('canceled_gmv') }}"
       - name: source_updated_at
         description: The latest fct_orders.updated_at among the orders of the row; the watermark.
   - name: mart_delivery_sla
@@ -31,6 +39,8 @@ models:
         data_tests: [not_null]
       - name: customer_state
         data_tests: [not_null]
+      - name: on_time_rate
+        description: "{{ doc('on_time_rate') }}"
       - name: p90_delivery_days
         description: approx_percentile of delivery_days over delivered orders.
   - name: mart_seller_performance
@@ -46,3 +56,9 @@ models:
         data_tests: [not_null]
       - name: purchase_month
         data_tests: [not_null]
+      - name: gmv
+        description: "{{ doc('gmv') }}"
+      - name: avg_review_score
+        description: "{{ doc('review_score') }}"
+      - name: cancellation_rate
+        description: "{{ doc('cancellation_rate') }}"

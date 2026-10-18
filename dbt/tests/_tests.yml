@@ -3,3 +3,20 @@ data_tests:
     description: >
       The incremental mart_daily_sales equals int_daily_sales, its full recompute (D7). Error on
       any row.
+  - name: assert_payments_match_order_value
+    description: >
+      Source anomaly. Payments differ from items plus freight by more than 0.01 for 287 orders
+      that are neither canceled nor unavailable (2026-10-09). warn above 0, error above
+      var payments_mismatch_error_if (default 1000, about 1% of orders).
+  - name: assert_delivered_not_before_carrier
+    description: >
+      Source anomaly. 23 orders reached the customer before the carrier got them (2026-10-09).
+      warn above 0, error above var delivered_before_carrier_error_if (default 100).
+  - name: assert_products_have_category
+    description: >
+      Source anomaly. 610 products without a category (2026-10-09); products never change during
+      the replay. warn above 0, error above var products_without_category_error_if (default 700).
+  - name: assert_categories_have_translation
+    description: >
+      Source anomaly. 2 categories without an English name (2026-10-09). warn above 0, error
+      above var untranslated_categories_error_if (default 5).

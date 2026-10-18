@@ -137,4 +137,7 @@ dbt-parse: ## dbt parse without a warehouse
 dbt-build: ## seed, run and test lake.gold through Trino on 127.0.0.1:8080 (needs make start)
 	cd dbt && uv run dbt build --profiles-dir . --target dev
 
-.PHONY: help secrets hooks data migrate replay-load replay-start replay-reset start up down status logs nuke bootstrap verify verify-fast reconcile report replay-burst replay-live replay-status silver psql trino kafka-topics kafka-groups cdc-snapshot connector-status iceberg-demo lakekeeper-bootstrap lint test test-spark dbt-parse dbt-build
+dbt-docs: ## dbt docs generate into dbt/target (needs Trino)
+	cd dbt && uv run dbt docs generate --profiles-dir . --target dev
+
+.PHONY: help secrets hooks data migrate replay-load replay-start replay-reset start up down status logs nuke bootstrap verify verify-fast reconcile report replay-burst replay-live replay-status silver psql trino kafka-topics kafka-groups cdc-snapshot connector-status iceberg-demo lakekeeper-bootstrap lint test test-spark dbt-parse dbt-build dbt-docs

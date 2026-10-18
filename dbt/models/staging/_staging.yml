@@ -4,6 +4,22 @@ models:
     columns:
       - name: order_id
         data_tests: [unique, not_null]
+      - name: order_status
+        description: >
+          A contract of the source: a status outside the eight of the dataset is an error, not
+          a warning.
+        data_tests:
+          - accepted_values:
+              arguments:
+                values:
+                  - created
+                  - approved
+                  - invoiced
+                  - processing
+                  - shipped
+                  - delivered
+                  - canceled
+                  - unavailable
   - name: stg_order_items
     description: >
       One row per order item, deleted ones included: the replayer deletes the items of an order
