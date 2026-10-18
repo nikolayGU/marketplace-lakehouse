@@ -163,7 +163,7 @@ Postgres (Olist загружен) → Debezium snapshot + streaming → Kafka `o
 
 ```
                      ┌────────────────────────────── orchestrate (Airflow 3) ──────────────────────────────┐
-                     │  silver_upsert (5 min)   dbt_build (hourly)   dq_checks (15 min)   iceberg_maintenance │
+                     │  silver_upsert (5 min)   dbt_build (Asset)    dq_checks (15 min)   iceberg_maintenance │
                      └───────────┬──────────────────────┬──────────────────┬──────────────────────┬──────────┘
                                  │                      │                  │                      │
 oltp_replayer ──▶ postgres-oltp ──▶ kafka-connect ──▶ kafka ──▶ spark-bronze ──▶ Iceberg bronze ──▶ spark-silver ──▶ Iceberg silver ──▶ trino ◀── dbt ──▶ Iceberg gold ──▶ superset
@@ -187,7 +187,7 @@ oltp_replayer ──▶ postgres-oltp ──▶ kafka-connect ──▶ kafka �
 | Spark silver | Инкрементально читает bronze (Iceberg streaming read), dedup по `(pk, lsn)`, `MERGE INTO` типизированные таблицы, применяет DELETE | Streaming MERGE напрямую ненадёжен; dbt на Trino не умеет читать инкрементально по snapshot | `AvailableNow` каждые 5 минут | Падение посреди MERGE | Iceberg атомарен; checkpoint не сдвинулся; повтор даёт тот же результат (MERGE идемпотентен) |
 | Iceberg silver | Текущее состояние таблиц источника + история snapshots | Overwrite всей таблицы каждые 5 минут это small files и нет истории | MoR для `orders` (частые UPDATE), CoW для остальных; решение ADR-007 | Delete files накапливаются | Compaction |
 | Trino | SQL над lake для dbt, DQ и людей | Spark SQL медленный на старте и тяжёлый для интерактива | 1 нода, `Xmx` 2-2.5g | OOM на большом join | `query.max-memory-per-node`, лимит на dbt-модель |
-| dbt | staging → intermediate → marts, tests, lineage | Ручной SQL не тестируется и не документируется | Batch раз в час | Тест упал → DAG красный, marts не обновлены | Исправить, перезапустить; incremental не ломает историю |
+| dbt | staging → intermediate → marts, tests, lineage | Ручной SQL не тестируется и не документируется | После каждого merge silver (Asset `lake.silver`) | Тест упал → DAG красный, marts не обновлены | Исправить, перезапустить; incremental не ломает историю |
 | Airflow | Расписание и зависимости batch-шагов, ретраи, видимость | cron не даёт ретраев, логов, lineage между DAG | Только batch; стрим не оборачивает | Scheduler упал | Restart, недостающие запуски catchup=False |
 | Prometheus + Grafana | Lag, freshness, ошибки, ресурсы | Логи не отвечают «сколько отстаём» | Без долгого хранения | Сам мониторинг упал | Не влияет на данные |
 
@@ -249,7 +249,7 @@ kafka-connect на простое занимает 65% лимита, но это
 
 Замер 08.10.2026 (W2-T09, `docker stats`), конец недели 2, реплеер не играет: trino 1.0 GiB, kafka 794 MiB, kafka-connect 566 MiB, postgres-oltp 236 MiB, minio 225 MiB, postgres-meta 164 MiB, lakekeeper 91 MiB из лимита 256 MiB (36%, замер сразу после переключения каталога). spark-bronze в этот момент не замерялся.
 
-Замер 18.10.2026 (W3-T04, `docker stats`, `orchestrate` в простое, Trino на 2g): airflow-scheduler 386.5 MiB из 600 MiB, airflow-api-server 353.9 MiB из 700 MiB, airflow-dag-processor 202 MiB из 500 MiB, trino 756.3 MiB из 3.5 GiB.
+Замер 18.10.2026 (W3-T04, `docker stats`, `orchestrate` в простое, Trino на 2g): airflow-scheduler 386.5 MiB из 600 MiB, airflow-api-server 353.9 MiB из 700 MiB, airflow-dag-processor 202 MiB из 500 MiB, trino 756.3 MiB из 3.5 GiB. Под `dbt build` (W3-T05a) пик scheduler 579 MiB из 600 MiB, поэтому лимит поднят до 900 MiB (D19).
 
 | Сервис | Лимит | Профиль |
 |---|---|---|
@@ -263,7 +263,7 @@ kafka-connect на простое занимает 65% лимита, но это
 | oltp-replayer | 256 MB | core |
 | **Итого core** | **~7.5 GB** (реально ~5) | |
 | trino (`Xmx` 2.5 GB, при orchestrate 2 GB) | 3.5 GB | query |
-| airflow: api-server, scheduler, dag-processor | 700 + 600 + 500 MB | orchestrate |
+| airflow: api-server, scheduler, dag-processor | 700 + 900 + 500 MB | orchestrate |
 | spark-silver (короткоживущий, `Xmx` 1.5 GB) | 2 GB | запускается Airflow |
 | prometheus, grafana, 4 экспортера | ~900 MB | obs |
 | superset | 1.2 GB | bi (optional) |

@@ -32,7 +32,8 @@ operations, observability and failure recovery treated as first-class.
    watermark, state and late-event behaviour observable rather than theoretical.
 6. dbt on Trino builds `stg_*` views, `int_*` models and marts (`fct_orders`, `fct_order_items`,
    `dim_*`, `mart_daily_sales` incremental by purchase date, `mart_seller_performance`,
-   `mart_delivery_sla`) hourly, triggered by the silver asset. Tests and docs run with it.
+   `mart_delivery_sla`) after every silver merge, triggered by the Asset `lake.silver`. Tests run
+   with it; docs are generated on demand (`make dbt-docs`).
 7. `dq_checks` reconciles counts source vs silver vs gold, measures freshness and duplicate
    ratio, and exports gauges to Prometheus. `iceberg_maintenance` compacts files, rewrites
    position deletes, expires snapshots and removes orphans.

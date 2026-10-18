@@ -35,16 +35,20 @@ select = ["E", "F", "I", "B", "UP", "N", "SIM", "RUF"]
 # PySpark idioms: `functions as F`, and listener callbacks whose camelCase names Spark dictates.
 "streaming/**" = ["N802", "N812"]
 
+[tool.ruff.lint.isort]
+# The repo has an airflow/ directory; the package of that name is the installed library.
+known-third-party = ["airflow"]
+
 [tool.mypy]
 python_version = "3.12"
 strict = true
 ignore_missing_imports = true
-# mypy fails on a directory without .py files; add streaming and airflow/dags as they appear.
-files = ["scripts", "tests", "oltp", "streaming"]
-# `replayer` and `spark_jobs` are top-level packages, which is what their containers see too.
-mypy_path = "oltp:streaming"
+# DAG files are left out: without Airflow on the host, mypy cannot type them.
+files = ["scripts", "tests", "oltp", "streaming", "airflow/dags/lakehouse"]
+# `replayer`, `spark_jobs` and `lakehouse` are top-level packages, as their containers see them.
+mypy_path = "oltp:streaming:airflow/dags"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# `replayer` lives in oltp/ and `spark_jobs` in streaming/, same as inside the images.
-pythonpath = ["oltp", "streaming", "."]
+# `replayer` lives in oltp/, `spark_jobs` in streaming/, `lakehouse` in airflow/dags/, as in the images.
+pythonpath = ["oltp", "streaming", "airflow/dags", "."]

@@ -373,7 +373,21 @@ A new DAG starts paused (`AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION`): unpause 
 with `airflow dags unpause <dag_id>` in the scheduler container. A trigger of a paused DAG stays
 queued. A new DAG file shows up within a minute (`AIRFLOW__DAG_PROCESSOR__REFRESH_INTERVAL=60`).
 
-Measured on 2026-10-18 (`docker stats`, idle, Trino at 2g): airflow-scheduler 386.5 MiB of 600 MiB, airflow-api-server 353.9 MiB of 700 MiB, airflow-dag-processor 202 MiB of 500 MiB, trino 756.3 MiB of 3.5 GiB.
+Measured on 2026-10-18 (`docker stats`, idle, Trino at 2g): airflow-scheduler 386.5 MiB of 600 MiB, airflow-api-server 353.9 MiB of 700 MiB, airflow-dag-processor 202 MiB of 500 MiB, trino 756.3 MiB of 3.5 GiB. Under `dbt build` the scheduler peaked at 579 MiB of the first 600 MiB limit; it is 900 MiB since (D19).
+
+DAGs live in `airflow/dags/`; their shared code is `airflow/dags/lakehouse/`, which
+`.airflowignore` keeps out of DAG parsing.
+
+| DAG | Schedule | Does |
+|---|---|---|
+| `silver_upsert` | every 5 min, `max_active_runs=1`, 1 retry | `bronze_has_new_snapshot` skips the run when bronze has no snapshot silver has not merged; `merge` starts spark-silver (DockerOperator, pool `lake_writers`) and publishes the Asset `lake.silver`; `remember_snapshot` stores the merged snapshot id in the Variable `silver_upsert_last_bronze_snapshot` |
+| `dbt_build` | Asset `lake.silver` | `dbt build` of `lake.gold` from `/opt/dbt-venv`, no retries; a manual run takes dbt vars from its conf, `{"dbt_vars": "{...}"}` |
+
+One silver writer. While `silver_upsert` is unpaused, `make silver` and `make verify` must not
+run: two processes on one checkpoint (`make verify` refuses while the scheduler runs). For a
+manual merge: `airflow dags pause silver_upsert` in the scheduler container, wait until its
+running `merge` ends, `make silver`, then `airflow dags unpause silver_upsert`. The first run from
+Airflow continues from the checkpoint of the last `make silver`.
 
 ## Failure scenarios
 

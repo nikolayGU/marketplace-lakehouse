@@ -357,7 +357,8 @@ Decision (2026-10-09, D9 and D12 of the week 3 spec):
 
 - LocalExecutor; api-server, scheduler and dag-processor run one image, `lakehouse/airflow:dev`
   (`apache/airflow:3.3.2-python3.12`, the Python of the host). Tasks are processes in the
-  scheduler container; `[core] parallelism` is 2 to fit its 600 MB.
+  scheduler container; `[core] parallelism` is 2 within its 900 MB. The first limit, 600 MB,
+  left too little room: `dbt build` alone peaked the scheduler at 579 MiB (D19, 2026-10-18).
 - dbt through BashOperator: `dbt build` from a venv of its own in the image (`/opt/dbt-venv`,
   versions from `uv.lock`), because dbt next to Airflow fights it over shared dependencies. The
   project is mounted read-only, so target and log paths go to `/tmp`.
@@ -372,6 +373,10 @@ Decision (2026-10-09, D9 and D12 of the week 3 spec):
   `.env.example`.
 - `.env` gains `AIRFLOW_API_SECRET_KEY` (the api-server signs task-log requests to the scheduler
   with it; without a shared value the UI shows no task log) and `DOCKER_GID`.
+- Cadence (D10): `silver_upsert` every 5 minutes, and its first task skips the run when bronze
+  has no snapshot that silver has not merged, so no JVM starts for nothing and no Asset event
+  wakes dbt; `dbt_build` on the Asset `lake.silver`; `dq_checks` every 15 minutes on time (moving
+  it onto the Asset is the owner's Modify gate).
 
 Consequences: an image of 3.47 GB to build, the socket as the price of DockerOperator,
 the dbt version pinned twice (`uv.lock` and `airflow/Dockerfile`).

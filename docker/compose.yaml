@@ -515,7 +515,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 600M
+          memory: 900M
     networks: [lake]
 
   airflow-dag-processor:
