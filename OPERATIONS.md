@@ -6,7 +6,7 @@
 |---|---|---|
 | Daily work on ingestion | `make start` | ~11 GB limits, ~7 GB real |
 | Working on dbt / Airflow | `make start && make up PROFILE=orchestrate` (Trino `Xmx` drops to 2g via `TRINO_XMX`); stop `orchestrate` when not working on batch | ~13 GB limits, ~9 GB real |
-| Full pipeline with monitoring | `make start && make up PROFILE=orchestrate,obs` | ~14 GB limits, ~10 GB real |
+| Full pipeline with monitoring | `TRINO_XMX=2g make start && make up PROFILE=orchestrate,obs` | 13.6 GB limits, 5.2 GB real at rest (2026-10-19) |
 | Demo dashboard (optional Superset) | `make down PROFILE=orchestrate && make up PROFILE=bi` | swap orchestrate for bi |
 | Debugging Kafka visually | `make up PROFILE=tools` for 15 minutes, then `make down PROFILE=tools` | +0.4 GB |
 
@@ -398,6 +398,56 @@ merged its latest snapshot, so a change never reached silver; `make verify` (wit
 stopped) shows the offsets and the counts. Differences with `at_rest=False` are normal during a
 replay burst. A stale `dbt source freshness` (exit code 1) is logged, not failed: no traffic is not
 a broken pipeline.
+
+Host sleep pauses the Docker VM. A task in flight at that moment fails on wake: Trino has
+abandoned its query (`ABANDONED_QUERY`), the scheduler fails task instances without a heartbeat,
+and the task's API token has expired (`Invalid auth token`). Before reading a red run as a
+pipeline failure, look for `Heartbeat recovered after <n> seconds` just before it in
+`docker logs lakehouse-airflow-scheduler-1`. Keep Windows sleep off while the stack runs
+(`powercfg /change standby-timeout-ac 0`, the same for `hibernate-timeout-ac`).
+
+## Observability
+
+`make up PROFILE=obs` on top of `core` (and usually `orchestrate`); it starts nothing from
+`core`. Prometheus on http://127.0.0.1:9090, Grafana on http://127.0.0.1:3000 (`admin`, password
+`GRAFANA_ADMIN_PASSWORD` from `.env`). Exporters have no host ports; Prometheus reaches them on
+the `lake` network.
+
+| Job | Target | What it gives |
+|---|---|---|
+| `prometheus` | `localhost:9090` | Prometheus itself, `prometheus_tsdb_head_series` |
+| `spark-bronze` | `spark-bronze:4041` | bronze listener: rows, batch duration, last batch time (ADR-013) |
+| `kafka-exporter` | `kafka-exporter:9308` | brokers, topic and partition offsets (not Spark's lag: ADR-013) |
+| `postgres-exporter` | `postgres-exporter:9187` | `pg_*`, plus `lakehouse_slot_retained_bytes` and `lakehouse_slot_active` per slot from `observability/postgres-exporter/queries.yaml` |
+| `statsd-exporter` | `statsd-exporter:9102` | StatsD of Airflow and `dq_checks` (mappings land with W4-T01b, W4-T03) |
+| `container-exporter` | `container-exporter:9105` | `docker_container_*{name,service}`: memory as `docker stats`, limit, CPU, start time, restarts, OOM kill, health (ADR-023) |
+
+Check it:
+
+```bash
+curl -s 127.0.0.1:9090/api/v1/targets | python3 -c 'import json,sys; t=json.load(sys.stdin)["data"]["activeTargets"]; print(sorted((x["labels"]["job"], x["health"]) for x in t))'
+curl -s 127.0.0.1:9090/api/v1/query --data-urlencode 'query=lakehouse_slot_retained_bytes'
+curl -s 127.0.0.1:3000/api/health
+```
+
+- Their `depends_on` on `core` services is `required: false`, so `make up PROFILE=obs` stays a
+  valid project without `core`. The healthchecks of `kafka-exporter` and `postgres-exporter` look
+  for `kafka_brokers` above 0 and `pg_up 1`, since `/metrics` answers 200 with the broker or the
+  database down; without `core` both should stay unhealthy (not run live: `core` was up).
+- `observability/prometheus` is mounted read-only as a directory. After editing rules or scrape
+  configs: `docker kill -s HUP lakehouse-prometheus-1`.
+- Grafana provisioning is mounted whole over the image's directory, so `provisioning/alerting`
+  and `provisioning/plugins` exist in the repo empty: without them Grafana logs errors.
+- Every file compose mounts must exist before the first start: a missing file becomes a
+  root-owned directory on the host. `find observability -type d -name '*.y*ml'` must print nothing.
+- `container-exporter` holds the Docker socket (root on the host in effect) and only sends GET.
+  It joins the socket's group `DOCKER_GID` from `.env`, as the scheduler does; a wrong group
+  shows as `up == 0` with a permission error in its log. An empty container list fails the
+  scrape too: it means `COMPOSE_PROJECT_NAME` does not match the stack.
+  `docker_container_restart_count` counts restarts by the restart policy only; `docker restart`
+  shows as a new `docker_container_start_time_seconds`.
+- At rest on 2026-10-19 with `core+query+orchestrate+obs`: 2921 head series; Prometheus 142 MiB
+  of 300 MiB, Grafana 123 of 256, container-exporter 29 of 64, other exporters 8-10 of 64.
 
 ## Failure scenarios
 

@@ -74,7 +74,7 @@ rest of the history at full speed; `make up` refuses any `PROFILE` that contains
 | `core` | postgres-oltp, postgres-meta (Lakekeeper's database), kafka, kafka-connect, minio, lakekeeper (Iceberg REST catalog), spark-bronze; oltp-replayer only through `make replay-live` | ~7.5 GB |
 | `query` | trino | 3.5 GB |
 | `orchestrate` | airflow api-server / scheduler / dag-processor | ~1.8 GB |
-| `obs` | prometheus, grafana, exporters, cadvisor | ~0.9 GB |
+| `obs` | prometheus, grafana, exporters, container-exporter | ~0.8 GB |
 | `bi` | superset (optional) | 1.2 GB |
 | `tools` | kafka-ui | 0.4 GB |
 

@@ -40,7 +40,7 @@ operations, observability and failure recovery treated as first-class.
    snapshot expiry and orphan removal wait for week 5.
 8. Prometheus scrapes Kafka, Connect, PostgreSQL (slot lag, retained WAL), the Spark driver
    (custom `StreamingQueryListener` metrics: input rows, batch duration, Kafka lag), Airflow
-   (StatsD) and cAdvisor. Grafana shows "Pipeline health" and "Infra". Six alert rules.
+   (StatsD) and a small `container-exporter` on the Docker API (ADR-023). Grafana shows "Pipeline health" and "Infra". Six alert rules.
 9. Grafana with a Trino datasource shows a few gold-level charts; Superset is optional.
 
 ## Where exactly-once comes from

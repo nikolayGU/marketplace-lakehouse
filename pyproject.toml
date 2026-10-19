@@ -44,11 +44,12 @@ python_version = "3.12"
 strict = true
 ignore_missing_imports = true
 # DAG files are left out: without Airflow on the host, mypy cannot type them.
-files = ["scripts", "tests", "oltp", "streaming", "airflow/dags/lakehouse"]
-# `replayer`, `spark_jobs` and `lakehouse` are top-level packages, as their containers see them.
-mypy_path = "oltp:streaming:airflow/dags"
+files = ["scripts", "tests", "oltp", "streaming", "airflow/dags/lakehouse", "observability/container-exporter"]
+# `replayer`, `spark_jobs`, `lakehouse` and `container_exporter` are top-level packages, as their
+# containers see them.
+mypy_path = "oltp:streaming:airflow/dags:observability/container-exporter"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 # `replayer` lives in oltp/, `spark_jobs` in streaming/, `lakehouse` in airflow/dags/, as in the images.
-pythonpath = ["oltp", "streaming", "airflow/dags", "."]
+pythonpath = ["oltp", "streaming", "airflow/dags", "observability/container-exporter", "."]

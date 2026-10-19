@@ -127,7 +127,7 @@ Postgres (Olist загружен) → Debezium snapshot + streaming → Kafka `o
 | `core` | postgres-oltp, postgres-meta (БД Lakekeeper, JDBC-каталог как точка отката), kafka, kafka-connect, minio, lakekeeper (с 08.10, бывший профиль `rest`), spark-bronze, oltp-replayer | Всегда во время работы |
 | `query` | trino | Почти всегда; выключается, если идёт тяжёлая отладка Spark |
 | `orchestrate` | airflow-api-server, airflow-scheduler, airflow-dag-processor | С недели 3; запускает spark-silver и dbt |
-| `obs` | prometheus, grafana, kafka-exporter, postgres-exporter, statsd-exporter, cadvisor | С недели 4; лёгкий, обычно живёт вместе с core |
+| `obs` | prometheus, grafana, kafka-exporter, postgres-exporter, statsd-exporter, container-exporter (вместо cadvisor, ADR-023) | С недели 4; лёгкий, обычно живёт вместе с core |
 | `bi` | superset | Optional, только для демо, вместо `orchestrate` |
 | `tools` | kafka-ui | По требованию, на 15 минут |
 
@@ -171,7 +171,7 @@ oltp_replayer ──▶ postgres-oltp ──▶ kafka-connect ──▶ kafka �
                    logical)                          3 parts)    append-only)      Lakekeeper)        foreachBatch       deduped,
                                                                                                      MERGE INTO)        no duplicates)
                      ┌───────────────────────────────────── obs (Prometheus + Grafana) ─────────────────────────────────────┐
-                     │ postgres-exporter (slot lag, WAL)  kafka-exporter  connect JMX  spark listener  statsd (Airflow)  cadvisor │
+                     │ postgres-exporter (slot lag, WAL)  kafka-exporter  connect JMX  spark listener  statsd (Airflow)  docker   │
                      └──────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -219,7 +219,7 @@ oltp_replayer ──▶ postgres-oltp ──▶ kafka-connect ──▶ kafka �
 | dbt | `dbt-core 1.10.x` + `dbt-trino 1.10.3` | Стратегии `append`, `merge`, `delete+insert` |
 | airflow | `apache/airflow:3.3.2` | LocalExecutor; api-server + scheduler + dag-processor |
 | prometheus, grafana | `prom/prometheus:v3.14.0`, `grafana/grafana:13.2.2` | |
-| экспортеры | `danielqsj/kafka-exporter:v1.10.0`, `prometheuscommunity/postgres-exporter`, `prom/statsd-exporter`, `gcr.io/cadvisor/cadvisor` | Версии закрепить при первом pull |
+| экспортеры | `danielqsj/kafka-exporter:v1.10.0`, `prometheuscommunity/postgres-exporter:v0.17.1`, `prom/statsd-exporter:v0.28.0`, свой `lakehouse/container-exporter:dev` | Теги проверены 19.10; cadvisor на Docker Desktop с containerd image store не видит контейнеры (ADR-023) |
 | superset | `apache/superset` (тег 6.1 по digest) | Теги на Docker Hub не semver, пиновать по digest |
 
 Python: 3.12, `uv`, `ruff`, `mypy`, `pytest`, `pydantic-settings`, `psycopg`, `prometheus-client`. SQL: `sqlfluff`. YAML: `yamllint`. Dockerfile: `hadolint`.
@@ -251,6 +251,8 @@ kafka-connect на простое занимает 65% лимита, но это
 
 Замер 18.10.2026 (W3-T04, `docker stats`, `orchestrate` в простое, Trino на 2g): airflow-scheduler 386.5 MiB из 600 MiB, airflow-api-server 353.9 MiB из 700 MiB, airflow-dag-processor 202 MiB из 500 MiB, trino 756.3 MiB из 3.5 GiB. Под `dbt build` (W3-T05a) пик scheduler 579 MiB из 600 MiB, поэтому лимит поднят до 900 MiB (D19).
 
+Замер 19.10.2026 (W4-T01a, `docker stats`, `core+query+orchestrate+obs` в покое, Trino на 2g): всего 5.16 GiB при лимитах 13.59 GiB. `obs` 319 MiB из 812 MiB: prometheus 142 MiB из 300, grafana 123 из 256, container-exporter 29 из 64, kafka-, postgres- и statsd-exporter по 8-10 из 64; trino 1.39 GiB из 3.5 GiB, minio 289 MiB из 512.
+
 | Сервис | Лимит | Профиль |
 |---|---|---|
 | postgres-oltp | 768 MB | core |
@@ -265,7 +267,7 @@ kafka-connect на простое занимает 65% лимита, но это
 | trino (`Xmx` 2.5 GB, при orchestrate 2 GB) | 3.5 GB | query |
 | airflow: api-server, scheduler, dag-processor | 700 + 900 + 500 MB | orchestrate |
 | spark-silver (короткоживущий, `Xmx` 1.5 GB) | 2 GB | запускается Airflow |
-| prometheus, grafana, 4 экспортера | ~900 MB | obs |
+| prometheus, grafana, 4 экспортера (container-exporter вместо cadvisor, ADR-023) | 812 MB | obs |
 | superset | 1.2 GB | bi (optional) |
 | kafka-ui | 400 MB | tools |
 

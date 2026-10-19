@@ -27,6 +27,7 @@ superseded. Longer reasoning lives in `docs/planning/00-mini-architecture-review
 | ADR-020 | Silver contracts as JSON Schema per table; naive source timestamps become `timestamp_ntz` at millisecond precision | accepted |
 | ADR-021 | Silver upsert: one AvailableNow job, newest event per key, MERGE guarded by `_last_lsn`, idempotent on replay | accepted |
 | ADR-022 | Bronze keeps Debezium's `source.sequence` as text; silver keeps ordering by `lsn` until there is a second writer | accepted |
+| ADR-023 | Observability sources: own `container-exporter` on the Docker API instead of cAdvisor; retained WAL from a custom postgres-exporter query | accepted |
 
 ## ADR-001 Real data via Olist replay
 
@@ -550,3 +551,30 @@ they are not backfilled; most of them have also left Kafka (24 h retention). The
 the first transaction after one. After a `docker kill` of Connect the first re-sent transaction
 can carry a first element that is too small, because the slot is flushed from the last acked
 record rather than from the stored offset; a sequence-based guard would have to tolerate that.
+
+## ADR-023 Observability: metric sources
+
+Context: profile `obs` planned cAdvisor for per-container memory, CPU and restarts (Infra
+dashboard, `ContainerRestarting`). On Docker Desktop 29.8 with the containerd image store,
+cAdvisor v0.52.1 and v0.55.1 fail to create any Docker container (`failed to identify the
+read-write layer ID`; upstream google/cadvisor#3643, closed as not planned), so no series carries
+a container name. With its Docker factory disabled, cAdvisor reports raw cgroups by 64-character
+id only, and every `container_start_time_seconds` equals the VM boot time (checked 2026-10-19).
+
+Decision: `container-exporter` replaces cAdvisor in `obs`. About 200 lines of Python on the
+standard library, `prometheus_client` and `pydantic-settings`; at scrape time it lists the
+compose project's containers through the Docker socket (GET only) and exports
+`docker_container_*{name,service}`: memory as `docker stats` prints it (usage minus inactive file
+cache), memory limit, CPU seconds, start time, `RestartCount`, `OOMKilled`, running and health. A
+failed Docker call fails the scrape (`up == 0`) rather than returning an empty page.
+`ContainerRestarting` uses the start time: `docker restart` and compose restarts do not increment
+`RestartCount`, only the restart policy does.
+
+Retained WAL of the replication slot comes from a custom postgres-exporter query
+(`lakehouse_slot_retained_bytes`, `lakehouse_slot_active`): the built-in slot collector reports
+`confirmed_flush_lsn` only for active slots, which is exactly when it does not matter.
+
+Consequences: one more image to build (`lakehouse/container-exporter:dev`, 64 MB limit, ~30 MB
+used). The container holds the Docker socket, root on the host in effect, like the Airflow
+scheduler (ADR-011); it has no host port. Metric names differ from cAdvisor's, so community
+dashboards for cAdvisor do not apply as is.

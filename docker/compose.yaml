@@ -551,7 +551,7 @@ services:
     profiles: [obs]
     command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.retention.time=7d"]
     volumes:
-      - ../observability/prometheus:/etc/prometheus:ro   # TODO(W4): scrape configs + alert rules
+      - ../observability/prometheus:/etc/prometheus:ro   # rules reload on SIGHUP, not on file change
       - prometheus:/prometheus
     ports:
       - "${BIND_IP}:9090:9090"
@@ -574,11 +574,14 @@ services:
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
       GF_USERS_ALLOW_SIGN_UP: "false"
     volumes:
-      - ../observability/grafana/provisioning:/etc/grafana/provisioning:ro   # TODO(W4)
+      - ../observability/grafana/provisioning:/etc/grafana/provisioning:ro
       - ../observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
       - grafana:/var/lib/grafana
     ports:
       - "${BIND_IP}:3000:3000"
+    depends_on:
+      prometheus:
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health >/dev/null"]
       interval: 15s
@@ -592,9 +595,21 @@ services:
 
   kafka-exporter:
     <<: *common
-    image: danielqsj/kafka-exporter:v1.10.0
+    image: danielqsj/kafka-exporter:v1.10.0   # verified 2026-10-19
     profiles: [obs]
-    command: ["--kafka.server=kafka:9092"]
+    # Pinned to the newest protocol sarama knows; 2.0.0 (default) also reads broker 4.3.1 (2026-10-19).
+    command: ["--kafka.server=kafka:9092", "--kafka.version=4.0.0"]
+    # Without `required: false` a profile-obs service depending on a profile-core one makes the
+    # project invalid under `make up PROFILE=obs`.
+    depends_on:
+      kafka:
+        condition: service_healthy
+        required: false
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9308/metrics | grep -q '^kafka_brokers [1-9]'"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
     deploy:
       resources:
         limits:
@@ -603,13 +618,23 @@ services:
 
   postgres-exporter:
     <<: *common
-    image: prometheuscommunity/postgres-exporter:v0.17.1   # TODO(W4): verify tag
+    image: prometheuscommunity/postgres-exporter:v0.17.1   # verified 2026-10-19
     profiles: [obs]
     environment:
       DATA_SOURCE_NAME: postgresql://${OLTP_USER}:${OLTP_PASSWORD}@postgres-oltp:5432/${OLTP_DB}?sslmode=disable
       PG_EXPORTER_EXTEND_QUERY_PATH: /queries.yaml   # replication slot retained WAL
     volumes:
       - ../observability/postgres-exporter/queries.yaml:/queries.yaml:ro
+    depends_on:
+      postgres-oltp:
+        condition: service_healthy
+        required: false
+    healthcheck:
+      # /metrics answers 200 with the database down; pg_up says whether the exporter got in.
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9187/metrics | grep -q '^pg_up 1'"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
     deploy:
       resources:
         limits:
@@ -618,31 +643,45 @@ services:
 
   statsd-exporter:
     <<: *common
-    image: prom/statsd-exporter:v0.28.0   # TODO(W4): verify tag; Airflow metrics
+    image: prom/statsd-exporter:v0.28.0   # verified 2026-10-19; Airflow and dq_checks metrics
     profiles: [obs]
     volumes:
       - ../observability/statsd/mapping.yml:/tmp/mapping.yml:ro
     command: ["--statsd.mapping-config=/tmp/mapping.yml"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9102/-/healthy >/dev/null"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
     deploy:
       resources:
         limits:
           memory: 64M
     networks: [lake]
 
-  cadvisor:
+  # cAdvisor cannot name containers on Docker Desktop with the containerd image store (2026-10-19,
+  # v0.52.1 and v0.55.1): this reads the Docker API instead (ADR-023).
+  container-exporter:
     <<: *common
-    image: gcr.io/cadvisor/cadvisor:v0.52.1   # TODO(W4): verify tag
+    build:
+      context: ../observability/container-exporter
+    image: lakehouse/container-exporter:dev
     profiles: [obs]
-    privileged: true
+    environment:
+      COMPOSE_PROJECT_NAME: ${COMPOSE_PROJECT_NAME:-lakehouse}
+    # Only GET requests, but the socket is root on the host in effect, as for the scheduler.
+    group_add: ["${DOCKER_GID:-0}"]
     volumes:
-      - /:/rootfs:ro
-      - /var/run:/var/run:ro
-      - /sys:/sys:ro
-      - /var/lib/docker/:/var/lib/docker:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9105/metrics', timeout=4)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
     deploy:
       resources:
         limits:
-          memory: 256M
+          memory: 64M
     networks: [lake]
 
   # ---------------------------------------------------------------- bi

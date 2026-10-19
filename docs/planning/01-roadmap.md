@@ -81,7 +81,7 @@
 - Для Connect JMX exporter в образе Connect нет jar: свой слой образа или bind-маунт jar, решение владельца в спеке.
 - Chaos 6 и `SlotWalRetainedHigh`: слот не двигается, пока в `shop` нет изменений (pgoutput пропускает пустые транзакции, heartbeat не сдвигает LSN), поэтому на простое WAL растёт без всякого отказа. Сценарий и порог алерта проверяются во время порции реплея; лечение через `heartbeat.action.query` это новая таблица и топик, значит ADR.
 - Silver живёт минуту и сам метрик не отдаёт: длительность и исход `merge` для алертов берутся из Airflow (StatsD). Метрика `quarantine_rows_total` это Modify-гейт владельца, её не делать.
-- Cadvisor на Docker Desktop с WSL2: первым шагом проверить, что `container_memory_usage_bytes{name=~"lakehouse.*"}` отдаёт ряды по всем контейнерам.
+- Cadvisor на Docker Desktop с WSL2: первым шагом проверить, что `container_memory_usage_bytes{name=~"lakehouse.*"}` отдаёт ряды по всем контейнерам. Проверено 19.10: не отдаёт (containerd image store), заменён `container-exporter` (W4-D14, ADR-023).
 - Имена алертов как в W4-T05; в `00-mini-architecture-review.md` §8 они те же.
 - В `02-learning-gates.md` Operate-гейт observability называет dbt test сценарием 8; по таблице сценариев это 9, а 8 это Kafka down.
 

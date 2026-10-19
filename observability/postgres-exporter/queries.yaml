@@ -1,0 +1,19 @@
+# The built-in replication slot collector reports confirmed_flush_lsn only for active slots, so
+# retained WAL of a stopped consumer is computed here (W4-D3).
+lakehouse_slot:
+  master: true
+  query: |
+    select slot_name,
+           pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn) as retained_bytes,
+           active::int as active
+    from pg_replication_slots
+  metrics:
+    - slot_name:
+        usage: "LABEL"
+        description: "Replication slot name"
+    - retained_bytes:
+        usage: "GAUGE"
+        description: "WAL bytes the slot keeps from removal (current LSN minus restart_lsn)"
+    - active:
+        usage: "GAUGE"
+        description: "1 when a walsender streams from the slot"
