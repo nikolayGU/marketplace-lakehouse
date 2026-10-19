@@ -27,7 +27,7 @@ superseded. Longer reasoning lives in `docs/planning/00-mini-architecture-review
 | ADR-020 | Silver contracts as JSON Schema per table; naive source timestamps become `timestamp_ntz` at millisecond precision | accepted |
 | ADR-021 | Silver upsert: one AvailableNow job, newest event per key, MERGE guarded by `_last_lsn`, idempotent on replay | accepted |
 | ADR-022 | Bronze keeps Debezium's `source.sequence` as text; silver keeps ordering by `lsn` until there is a second writer | accepted |
-| ADR-023 | Observability sources: own `container-exporter` on the Docker API instead of cAdvisor; retained WAL from a custom postgres-exporter query | accepted |
+| ADR-023 | Observability sources: own `container-exporter` on the Docker API instead of cAdvisor; retained WAL from a custom postgres-exporter query; JMX agent in an own Connect image layer; StatsD for Airflow and `dq_checks`; no Alertmanager | accepted |
 
 ## ADR-001 Real data via Olist replay
 
@@ -578,3 +578,20 @@ Consequences: one more image to build (`lakehouse/container-exporter:dev`, 64 MB
 used). The container holds the Docker socket, root on the host in effect, like the Airflow
 scheduler (ADR-011); it has no host port. Metric names differ from cAdvisor's, so community
 dashboards for cAdvisor do not apply as is.
+
+Kafka Connect (W4-D1): the Debezium image's entrypoint loads the JMX exporter agent when
+`ENABLE_JMX_EXPORTER=true`, but ships no jar. An own layer (`docker/connect/Dockerfile`, image
+`lakehouse/connect:dev`) adds `jmx_prometheus_javaagent-1.6.0.jar` from the GitHub release with
+the release's sha256; Maven Central stops at 1.0.1. A bind-mounted jar was rejected: a missing
+file becomes a root-owned directory and the JVM of a `core` service does not start. The rules
+file is bind-mounted, because `/kafka/config` is an anonymous volume that a recreated container
+keeps. Connector and task status are string attributes and become a `status` label.
+
+Airflow and `dq_checks` (W4-D2): Airflow's own StatsD client, mapped to labelled names by
+statsd-exporter; `dq_checks` sends DogStatsD gauges with tags to the same exporter. UDP loses
+packets silently while `obs` is down; the `dq_checks` gauges get a TTL in the mapping (W4-T03),
+so their series disappear instead of freezing. Airflow's own counters have no TTL.
+A Pushgateway would be one more service for the same job.
+
+No Alertmanager (W4-D6): ADR-015 dropped alert delivery. Rules live in Prometheus; their state is
+read from the UI, `/api/v1/alerts` and the dashboard.

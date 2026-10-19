@@ -1,39 +1,38 @@
-# Следующая сессия: неделя 4, наблюдаемость и отказы
+# Следующая сессия: неделя 4, продолжение (W4-T02, W4-T03)
 
-Обновлено 18.10.2026. Текст ниже копируется в новую сессию как есть.
+Обновлено 19.10.2026. Текст ниже копируется в новую сессию как есть.
 
 ```text
-Ты агент в репозитории Marketplace Lakehouse (mini). Неделя 3 закрыта 18.10.2026, кроме гейтов
-владельца W3-T07. Airflow писатель silver: все четыре DAG сняты с паузы. Цель сессии: неделя 4
-по спеке docs/planning/09-w4-spec.md (черновик 0.1, решения W4-D1..D12 ждут «ок» владельца).
+Ты агент в репозитории Marketplace Lakehouse (mini). Неделя 4 идёт по спеке
+docs/planning/09-w4-spec.md (версия 0.2, решения W4-D1..D14 приняты владельцем 19.10).
+W4-T01a и W4-T01b закоммичены: профиль obs поднят, 7 targets up, Connect с JMX-агентом,
+Airflow шлёт StatsD, cadvisor заменён своим container-exporter (ADR-023). Владелец делегировал
+исполнение W4 целиком («делай все сам»), кроме запретов ниже.
 
 Прочитай первым, целиком:
 1. AGENTS.md и docs/agent-rules.md.
-2. docs/HANDOFF.md: раздел «Состояние на 18.10.2026, конец недели 3» вместе с «После закрытия
-   недели, 18.10».
-3. docs/planning/09-w4-spec.md; docs/planning/06-spec-standard.md; неделя 4 в 01-roadmap.md.
+2. docs/HANDOFF.md: «Состояние на 18.10.2026, конец недели 3», «После закрытия недели, 18.10»
+   и «19.10, аудит перед W4».
+3. docs/planning/09-w4-spec.md: раздел 2 (решения), раздел 3, карточки W4-T02 и W4-T03 и итоги
+   W4-T01a, W4-T01b.
 
 Первый шаг, только чтение (начни с make report):
-- W3-T05b B6, сутки наблюдения: в контейнере scheduler `airflow dags list-runs <dag> --state
-  failed` по silver_upsert, dbt_build, dq_checks, iceberg_maintenance. Ожидаются только красные
-  запуски из HANDOFF (dq_checks 16:15 и dq-rest-1 до правки, два chaos9-*-broken); любой другой
-  красный: стоп и разбор. `docker stats` по airflow, trino (D20, было 2.91 GiB под нагрузкой),
-  minio.
-- Слот Debezium после суток простоя: удержание
-  `pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn)` и `active` (было 24 MB).
-- Аудит спеки W4 против кода: что изменилось с 18.10, какие пункты «не проверено» из спеки можно
-  проверить только чтением (теги образов `docker manifest inspect`, entrypoint Connect 3.5,
-  `import statsd` в образе Airflow) и их вывод.
-- План первой задачи W4 после «ок» на решения: шаги, файлы, проверки, что требует «ок».
-Затем стоп и отчёт. Правки только после «ок» владельца на таблицу решений W4 и на план.
+- Сутки наблюдения B6 (W4-D13) идут с 19.10 12:31 UTC при работе от сети: `grep 'Heartbeat
+  recovered'` в логе scheduler после этого времени (ожидается пусто), затем
+  `airflow dags list-runs <dag> --state failed` по silver_upsert, dbt_build, dq_checks,
+  iceberg_maintenance: новых красных после 19.10 12:31 быть не должно. Сон от батареи не
+  отключён: если ноутбук был на батарее, это видно по тем же строкам лога.
+- `docker stats` всех профилей, targets Prometheus (7 up), `lakehouse_slot_retained_bytes`.
 
-Риск, открытый до W4-D12: `make silver` и chaos-скрипты connect-restart, duplicates, late,
-poison-event зовут spark-silver без проверки scheduler. Пока Airflow писатель silver, их не
-запускать; любая ручная проверка silver только через остановку scheduler, как в HANDOFF.
+Затем W4-T02 (lag в listener, перезапуск spark-bronze и порция реплея по W4-D10) и W4-T03
+(экспорт dq_checks); коммит на карточку после полного make verify при остановленном scheduler
+(пауза silver_upsert и iceberg_maintenance, дождаться конца запусков, stop scheduler, make verify,
+start, unpause).
 
-Без отдельного «ок» не делай: make silver, make verify при запущенном scheduler, любой расход
-реплея (бюджет W4 по W4-D10 ещё не принят), правки .env, хуков и .claude/settings.json, настроек
-Postgres и коннектора, push, всё из запретов AGENTS.md.
+Без отдельного «ок» не делай: blast radius из AGENTS.md, реплей сверх W4-D10, правки .env, хуков
+и .claude/settings.json, настроек Postgres и коннектора, push, гейты владельца (W4-T07,
+Modify-гейт карантина). make silver и chaos-скрипты с run_silver при запущенном scheduler не
+запускать до merge_silver (W4-D12).
 
 Отчёт: каждое утверждение командой и выводом; «не проверено» с командой; факт, вывод и гипотеза
 раздельно; git status --short и git diff --stat.

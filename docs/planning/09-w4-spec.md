@@ -162,6 +162,15 @@
 
 **Не входит.** Правила алертов (W4-T05), `heartbeat.action.query` (W4-D3).
 
+**Итог 19.10 (до коммита).**
+- Шаг 1: entrypoint 3.5 строки 194-196 с `-javaagent` и `9404`; jar и `metrics.yaml` в образе нет; `import statsd` в образе Airflow есть (4.0.1), Dockerfile Airflow не менялся.
+- Jar 1.6.0: `curl -L` с GitHub в песочнице отдал HTML вместо jar (sha256 не сошёлся), `gh release download` дал jar с sha256 `a95983fd...c46e`, равным `.sha256` релиза и `digest` ассета в API GitHub. В Dockerfile `ADD --checksum`.
+- **Отклонение.** `/kafka/config` в образе Debezium это анонимный том (`VOLUME`), пересозданный контейнер получает старый том, и `metrics.yaml` слоя образа не виден: агент пишет `FileNotFoundException: /kafka/config/metrics.yaml`, JVM выходит, Connect в цикле рестартов. CDC стоял 12:35:44-12:46:20 UTC, реплей не шёл, потерь нет (`bronze_offsets_ok` код 0). Исправлено bind-маунтом `docker/connect/metrics.yaml` поверх тома. Проверка `docker run` нового образа этого не ловила: у нового контейнера свой пустой том.
+- После перезапуска: `connector_running`, `slot_reattached 3425`, `bronze_caught_up`, `bronze_offsets_ok` код 0. На `:9404` 112 рядов: `kafka_connect_connector_status{status="running"} 1`, `kafka_connect_connector_task_status{task="0",status="running"} 1`, `debezium_postgres_streaming_Connected{server="oltp"} 1`; `MilliSecondsBehindSource` и `MilliSecondsSinceLastEvent` равны -1 до первого события после старта. Connect 871 MiB из 1.5 GiB.
+- StatsD: имена Airflow 3.3.2 совпали с планом: `dagrun.duration.success.<dag>`, `dagrun.duration.failed.<dag>`, `ti.finish.<dag>.<task>.<state>`, `dag.<dag>.<task>.duration`. После `dq_checks` 13:00 `airflow_ti_finish_total{dag_id="dq_checks"}` 4 ряда `success`. `statsd_on` `True`.
+- Шаг 7: при `make down PROFILE=obs` scheduler после рестарта `healthy` за 66 с, `gaierror` в логе 0.
+- Targets: 7 jobs `up`.
+
 ### W4-T02 `spark_streaming_kafka_lag` в listener
 
 **Зачем.** kafka-exporter не видит lag Spark: Spark хранит offsets в checkpoint, а не в consumer group (ADR-013). Без lag на дашборде не отличить «bronze догоняет» от «bronze в курсе».

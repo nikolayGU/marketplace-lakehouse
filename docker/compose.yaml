@@ -99,7 +99,9 @@ services:
 
   kafka-connect:
     <<: *common
-    image: quay.io/debezium/connect:3.5
+    build:
+      context: ./connect   # quay.io/debezium/connect:3.5 + JMX exporter agent (W4-D1)
+    image: lakehouse/connect:dev
     profiles: [core]
     depends_on:
       kafka:
@@ -118,8 +120,12 @@ services:
       KEY_CONVERTER_SCHEMAS_ENABLE: "false"
       VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
       KAFKA_HEAP_OPTS: ${CONNECT_HEAP}
-      # TODO(W4-T01): ENABLE_JMX_EXPORTER=true needs jmx_prometheus_javaagent*.jar in /kafka/libs
-      # (not bundled in this image) plus config/metrics.yaml and port 9404.
+      # Metrics on :9404 inside the network only; rules in docker/connect/metrics.yaml.
+      ENABLE_JMX_EXPORTER: "true"
+    volumes:
+      # /kafka/config is an anonymous volume of the base image: a recreated container keeps the
+      # old one, which hides the file the image layer adds, and the agent stops the JVM.
+      - ./connect/metrics.yaml:/kafka/config/metrics.yaml:ro
     ports:
       - "${BIND_IP}:8083:8083"
     healthcheck:
@@ -474,7 +480,7 @@ services:
       postgres-meta:
         condition: service_healthy
     command: api-server
-    env_file: ./airflow/airflow.env   # TODO(W4-T01): statsd
+    env_file: ./airflow/airflow.env
     volumes:
       - ../airflow/dags:/opt/airflow/dags:ro
       - ../dbt:/opt/dbt:ro

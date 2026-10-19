@@ -1,0 +1,26 @@
+# JMX exporter rules for Kafka Connect and the Debezium PostgreSQL connector (W4-T01b).
+# Beans no rule matches are dropped; JVM metrics (jvm_*) come from the agent itself.
+rules:
+  # `status` is a string attribute: it becomes a label, the sample is 1.
+  - pattern: 'kafka.connect<type=connector-metrics, connector=([^,>]+)><>status: (\w+)'
+    name: kafka_connect_connector_status
+    value: 1
+    labels:
+      connector: "$1"
+      status: "$2"
+    type: GAUGE
+  - pattern: 'kafka.connect<type=connector-task-metrics, connector=([^,>]+), task=([^,>]+)><>status: (\w+)'
+    name: kafka_connect_connector_task_status
+    value: 1
+    labels:
+      connector: "$1"
+      task: "$2"
+      status: "$3"
+    type: GAUGE
+  # Booleans (Connected) arrive as 1 and 0.
+  - pattern: "debezium.postgres<type=connector-metrics, context=streaming, server=([^,>]+)[^>]*><>\
+      (Connected|MilliSecondsSinceLastEvent|MilliSecondsBehindSource|TotalNumberOfEventsSeen)"
+    name: debezium_postgres_streaming_$2
+    labels:
+      server: "$1"
+    type: GAUGE

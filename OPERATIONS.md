@@ -416,10 +416,11 @@ the `lake` network.
 | Job | Target | What it gives |
 |---|---|---|
 | `prometheus` | `localhost:9090` | Prometheus itself, `prometheus_tsdb_head_series` |
+| `kafka-connect` | `kafka-connect:9404` | JMX agent in the Connect JVM (`docker/connect/`): `kafka_connect_connector_status`, `kafka_connect_connector_task_status{connector,task,status}` (1 for the current status), `debezium_postgres_streaming_*` (`Connected`, `MilliSecondsSinceLastEvent`, `MilliSecondsBehindSource`, `TotalNumberOfEventsSeen`; -1 and 0 until the first event after a start), `jvm_*` |
 | `spark-bronze` | `spark-bronze:4041` | bronze listener: rows, batch duration, last batch time (ADR-013) |
 | `kafka-exporter` | `kafka-exporter:9308` | brokers, topic and partition offsets (not Spark's lag: ADR-013) |
 | `postgres-exporter` | `postgres-exporter:9187` | `pg_*`, plus `lakehouse_slot_retained_bytes` and `lakehouse_slot_active` per slot from `observability/postgres-exporter/queries.yaml` |
-| `statsd-exporter` | `statsd-exporter:9102` | StatsD of Airflow and `dq_checks` (mappings land with W4-T01b, W4-T03) |
+| `statsd-exporter` | `statsd-exporter:9102` | StatsD of Airflow (`AIRFLOW__METRICS__STATSD_*` in `docker/airflow/airflow.env`): `airflow_dagrun_success_seconds{dag_id}`, `airflow_dagrun_failed_seconds{dag_id}`, `airflow_ti_finish_total{dag_id,task_id,state}`, `airflow_task_duration_seconds{dag_id,task_id}` by `observability/statsd/mapping.yml`; unmapped names pass through with underscores. `dq_checks` values land with W4-T03 |
 | `container-exporter` | `container-exporter:9105` | `docker_container_*{name,service}`: memory as `docker stats`, limit, CPU, start time, restarts, OOM kill, health (ADR-023) |
 
 Check it:
@@ -436,6 +437,12 @@ curl -s 127.0.0.1:3000/api/health
   database down; without `core` both should stay unhealthy (not run live: `core` was up).
 - `observability/prometheus` is mounted read-only as a directory. After editing rules or scrape
   configs: `docker kill -s HUP lakehouse-prometheus-1`.
+- Kafka Connect: `/kafka/config` is an anonymous volume of the Debezium image, and a recreated
+  container keeps the old one. A file the image layer adds there is hidden, so `metrics.yaml` is
+  bind-mounted; without it the agent stops the JVM and Connect restarts in a loop (2026-10-19,
+  ten minutes of no CDC).
+- Airflow sends StatsD over UDP: without `obs` the packets are lost and Airflow keeps running
+  (scheduler healthy in 66 s with `obs` down, no `gaierror`, 2026-10-19).
 - Grafana provisioning is mounted whole over the image's directory, so `provisioning/alerting`
   and `provisioning/plugins` exist in the repo empty: without them Grafana logs errors.
 - Every file compose mounts must exist before the first start: a missing file becomes a

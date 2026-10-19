@@ -1,2 +1,23 @@
-# Airflow mappings land with W4-T01b, lakehouse.* with W4-T03.
-mappings: []
+# StatsD names to Prometheus names with labels (glob, `*` stops at a dot). Unmapped names are
+# still exported with dots turned into underscores. Airflow timers arrive in milliseconds and
+# leave as seconds (summaries with _count and _sum). lakehouse.* lands with W4-T03.
+mappings:
+  - match: "airflow.dagrun.duration.success.*"
+    name: airflow_dagrun_success_seconds
+    labels:
+      dag_id: "$1"
+  - match: "airflow.dagrun.duration.failed.*"
+    name: airflow_dagrun_failed_seconds
+    labels:
+      dag_id: "$1"
+  - match: "airflow.ti.finish.*.*.*"
+    name: airflow_ti_finish_total
+    labels:
+      dag_id: "$1"
+      task_id: "$2"
+      state: "$3"
+  - match: "airflow.dag.*.*.duration"
+    name: airflow_task_duration_seconds
+    labels:
+      dag_id: "$1"
+      task_id: "$2"
