@@ -11,7 +11,7 @@ from pyspark.sql import Column, DataFrame, SparkSession
 from pyspark.sql import functions as F
 from pyspark.sql.types import LongType, StringType, StructField, StructType
 
-from spark_jobs.catalog import CATALOG, build_session
+from spark_jobs.catalog import CATALOG, METADATA_CLEANUP, build_session, set_missing_properties
 from spark_jobs.metrics import start_metrics
 from spark_jobs.settings import Settings
 
@@ -63,7 +63,7 @@ create table if not exists {TABLE} (
 )
 using iceberg
 partitioned by (source_table, days(ingest_ts))
-tblproperties ('format-version' = '2')
+tblproperties ('format-version' = '2', 'write.metadata.delete-after-commit.enabled' = 'true')
 """
 
 # Columns added after the table first shipped, as (name, type, after). The DDL above already has
@@ -73,9 +73,10 @@ ADDED_COLUMNS = (("source_sequence", "string", "lsn"),)
 
 
 def ensure_table(spark: SparkSession) -> None:
-    """Create bronze, or add the columns it gained since. Iceberg has no ADD COLUMN IF NOT
-    EXISTS, so the check is ours; a second run changes nothing."""
+    """Create bronze, or add the columns and properties it gained since. Iceberg has no ADD
+    COLUMN IF NOT EXISTS, so the check is ours; a second run changes nothing."""
     spark.sql(DDL)
+    set_missing_properties(spark, TABLE, METADATA_CLEANUP)
     existing = set(spark.table(TABLE).columns)
     for name, kind, after in ADDED_COLUMNS:
         if name not in existing:

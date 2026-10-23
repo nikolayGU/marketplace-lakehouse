@@ -8,7 +8,7 @@ from datetime import datetime
 
 from airflow.providers.standard.operators.bash import BashOperator
 from airflow.sdk import Asset, dag
-from lakehouse.settings import SILVER_ASSET_NAME, dbt_command
+from lakehouse.settings import GOLD_WRITERS_POOL, SILVER_ASSET_NAME, dbt_command
 
 
 @dag(
@@ -21,6 +21,8 @@ from lakehouse.settings import SILVER_ASSET_NAME, dbt_command
 def dbt_build() -> None:
     BashOperator(
         task_id="dbt_build",
+        # With the gold maintenance: CREATE OR REPLACE and expire_snapshots of one table race.
+        pool=GOLD_WRITERS_POOL,
         bash_command=dbt_command("build") + ' --vars "$DBT_VARS"',
         # Through the environment, not the command line: the vars never pass the shell parser.
         env={"DBT_VARS": "{{ (dag_run.conf or {}).get('dbt_vars', '{}') }}"},

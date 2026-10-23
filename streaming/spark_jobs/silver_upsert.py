@@ -17,7 +17,7 @@ from pathlib import Path
 from pyspark.sql import Column, DataFrame, SparkSession, Window
 from pyspark.sql import functions as F
 
-from spark_jobs.catalog import CATALOG, build_session
+from spark_jobs.catalog import CATALOG, METADATA_CLEANUP, build_session, set_missing_properties
 from spark_jobs.contracts import TableContract, load_contracts
 from spark_jobs.settings import Settings
 
@@ -39,6 +39,7 @@ MERGE_ON_READ = {
     "write.delete.granularity": "file",
 }
 PARTITIONS: dict[str, tuple[str, ...]] = {"orders": ("months(order_purchase_timestamp)",)}
+# On top of these every silver table gets METADATA_CLEANUP (ensure_table).
 PROPERTIES: dict[str, dict[str, str]] = {"orders": MERGE_ON_READ}
 
 # Bronze columns an image keeps: ordering needs some, quarantine needs the rest.
@@ -70,7 +71,7 @@ create table if not exists {QUARANTINE} (
     batch_id bigint
 )
 using iceberg
-tblproperties ('format-version' = '2')
+tblproperties ('format-version' = '2', 'write.metadata.delete-after-commit.enabled' = 'true')
 """
 
 log = logging.getLogger(QUERY_NAME)
@@ -177,11 +178,9 @@ def converge_layout(
 ) -> None:
     """Bring an existing table to its layout. Metadata only: files already written keep their
     old spec and write mode until compaction rewrites them."""
-    current = {r["key"]: r["value"] for r in spark.sql(f"show tblproperties {table}").collect()}
-    missing = {k: v for k, v in properties.items() if current.get(k) != v}
+    missing = set_missing_properties(spark, table, properties)
     if missing:
         pairs = ", ".join(f"'{k}' = '{v}'" for k, v in sorted(missing.items()))
-        spark.sql(f"alter table {table} set tblproperties ({pairs})")
         log.info("%s: set %s", table, pairs)
     fields = partition_fields(spark, table)
     for transform in partitions:
@@ -196,7 +195,7 @@ def ensure_table(spark: SparkSession, contract: TableContract) -> None:
     (contracts/README.md). Layout is physical and converges on its own."""
     table = f"{SILVER}.{contract.table}"
     partitions = PARTITIONS.get(contract.table, ())
-    properties = PROPERTIES.get(contract.table, {})
+    properties = {**METADATA_CLEANUP, **PROPERTIES.get(contract.table, {})}
     metadata_ddl = ", ".join(f"{name} {kind}" for name, kind in METADATA)
     partitioned = f" partitioned by ({', '.join(partitions)})" if partitions else ""
     pairs = ", ".join(f"'{k}' = '{v}'" for k, v in {"format-version": "2", **properties}.items())
@@ -307,6 +306,7 @@ def run(
     """Process everything bronze has committed since the checkpoint, then return."""
     spark.sql(f"create namespace if not exists {SILVER}")
     spark.sql(QUARANTINE_DDL)
+    converge_layout(spark, QUARANTINE, (), METADATA_CLEANUP)
     for contract in contracts.values():
         ensure_table(spark, contract)
 

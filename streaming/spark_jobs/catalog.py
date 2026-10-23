@@ -6,6 +6,10 @@ from spark_jobs.settings import Settings
 
 CATALOG = "lake"
 
+# Lakekeeper writes a metadata.json per commit; with this property the table drops the ones that
+# fell out of its metadata log (W5-T05a). Metadata only: no rewrite, no checkpoint involved.
+METADATA_CLEANUP = {"write.metadata.delete-after-commit.enabled": "true"}
+
 
 def catalog_conf(settings: Settings) -> dict[str, str]:
     """Spark conf for catalog `lake` and S3A. Kept apart from the builder so it is testable
@@ -51,3 +55,16 @@ def build_session(app_name: str, settings: Settings) -> SparkSession:
     for key, value in catalog_conf(settings).items():
         builder = builder.config(key, value)
     return builder.getOrCreate()
+
+
+def set_missing_properties(
+    spark: SparkSession, table: str, properties: dict[str, str]
+) -> dict[str, str]:
+    """Set the properties the table lacks or holds with another value; a second call changes
+    nothing, not even the metadata log. Returns what was set."""
+    current = {r["key"]: r["value"] for r in spark.sql(f"show tblproperties {table}").collect()}
+    missing = {k: v for k, v in properties.items() if current.get(k) != v}
+    if missing:
+        pairs = ", ".join(f"'{k}' = '{v}'" for k, v in sorted(missing.items()))
+        spark.sql(f"alter table {table} set tblproperties ({pairs})")
+    return missing

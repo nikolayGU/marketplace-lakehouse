@@ -213,6 +213,11 @@ def test_columns_come_out_in_table_order(spark: SparkSession) -> None:
     assert frame.columns == ddl_columns()
 
 
+def test_bronze_is_created_with_the_metadata_cleanup() -> None:
+    # Lakekeeper writes a metadata.json per commit; the property drops the ones out of the log.
+    assert "'write.metadata.delete-after-commit.enabled' = 'true'" in DDL
+
+
 def test_every_added_column_sits_in_the_ddl_right_after_its_neighbour() -> None:
     columns = ddl_columns()
     for name, _, after in ADDED_COLUMNS:

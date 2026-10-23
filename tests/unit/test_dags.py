@@ -1,17 +1,33 @@
+import ast
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import jinja2
 import pytest
 import yaml  # type: ignore[import-untyped]
 from lakehouse import checks, sql
+from lakehouse.maintenance_commands import (
+    DRY_RUN_FLAG,
+    compact_bronze_command,
+    expire_command,
+    gold_expire_command,
+    gold_table,
+    orphans_command,
+    position_deletes_command,
+    silver_tables,
+)
 from lakehouse.settings import (
+    GOLD_WRITERS_POOL,
+    MAINTENANCE_TABLES,
+    RETENTION_DAYS,
     SILVER_KEYS,
     SPARK_SILVER_ENV,
     SPARK_SILVER_SECRETS,
     dbt_command,
     spark_silver_environment,
 )
+from spark_jobs import maintenance
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -151,3 +167,121 @@ def test_dbt_writes_only_to_tmp() -> None:
     assert "--project-dir /opt/dbt" in command
     assert "--target-path /tmp/dbt/target" in command
     assert "--log-path /tmp/dbt/logs" in command
+
+
+# Maintenance (W5-T05a).
+
+
+def dag_keywords(dag_file: str, call: str) -> dict[str, ast.expr]:
+    """Keyword arguments of the first call to `call(...)` in a DAG file; Airflow is not on the
+    host, so the file is read, not imported."""
+    tree = ast.parse((REPO / "airflow" / "dags" / dag_file).read_text())
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and getattr(node.func, "id", None) == call:
+            return {k.arg: k.value for k in node.keywords if k.arg}
+    raise AssertionError(f"{dag_file} has no call to {call}")
+
+
+def test_the_gold_pool_has_one_slot_and_dbt_build_takes_it() -> None:
+    # expire_snapshots and CREATE OR REPLACE of one gold table would race for the commit.
+    pool = dag_keywords("dbt_build.py", "BashOperator")["pool"]
+
+    assert GOLD_WRITERS_POOL == "gold_writers"
+    assert isinstance(pool, ast.Name) and pool.id == "GOLD_WRITERS_POOL"
+    assert "pools set gold_writers 1" in (REPO / "Makefile").read_text()
+
+
+def test_maintenance_covers_every_silver_table_and_orders_per_minute() -> None:
+    assert (*SILVER_KEYS, "orders_per_minute") == MAINTENANCE_TABLES
+    assert RETENTION_DAYS == 7
+
+
+def test_gold_tables_come_from_base_tables_only() -> None:
+    # Views have no snapshots to expire.
+    assert "table_schema = 'gold'" in sql.GOLD_BASE_TABLES
+    assert "table_type = 'BASE TABLE'" in sql.GOLD_BASE_TABLES
+    assert "lake.information_schema.tables" in sql.GOLD_BASE_TABLES
+
+
+def dry_run_flag(**params: object) -> str:
+    return jinja2.Environment().from_string(DRY_RUN_FLAG).render(params=params)
+
+
+def test_a_scheduled_orphans_run_is_a_dry_run() -> None:
+    assert dry_run_flag(dry_run=True) == "--dry-run"
+
+
+@pytest.mark.parametrize("value", ["false", "False", 0, None, ""])
+def test_only_a_real_false_turns_the_dry_run_off(value: object) -> None:
+    # A string "false" from a hand-typed conf is truthy in Jinja: it must not delete anything.
+    assert dry_run_flag(dry_run=value) == "--dry-run"
+
+
+def test_false_in_the_conf_turns_the_dry_run_off() -> None:
+    assert dry_run_flag(dry_run=False) == "--no-dry-run"
+
+
+def test_orphans_dag_is_a_weekly_dry_run_by_default() -> None:
+    dag = dag_keywords("iceberg_orphans.py", "dag")
+
+    assert ast.literal_eval(dag["params"]) == {"dry_run": True}
+    assert ast.literal_eval(dag["schedule"]) == "0 4 * * 0"
+    assert ast.literal_eval(dag["max_active_runs"]) == 1
+
+
+def test_airflow_env_pauses_new_dags() -> None:
+    # iceberg_orphans relies on it: it never runs before the owner unpauses it.
+    assert airflow_env()["AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION"] == "True"
+
+
+def rendered(command: list[str], **params: object) -> list[str]:
+    env = jinja2.Environment()
+    return [env.from_string(part).render(params=params) for part in command]
+
+
+def assert_accepted_by_the_job(command: list[str]) -> list[str]:
+    """What the DAG passes, the job accepts: its rules are in code, not in the DAG."""
+    assert command[0] == "maintenance"
+    return maintenance.validate(maintenance.parse_args(command[1:]))
+
+
+def test_silver_commands_pass_the_rules_of_the_job() -> None:
+    expire = assert_accepted_by_the_job(rendered(expire_command(silver_tables())))
+    deletes = assert_accepted_by_the_job(position_deletes_command("silver.orders"))
+
+    assert "lake.silver.orders_per_minute" in expire
+    assert len(expire) == len(MAINTENANCE_TABLES)
+    assert deletes == ["lake.silver.orders"]
+    assert maintenance.parse_args(expire_command(silver_tables())[1:]).days == 7
+
+
+def test_gold_expire_takes_one_table_per_command() -> None:
+    command = gold_expire_command("orders_daily")
+
+    assert assert_accepted_by_the_job(command) == ["lake.gold.orders_daily"]
+
+
+def test_bronze_is_compacted_up_to_yesterday_and_never_expired() -> None:
+    command = compact_bronze_command()
+
+    assert assert_accepted_by_the_job(command) == ["lake.bronze.cdc_events"]
+    assert "--before-today" in command
+    assert "expire" not in command
+
+
+@pytest.mark.parametrize("dry_run", [True, False])
+def test_orphans_commands_pass_the_rules_of_the_job(dry_run: bool) -> None:
+    for command in (
+        orphans_command(silver_tables()),
+        orphans_command([gold_table("orders_daily")]),
+        orphans_command(["lake.bronze.cdc_events"], location_suffix="metadata"),
+    ):
+        assert_accepted_by_the_job(rendered(command, dry_run=dry_run))
+
+
+def test_bronze_orphans_always_go_to_the_metadata_location() -> None:
+    command = orphans_command(["lake.bronze.cdc_events"], location_suffix="metadata")
+
+    assert command[command.index("--location-suffix") + 1] == "metadata"
+    with pytest.raises(maintenance.PolicyError, match="ADR-021"):
+        assert_accepted_by_the_job(rendered(orphans_command(["lake.bronze.cdc_events"])))

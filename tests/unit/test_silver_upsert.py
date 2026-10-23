@@ -13,6 +13,7 @@ import pytest
 from pyspark.sql import DataFrame, Row, SparkSession
 from spark_jobs.bronze_cdc_ingest import DDL as BRONZE_DDL
 from spark_jobs.bronze_cdc_ingest import ensure_table as ensure_bronze
+from spark_jobs.catalog import METADATA_CLEANUP
 from spark_jobs.contracts import TableContract, load_contracts
 from spark_jobs.silver_upsert import (
     BRONZE,
@@ -510,6 +511,86 @@ def test_existing_copy_on_write_orders_converges_once(
     assert spark.table(f"{table}.metadata_log_entries").count() == versions
     assert properties(spark, table)["write.merge.mode"] == "merge-on-read"
     assert partition_fields(spark, table) == {"months(order_purchase_timestamp)"}
+
+
+# Metadata files (W5-T05a): a table drops the metadata.json files that fell out of its log.
+
+CLEANUP_KEY = "write.metadata.delete-after-commit.enabled"
+WITH_CLEANUP = ", '" + CLEANUP_KEY + "' = 'true'"
+
+
+@needs_iceberg
+@pytest.mark.usefixtures("fresh_silver")
+def test_every_new_silver_table_cleans_its_metadata(spark: SparkSession) -> None:
+    tables = [f"{SILVER}.{name}" for name in CONTRACTS] + [QUARANTINE]
+
+    assert METADATA_CLEANUP == {CLEANUP_KEY: "true"}
+    assert [properties(spark, t).get(CLEANUP_KEY) for t in tables] == ["true"] * len(tables)
+
+
+@needs_iceberg
+@pytest.mark.usefixtures("fresh_silver")
+def test_an_existing_silver_table_gets_the_metadata_cleanup_once(spark: SparkSession) -> None:
+    contract = CONTRACTS["customers"]
+    table = f"{SILVER}.customers"
+    spark.sql(f"drop table {table}")
+    metadata = ", ".join(f"{name} {kind}" for name, kind in METADATA)
+    spark.sql(
+        f"create table {table} ({contract.column_ddl}, {metadata}) "
+        "using iceberg tblproperties ('format-version' = '2')"
+    )
+    assert CLEANUP_KEY not in properties(spark, table)
+
+    ensure_table(spark, contract)
+    versions = spark.table(f"{table}.metadata_log_entries").count()
+    ensure_table(spark, contract)
+
+    assert properties(spark, table)[CLEANUP_KEY] == "true"
+    assert spark.table(f"{table}.metadata_log_entries").count() == versions
+
+
+@needs_iceberg
+@pytest.mark.usefixtures("fresh_silver")
+def test_run_gives_an_existing_quarantine_the_metadata_cleanup(
+    spark: SparkSession, tmp_path: Path
+) -> None:
+    spark.sql(f"create namespace if not exists {BRONZE_NAMESPACE}")
+    spark.sql(f"drop table if exists {BRONZE}")
+    spark.sql(BRONZE_DDL)
+    spark.sql(f"drop table {QUARANTINE}")
+    spark.sql(QUARANTINE_DDL.replace(WITH_CLEANUP, ""))
+    assert CLEANUP_KEY not in properties(spark, QUARANTINE)
+
+    run(spark, CONTRACTS, f"file://{tmp_path}/checkpoint", max_rows_per_batch=10)
+
+    assert properties(spark, QUARANTINE)[CLEANUP_KEY] == "true"
+
+
+@needs_iceberg
+def test_bronze_gets_the_metadata_cleanup_on_an_older_table_once(spark: SparkSession) -> None:
+    spark.sql(f"create namespace if not exists {BRONZE_NAMESPACE}")
+    spark.sql(f"drop table if exists {BRONZE}")
+    spark.sql(BRONZE_DDL.replace(WITH_CLEANUP, ""))
+    assert CLEANUP_KEY not in properties(spark, BRONZE)
+
+    ensure_bronze(spark)
+    versions = spark.table(f"{BRONZE}.metadata_log_entries").count()
+    ensure_bronze(spark)
+
+    assert properties(spark, BRONZE)[CLEANUP_KEY] == "true"
+    assert spark.table(f"{BRONZE}.metadata_log_entries").count() == versions
+
+
+@needs_iceberg
+def test_bronze_is_created_with_the_metadata_cleanup(spark: SparkSession) -> None:
+    spark.sql(f"create namespace if not exists {BRONZE_NAMESPACE}")
+    spark.sql(f"drop table if exists {BRONZE}")
+
+    ensure_bronze(spark)
+
+    assert properties(spark, BRONZE)[CLEANUP_KEY] == "true"
+    # Created with the property in one commit.
+    assert spark.table(f"{BRONZE}.metadata_log_entries").count() == 1
 
 
 def customer(city: str) -> dict[str, Any]:
