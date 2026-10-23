@@ -14,14 +14,14 @@
 | сверка | Postgres округлял миллисекунды, Trino отбрасывал: теперь `floor` с обеих сторон; дубль ключа с тем же хэшем больше не «чисто» | тест на полный канонический текст обеих сторон; `round` против `floor` на литерале `.0006` проверен в обоих движках |
 | метрики | `:g` слал unix time с шагом 10 000 с: теперь `repr`; `dbt source freshness`, убитый сигналом, валит задачу; старый `sources.json` удаляется до запуска; gauge `lakehouse_dq_reconcile_gold_compared` | тест на дробный unix time |
 | обслуживание | `orphans` gold получал сырой Jinja из XCom: флаг считается в таске из `params`; `--location-suffix` только `metadata` или `data`; `--retain-last` не меньше 1; Spark-шаги `iceberg_maintenance` только с `{"expire_and_compact": true}` | тесты `test_dags.py`, `test_maintenance.py`, `make dags-check` |
-| алерты | `FreshnessAbove15m` при пропавшем ряде, `DqChecksStale`, `ScrapeTargetDown`; панели bronze только по `bronze_cdc_ingest`; средняя длительность задач за час; `check_dashboards.py` проверяет имена метрик за `or vector(0)` | `make alerts-test` (11 правил), `check_dashboards.py` 35 запросов |
+| алерты | `FreshnessAbove15m` при пропавшем ряде, `DqChecksStale` (без дыры на сбросе по TTL), `ScrapeTargetDown`, перечитаны в Prometheus по HUP 24.10; панели bronze только по `bronze_cdc_ingest`; средняя длительность задач за час; `check_dashboards.py` проверяет имена метрик за `or vector(0)` | `make alerts-test` (11 правил), `check_dashboards.py` 35 запросов |
 | CDC и chaos | `register.sh` создаёт `oltp.message`; `make silver`, `merge_silver` и `verify.sh` отказывают, если `docker compose ps` упал; `connect-pause.sh`: ожидание подтверждения LSN до 120 с, предел добивки 10 раундов, `alert_quiet ConnectorNotRunning` до остановки | `bash -n` в `make lint`, тесты `test_makefile.py` |
 | тесты и CI | тест «счёт не убывает» ловит мутацию; `FAIL_ON_SKIP=1` валит любой пропуск в `make test-spark`; CI: `permissions`, `bash -n`, импорт DAG в образе Airflow | мутация `orders_per_minute` убита в образе; тест на три вида пропуска |
 | доки | OPERATIONS (DAG, алерты, Maintenance, CI, сценарий 6), ADR-023, ADR-025, раннбуки `connector-failed`, `slot-wal-growth`, рецепт в `00-mini-architecture-review.md` | |
 
 ### Что ждёт владельца
 
-- **Prometheus перечитает правила** после `docker kill -s HUP lakehouse-prometheus-1` (не сделано в этой сессии, это изменение живого мониторинга).
+- **Хук, вторая и третья правки** (запрет `pg_replication_slot_advance` и `pg_drop_replication_slot`; коммит без нового verify, если после полного менялись только Markdown и `docs/`): готовы в копии и ждут применения владельцем, 93 теста `test_agent_hooks.py` и `test_agent_state.py`. До применения AGENTS.md описывает их наперёд.
 - **Живой `oltp.message` без `segment.ms`**: `register.sh` создаёт топик с ним, но существующий не меняет (`--if-not-exists`); правка живого топика это retention Kafka, нужен «ок».
 - **Образ Spark** пересобрать до любой ступени W5-T05b: проверка суффикса orphans живёт в `maintenance.py` образа.
 - Не исправлено, решение владельца: MinIO (п. 6 ревью); покой сверки с учётом источника и причина `merge_pending` (п. 10); `bronze_caught_up` против источника (п. 17); watermark в будущем (п. 27); push 23.10 без записанного «ок» (п. 28); actions по SHA (п. 39); удаление `metadata.json` bronze при пересоздании `spark-bronze` (п. 22).

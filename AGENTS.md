@@ -31,11 +31,14 @@ Olist), Debezium, Kafka, Spark bronze и silver (`MERGE`), Iceberg в Lakekeeper
 
 ## Хуки (`.claude/hooks/`, тесты в `tests/unit/test_agent_hooks.py`)
 
-- `guard.py`: deny для секретов, force-push, DROP, TRUNCATE, DELETE без WHERE и коммита без полного
-  `make verify` этого дерева; окно подтверждения («ок» кнопкой) для остальных запретов ниже.
+- `guard.py`: deny для секретов, force-push, DROP, TRUNCATE, DELETE без WHERE, сдвига и удаления
+  слота репликации и коммита без полного `make verify` этого дерева (Markdown и `docs/` после verify
+  не в счёт); окно подтверждения («ок» кнопкой) для остальных запретов ниже. Команды только из
+  чтения и поиска (grep, rg, cat, git log/show/diff) проходят, даже если в тексте есть эти слова.
 - `stop_gate.py`: ход с изменённым кодом не закончится без свежего `verify-fast` или `verify`.
 - `session_context.py`: на старте сессии подгружает git, отметку verify, HANDOFF, NEXT_SESSION.
 - `guard.py` читает текст команды: правку, в тексте которой есть такие слова, делать через Edit.
+- Правки `.claude/hooks/` агент готовит в копии в scratchpad, владелец применяет их командой `cp`.
 
 ## Цикл
 
