@@ -42,3 +42,34 @@ def test_replay_burst_refuses_without_positive_seconds_and_speed(args: tuple[str
 
     assert result.returncode == 2
     assert "usage: make replay-burst" in result.stderr
+
+
+def test_silver_refuses_while_the_scheduler_runs() -> None:
+    # COMPOSE=echo makes `ps -q airflow-scheduler` print something, as a running scheduler would.
+    result = make("silver")
+
+    assert result.returncode == 2
+    assert "airflow-scheduler" in result.stderr
+    assert "spark-silver" not in result.stdout
+
+
+def _locked(package: str) -> str:
+    lock = (REPO / "uv.lock").read_text()
+    block = lock.split(f'name = "{package}"\nversion = "', 1)[1]
+    return block.split('"', 1)[0]
+
+
+def test_spark_tests_run_in_the_image_given_and_fail_on_skips() -> None:
+    result = make("-n", "test-spark", "SPARK_IMAGE=lakehouse/spark:ci")
+
+    assert "lakehouse/spark:ci" in result.stdout
+    assert "-p no:skipping" in result.stdout
+
+
+def test_spark_test_pins_follow_the_lock_file() -> None:
+    # The image installs its own pytest and jsonschema; a drift from uv.lock would make CI test
+    # something other than the host does.
+    result = make("-n", "test-spark")
+
+    assert f"pytest=={_locked('pytest')}" in result.stdout
+    assert f"jsonschema=={_locked('jsonschema')}" in result.stdout

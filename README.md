@@ -109,10 +109,12 @@ set of primary keys and sums of decimal columns. Planned (weeks 3 and 5): dbt te
 
 ## Testing and CI
 
-CI runs `ruff`, `mypy`, `sqlfluff`, `yamllint`, `pytest tests/unit`, `docker compose config`,
-the Spark image build and `gitleaks`. The Spark tests that need the Iceberg runtime are skipped
-there and run locally with `make test-spark`; running them in CI, `dbt parse`, `hadolint` and a
-smoke workflow on the sample are planned (weeks 3 and 5).
+CI (`.github/workflows/ci.yml`) has four jobs: `lint-and-test` (`uv sync --locked`, `ruff`,
+`mypy`, `sqlfluff`, `yamllint`, `dbt parse`, `pytest tests/unit`, `docker compose config`,
+`gitleaks`), `hadolint` on the five Dockerfiles, `spark-tests` (builds `lakehouse/spark:ci` and runs
+`make test-spark` in it, where the Iceberg jar exists and a skipped test is a failure) and
+`airflow-image` (builds the Airflow image and imports what the DAGs need). `smoke.yml` (on demand and
+weekly) walks the clean-clone path on the sample.
 
 ## What I learned
 

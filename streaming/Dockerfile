@@ -6,6 +6,9 @@ USER root
 # Kafka and pool versions follow spark-sql-kafka 3.5.9's pom; hadoop-aws matches the bundled
 # Hadoop 3.3.4 and pulls in the aws-java-sdk-bundle it was built against.
 ARG MAVEN=https://repo1.maven.org/maven2
+# The cd stays inside one layer that only downloads; set -e and sha1sum -c fail the build on a
+# failed download, with or without pipefail.
+# hadolint ignore=DL3003,DL4006
 RUN set -eux; \
     cd /opt/spark/jars; \
     for jar in \
@@ -30,6 +33,7 @@ RUN pip install --no-cache-dir \
 COPY run-job.sh /opt/app/run-job.sh
 COPY spark_jobs/ /opt/app/spark_jobs/
 # contracts/ is outside this build context; compose and CI pass it as the named context `contracts`.
+# hadolint ignore=DL3022
 COPY --from=contracts silver/ /opt/app/contracts/silver/
 
 ENV PYTHONPATH=/opt/app \

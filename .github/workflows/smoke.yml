@@ -1,0 +1,71 @@
+name: smoke
+
+# The path from a clean clone on the committed sample (Kaggle is not reachable from CI): boot
+# `core` and `trino`, replay a minute, verify, boot again. Cold by definition: it builds the Spark
+# and Connect images from scratch, hence the long timeout and a weekly schedule, not a nightly one.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 3 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      COMPOSE: docker compose --env-file .env -f docker/compose.yaml
+    steps:
+      - uses: actions/checkout@v4
+      - name: the runner
+        run: |
+          nproc
+          free -g
+          df -h /
+          docker version --format '{{.Server.Version}}'
+      # A throwaway VM of the runner, not a working stack: the images need the disk.
+      - name: free disk
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
+          df -h /
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - run: uv sync --locked --group dev
+      # make secrets writes REPLAY_DATA=raw, which would go to Kaggle.
+      - name: configuration on the sample
+        run: |
+          make secrets
+          sed -i 's/^REPLAY_DATA=.*/REPLAY_DATA=sample/' .env
+          grep -x 'REPLAY_DATA=sample' .env
+      - name: bootstrap
+        run: |
+          set -o pipefail
+          make bootstrap 2>&1 | tee bootstrap.log
+          grep -qx 'verify ok' bootstrap.log
+      - name: replay a minute, verify
+        run: |
+          set -o pipefail
+          make replay-burst SECONDS=60
+          make verify 2>&1 | tee verify.log
+          test "$(tail -1 verify.log)" = 'verify ok'
+      - name: bootstrap again (idempotent)
+        run: |
+          set -o pipefail
+          make bootstrap 2>&1 | tee again.log
+          grep -q 'replay state exists, load skipped' again.log
+          grep -qx 'verify ok' again.log
+      - name: state of the containers
+        if: failure()
+        run: |
+          $COMPOSE --profile '*' ps -a | tee containers.txt
+          $COMPOSE --profile '*' logs --tail=200 > containers.log 2>&1
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: smoke-logs
+          path: |
+            *.log
+            containers.txt

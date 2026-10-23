@@ -91,7 +91,11 @@ kafka-topics: ## topics with partitions
 kafka-groups: ## consumer groups and lag
 	$(COMPOSE) exec kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --all-groups --describe
 
-silver: ## merge everything bronze committed since the last run into silver, then exit
+silver: ## merge everything bronze committed since the last run into silver, then exit (refuses while the Airflow scheduler runs)
+	@if [ -n "$$($(COMPOSE) --profile '*' ps -q airflow-scheduler)" ]; then \
+	  echo "airflow-scheduler is running and may merge silver at the same time: pause silver_upsert and stop the scheduler first, or trigger the DAG (OPERATIONS.md, Airflow)" >&2; \
+	  exit 2; \
+	fi
 	$(COMPOSE) --profile core run --rm --no-deps spark-silver
 
 cdc-snapshot: ## incremental snapshot via signal table: make cdc-snapshot [TABLES="shop.orders shop.sellers"]
@@ -106,9 +110,11 @@ iceberg-demo: ## snapshots, time travel, rollback, compaction, expiration on lak
 lakekeeper-bootstrap: ## bootstrap Lakekeeper and create its warehouse (safe to re-run)
 	$(COMPOSE) --profile core run --rm lakekeeper-bootstrap
 
-airflow-init: ## pool lake_writers, 1 slot, for silver_upsert and optimize (safe to re-run)
+airflow-init: ## pools lake_writers and gold_writers, 1 slot each (safe to re-run)
 	$(COMPOSE) exec airflow-scheduler airflow pools set lake_writers 1 \
 	  "silver writers: the silver_upsert merge and iceberg_maintenance optimize (ADR-010)"
+	$(COMPOSE) exec airflow-scheduler airflow pools set gold_writers 1 \
+	  "gold writers: dbt_build and the gold maintenance (W5-D11)"
 
 # ---------------------------------------------------------------- chaos (week 2+)
 chaos-%: ## run a failure scenario: make chaos-spark-kill
@@ -123,17 +129,31 @@ lint: ## ruff, mypy, yamllint, sqlfluff, compose config
 	cd dbt && uv run sqlfluff lint models macros tests
 	$(COMPOSE) --profile '*' config -q
 
+alerts-test: ## promtool: check the alert rules and run observability/prometheus/alerts_test.yml
+	docker run --rm -v "$(CURDIR)/observability/prometheus:/etc/prometheus:ro" --entrypoint promtool prom/prometheus:v3.14.0 check rules /etc/prometheus/alerts.yml
+	docker run --rm -v "$(CURDIR)/observability/prometheus:/etc/prometheus:ro" --entrypoint promtool prom/prometheus:v3.14.0 test rules /etc/prometheus/alerts_test.yml
+
 test: ## unit tests (Spark ones skip on a host without Java)
 	uv run pytest tests/unit -q
 
 SPARK_TESTS := test_bronze_cdc_ingest.py test_contracts.py test_envelope.py test_iceberg_demo.py \
-  test_iceberg_sink.py test_silver_upsert.py
+  test_iceberg_sink.py test_silver_upsert.py test_orders_per_minute.py test_maintenance.py
 
-test-spark: ## the Spark unit tests, inside lakehouse/spark:dev because the host has no JVM
+SPARK_IMAGE ?= lakehouse/spark:dev
+# Versions of the test tools inside the image; tests/unit/test_makefile.py compares them with uv.lock.
+SPARK_TEST_PIP := pytest==9.1.1 jsonschema==4.26.0
+
+test-spark: ## the Spark unit tests, inside $(SPARK_IMAGE) because the host has no JVM; a skip fails
 	docker run --rm --user root --entrypoint bash -v "$(CURDIR)":/repo:ro \
 	  -e PYTHONPATH=/opt/spark/python:/opt/spark/python/lib/py4j-0.10.9.7-src.zip:/repo/streaming \
-	  lakehouse/spark:dev -c 'pip install -q pytest jsonschema && cd /repo/tests/unit && \
-	  python3 -m pytest -q -p no:cacheprovider --rootdir=/tmp $(SPARK_TESTS)'
+	  $(SPARK_IMAGE) -c 'pip install -q $(SPARK_TEST_PIP) && cd /repo/tests/unit && \
+	  python3 -m pytest -q -p no:cacheprovider -p no:skipping --rootdir=/tmp $(SPARK_TESTS)'
+
+watermark-demo: ## orders_per_minute on a lab topic: inside the watermark updates, behind it drops (needs make start)
+	bash scripts/demo/watermark.sh
+
+watermark-live: ## re-send a very late and the newest real order to the running orders_per_minute service
+	bash scripts/demo/watermark.sh live
 
 dbt-parse: ## dbt parse without a warehouse
 	cd dbt && uv run dbt parse --profiles-dir . --target ci
@@ -144,4 +164,4 @@ dbt-build: ## seed, run and test lake.gold through Trino on 127.0.0.1:8080 (need
 dbt-docs: ## dbt docs generate into dbt/target (needs Trino)
 	cd dbt && uv run dbt docs generate --profiles-dir . --target dev
 
-.PHONY: help secrets hooks data migrate replay-load replay-start replay-reset start up down status logs nuke bootstrap verify verify-fast reconcile report replay-burst replay-live replay-status silver psql trino kafka-topics kafka-groups cdc-snapshot connector-status iceberg-demo lakekeeper-bootstrap airflow-init lint test test-spark dbt-parse dbt-build dbt-docs
+.PHONY: alerts-test watermark-demo watermark-live help secrets hooks data migrate replay-load replay-start replay-reset start up down status logs nuke bootstrap verify verify-fast reconcile report replay-burst replay-live replay-status silver psql trino kafka-topics kafka-groups cdc-snapshot connector-status iceberg-demo lakekeeper-bootstrap airflow-init lint test test-spark dbt-parse dbt-build dbt-docs
