@@ -1,5 +1,6 @@
-# The six alerts of week 4 (W4-T05). No Alertmanager (W4-D6): state is read from the Prometheus
-# UI, /api/v1/alerts and the Pipeline health dashboard. Tests: alerts_test.yml (make alerts-test);
+# The six alerts of week 4 (W4-T05), plus the alerts on a source that went silent (review of W4
+# and W5): a gauge that stops coming must not read as "all quiet". No Alertmanager (W4-D6): state
+# is read from the Prometheus UI, /api/v1/alerts and the Pipeline health dashboard. Tests: alerts_test.yml (make alerts-test);
 # live proof per alert: OPERATIONS.md, "Observability".
 groups:
   - name: lakehouse
@@ -38,8 +39,43 @@ groups:
 
       # The age of the oldest bronze snapshot silver has not merged (W4-D4); 0 at rest. Table
       # freshness is "no traffic" between replay bursts and does not alert.
+      # last_over_time: the last value holds for an hour after statsd-exporter dropped the series
+      # (TTL 45m), so this keeps firing until the absent() rule below takes over.
       - alert: FreshnessAbove15m
-        expr: lakehouse_silver_lag_seconds > 900
+        expr: last_over_time(lakehouse_silver_lag_seconds[1h]) > 900
+        labels:
+          severity: warn
+      # dq_checks sends no lag when it cannot tell it (no Variable, the snapshot is gone), and
+      # statsd-exporter drops a gauge 45 minutes after its last value: without the series the rule
+      # above stays quiet whatever the lag.
+      - alert: FreshnessAbove15m
+        expr: absent(lakehouse_silver_lag_seconds)
+        for: 15m
+        labels:
+          severity: warn
+          cause: unknown
+
+      # dq_checks runs every 15 minutes and stamps the end of each run; a paused DAG, a stopped
+      # scheduler or a failing task stops the stamp, and with it every lakehouse_dq_* gauge. The
+      # stale rule fires from minute 30 and, through last_over_time, past the TTL drop at minute
+      # 45 until the gone rule fires at minute 60: no gap between them.
+      - alert: DqChecksStale
+        expr: time() - last_over_time(lakehouse_dq_last_run_timestamp_seconds[1h]) > 1800
+        labels:
+          severity: warn
+          cause: stale
+      - alert: DqChecksStale
+        expr: absent(lakehouse_dq_last_run_timestamp_seconds)
+        for: 15m
+        labels:
+          severity: warn
+          cause: gone
+
+      # A target Prometheus cannot scrape: its own alerts go quiet with it (ADR-023). The stateful
+      # job runs only with PROFILE=stateful, so its target is down by design otherwise.
+      - alert: ScrapeTargetDown
+        expr: up{job!="spark-orders-per-minute"} == 0
+        for: 2m
         labels:
           severity: warn
 

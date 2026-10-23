@@ -149,3 +149,121 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: page
+
+  # The lag is sent, then dq_checks stops sending it: the TTL drops the series, the alert fires
+  # 15 minutes later.
+  - interval: 1m
+    input_series:
+      - series: 'lakehouse_silver_lag_seconds{instance="statsd-exporter:9102",job="statsd-exporter"}'
+        values: '0x5 stale'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: FreshnessAbove15m
+        exp_alerts: []
+      - eval_time: 22m
+        alertname: FreshnessAbove15m
+        exp_alerts:
+          - exp_labels:
+              severity: warn
+              cause: unknown
+
+  # dq_checks stamped its run 10 minutes ago: quiet. 31 minutes ago: stale.
+  - interval: 1m
+    input_series:
+      - series: 'lakehouse_dq_last_run_timestamp_seconds{job="statsd-exporter"}'
+        values: '0+0x40'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: DqChecksStale
+        exp_alerts: []
+      - eval_time: 31m
+        alertname: DqChecksStale
+        exp_alerts:
+          - exp_labels:
+              severity: warn
+              cause: stale
+              job: statsd-exporter
+
+  # No stamp at all: gone after 15 minutes.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="statsd-exporter"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: DqChecksStale
+        exp_alerts: []
+      - eval_time: 16m
+        alertname: DqChecksStale
+        exp_alerts:
+          - exp_labels:
+              severity: warn
+              cause: gone
+
+  # A core target down for 3 minutes fires; the stateful job, off by default, does not.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="postgres-exporter",instance="postgres-exporter:9187"}'
+        values: '1 0 0 0 0'
+      - series: 'up{job="spark-orders-per-minute",instance="spark-orders-per-minute:4041"}'
+        values: '0 0 0 0 0'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: ScrapeTargetDown
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: ScrapeTargetDown
+        exp_alerts:
+          - exp_labels:
+              severity: warn
+              job: postgres-exporter
+              instance: postgres-exporter:9187
+
+  # Across the TTL: the stamp stops at minute 0, statsd-exporter drops the series at minute 45.
+  # The stale alert must not go quiet before the gone alert fires.
+  - interval: 1m
+    input_series:
+      - series: 'lakehouse_dq_last_run_timestamp_seconds{job="statsd-exporter"}'
+        values: '0+0x45 stale'
+      - series: 'lakehouse_silver_lag_seconds{job="statsd-exporter"}'
+        values: '1000+0x45 stale'
+    alert_rule_test:
+      - eval_time: 52m
+        alertname: DqChecksStale
+        exp_alerts:
+          - exp_labels:
+              severity: warn
+              cause: stale
+              job: statsd-exporter
+      - eval_time: 52m
+        alertname: FreshnessAbove15m
+        exp_alerts:
+          - exp_labels:
+              severity: warn
+              job: statsd-exporter
+      - eval_time: 62m
+        alertname: DqChecksStale
+        exp_alerts:
+          - exp_labels:
+              severity: warn
+              cause: stale
+              job: statsd-exporter
+          - exp_labels:
+              severity: warn
+              cause: gone
+
+  # The lag came back to 0: the alert goes quiet with the next value, not an hour later.
+  - interval: 1m
+    input_series:
+      - series: 'lakehouse_silver_lag_seconds{job="statsd-exporter"}'
+        values: '1000x5 0x5'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: FreshnessAbove15m
+        exp_alerts:
+          - exp_labels:
+              severity: warn
+              job: statsd-exporter
+      - eval_time: 8m
+        alertname: FreshnessAbove15m
+        exp_alerts: []

@@ -40,7 +40,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (topic) (spark_streaming_kafka_lag)",
+          "expr": "sum by (topic) (spark_streaming_kafka_lag{query=\"bronze_cdc_ingest\"})",
           "legendFormat": "{{topic}}",
           "refId": "A"
         }
@@ -73,7 +73,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "rate(spark_streaming_input_rows_total[5m])",
+          "expr": "rate(spark_streaming_input_rows_total{query=\"bronze_cdc_ingest\"}[5m])",
           "legendFormat": "rows/s",
           "refId": "A"
         }
@@ -106,7 +106,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "spark_streaming_batch_duration_seconds",
+          "expr": "spark_streaming_batch_duration_seconds{query=\"bronze_cdc_ingest\"}",
           "legendFormat": "batch",
           "refId": "A"
         }
@@ -139,7 +139,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "time() - spark_streaming_last_batch_timestamp",
+          "expr": "time() - spark_streaming_last_batch_timestamp{query=\"bronze_cdc_ingest\"}",
           "legendFormat": "{{query}}",
           "refId": "A"
         }
@@ -454,7 +454,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "avg by (dag_id, task_id) (airflow_task_duration_seconds_sum / airflow_task_duration_seconds_count)",
+          "expr": "avg by (dag_id, task_id) (rate(airflow_task_duration_seconds_sum[1h]) / rate(airflow_task_duration_seconds_count[1h]))",
           "legendFormat": "{{dag_id}}.{{task_id}}",
           "refId": "A"
         }
