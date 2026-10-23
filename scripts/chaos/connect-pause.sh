@@ -13,6 +13,8 @@ no_other_replayer
 connector_running || fail "the connector is not RUNNING before the stop"
 bronze_caught_up || fail "bronze has not caught up with Kafka before the stop"
 wait_until 1200 "SlotWalRetainedHigh to be quiet" alert_quiet SlotWalRetainedHigh
+# Otherwise the tail of an earlier firing would pass the check after the stop.
+wait_until 300 "ConnectorNotRunning to be quiet" alert_quiet ConnectorNotRunning
 
 # STOPPED is kept in connect-configs and survives a Connect restart: a script that dies without
 # this leaves CDC off for good.
@@ -39,7 +41,12 @@ alert_firing ConnectorNotRunning 180
 # its 4 MB records. A transaction plus pg_switch_wal adds one 16 MB segment per round and produces
 # nothing Debezium forwards.
 replay_burst 30
-while [ "$(slot_retained_bytes)" -lt $((72 * 1024 * 1024)) ]; do
+rounds=0
+while :; do
+  retained=$(slot_retained_bytes)
+  [[ "$retained" =~ ^[0-9]+$ ]] || fail "could not read the WAL the slot holds: '$retained'"
+  [ "$retained" -lt $((72 * 1024 * 1024)) ] || break
+  ((++rounds <= 10)) || fail "10 WAL segments did not grow the slot past 72 MiB"
   psql_value "select txid_current()" >/dev/null
   psql_value "select pg_switch_wal()" >/dev/null
 done
@@ -63,11 +70,15 @@ reconcile
 # not asserted.
 replay_burst 15
 wait_until 300 "bronze to catch up with Kafka" bronze_caught_up
-sleep 30
-unconfirmed=$(psql_value "select pg_wal_lsn_diff(pg_current_wal_lsn(), confirmed_flush_lsn)::bigint
-                          from pg_replication_slots where slot_name = 'shop_slot'")
-echo "unconfirmed WAL after the catch-up: $unconfirmed bytes, retained by restart_lsn: $(slot_retained_bytes)"
-[ "$unconfirmed" -lt $((1024 * 1024)) ] || fail "the connector has not confirmed the WAL it read"
+unconfirmed() {
+  psql_value "select pg_wal_lsn_diff(pg_current_wal_lsn(), confirmed_flush_lsn)::bigint
+              from pg_replication_slots where slot_name = 'shop_slot'"
+}
+confirmed() { local n; n=$(unconfirmed) && [[ "$n" =~ ^[0-9]+$ ]] && [ "$n" -lt $((1024 * 1024)) ]; }
+# Connect confirms the LSN when it commits offsets, every offset.flush.interval.ms (60 s).
+wait_until 120 "the connector to confirm the WAL it read" confirmed ||
+  fail "the connector has not confirmed the WAL it read: $(unconfirmed) bytes behind"
+echo "unconfirmed WAL after the catch-up: $(unconfirmed) bytes, retained by restart_lsn: $(slot_retained_bytes)"
 merge_silver
 reconcile
 alerts_in_window $((SECONDS - start + 60))

@@ -40,6 +40,21 @@ for topic in $topics; do
   echo "topic $topic"
 done
 
+# Debezium publishes pg_logical_emit_message records to <topic.prefix>.message. Nothing in the
+# project emits them, but one from anyone stalls the stream without the topic (ADR-023, 23.10):
+# one partition, kept an hour (segment.ms rolls the segment so retention can drop it), records up
+# to the Connect producer limit (CONNECT_PRODUCER_MAX_REQUEST_SIZE in docker/compose.yaml).
+message_topic=$(python3 -c '
+import json, sys
+print(json.load(open(sys.argv[1]))["config"]["topic.prefix"] + ".message")
+' "$root/connect/shop-connector.json")
+"${compose[@]}" exec -T kafka /opt/kafka/bin/kafka-topics.sh \
+  --bootstrap-server localhost:9092 --create --if-not-exists \
+  --topic "$message_topic" --partitions 1 --replication-factor 1 \
+  --config retention.ms=3600000 --config segment.ms=3600000 \
+  --config max.message.bytes=8388608 >/dev/null
+echo "topic $message_topic"
+
 config=$(envsubst '${DEBEZIUM_USER} ${DEBEZIUM_PASSWORD} ${OLTP_DB}' \
   < "$root/connect/shop-connector.json" \
   | python3 -c 'import json, sys; print(json.dumps(json.load(sys.stdin)["config"]))')
