@@ -67,6 +67,27 @@ def repo(tmp_path: Path) -> Path:
         'psql -c "DELETE FROM shop.orders"',
         "echo X=1 >> .env",
         "sed -i s/a/b/ .env",
+        "cp /tmp/x .env",
+        "git -C /repo push --force",
+        'grep -l x f | xargs psql -c "drop table t"',
+        'grep x $(psql -c "drop table t")',
+        'grep x f\ntrino --execute "drop table t"',
+        'cat q.sql; psql -c "truncate t"',
+        'git log -1 && trino --execute "drop table t"',
+        'grep "drop table" f & psql -c "delete from t"',
+        "grep KEY f > .env",
+        'grep x#; psql -c "drop table t"',
+        "grep $'x' f; psql -c 'drop table t'",
+        "git --git-dir .git push --force",
+        "git 'push' -f",
+        "grep x f\n>/dev/null psql -c 'drop table t'",
+        "cat README.md\n2>&1 git push --force origin main",
+        "rg --hostname-bin=sh 'drop table t' .",
+        "cp /tmp/x .env 2>/dev/null",
+        "cp /tmp/x .env.local",
+        "rg '--pre=sh' 'drop table t' .",
+        "git grep '-Osh' 'drop table t'",
+        "git grep --open 'drop table t'",
     ],
 )
 def test_guard_denies(command: str) -> None:
@@ -97,6 +118,10 @@ def test_guard_denies(command: str) -> None:
         "curl -X PUT 127.0.0.1:8083/connectors/shop-connector/config -d @c.json",
         'psql -c "alter system set max_wal_size = 2GB"',
         'trino --execute "create table gold.x (a int)"',
+        "git -C /repo push origin main",
+        "git --no-pager rebase main",
+        'grep -n "make silver" Makefile && make silver',
+        "git --git-dir .git --work-tree . push origin main",
     ],
 )
 def test_guard_asks_the_owner(command: str) -> None:
@@ -119,6 +144,11 @@ def test_guard_asks_the_owner(command: str) -> None:
         "truncate -s 0 /tmp/x.log",
         "cp .env.example /tmp/a && grep REPLAY .env",
         "rm /tmp/one-file",
+        'grep -rn "DROP TABLE" docs',
+        'grep -rnE "make silver|delete from shop.orders" docs 2>/dev/null | head -5',
+        "git log --grep push --oneline",
+        'cd /x && git show HEAD -- Makefile | grep "make replay-burst"',
+        "rg -n 'truncate table|git push --force' .",
     ],
 )
 def test_guard_allows(command: str) -> None:
@@ -148,6 +178,28 @@ def test_commit_needs_a_full_verify_of_this_tree(repo: Path) -> None:
 
     (repo / "job.py").write_text("x = 3\n")
     assert decision(bash(commit, repo)) == "deny"
+
+
+def test_commit_message_words_are_not_subcommands(repo: Path) -> None:
+    write_stamp(repo, "full")
+
+    assert decision(bash('git commit -m "docs: rebase and push rules"', repo)) == "allow"
+    assert decision(bash("git log --grep commit", repo)) == "allow"
+    (repo / "job.py").write_text("x = 2\n")
+    assert decision(bash("git commit-tree HEAD^{tree}", repo)) == "deny"
+
+
+def test_guard_fails_closed() -> None:
+    result = subprocess.run(
+        [sys.executable, str(HOOKS / "guard.py")],
+        input="not json",
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert decision(result) == "ask"
+    assert "guard.py failed" in result.stdout
 
 
 def test_commit_chained_after_a_full_verify_is_allowed(repo: Path) -> None:
