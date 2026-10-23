@@ -2,6 +2,31 @@
 
 Обновляется в конце каждой недели или смыслового блока. Читать первым в каждой сессии.
 
+## Состояние на 24.10.2026, ревью недель 4 и 5 и правки по нему
+
+Независимое ревью недель 4 и 5 (`docs/planning/12-review-w4-w5.md`, 43 замечания, 8 высоких) и правки по нему: владелец 24.10 делегировал исправления. Код и доки поправлены, кроме решений владельца (MinIO, лестница W5-T05b, покой сверки по источнику, push). Хук `guard.py` переписан (владелец применил сам).
+
+### Что исправлено
+
+| Область | Что | Проверка |
+|---|---|---|
+| harness | `guard.py`: чтение и поиск с опасными словами не блокируются, слова в сообщении коммита не подкоманда git, `cp`/`mv` на `.env` запрещены, сбой хука спрашивает владельца | 79 тестов `test_agent_hooks.py`, ревью кода нашло и закрыло обход через перевод строки |
+| сверка | Postgres округлял миллисекунды, Trino отбрасывал: теперь `floor` с обеих сторон; дубль ключа с тем же хэшем больше не «чисто» | тест на полный канонический текст обеих сторон; `round` против `floor` на литерале `.0006` проверен в обоих движках |
+| метрики | `:g` слал unix time с шагом 10 000 с: теперь `repr`; `dbt source freshness`, убитый сигналом, валит задачу; старый `sources.json` удаляется до запуска; gauge `lakehouse_dq_reconcile_gold_compared` | тест на дробный unix time |
+| обслуживание | `orphans` gold получал сырой Jinja из XCom: флаг считается в таске из `params`; `--location-suffix` только `metadata` или `data`; `--retain-last` не меньше 1; Spark-шаги `iceberg_maintenance` только с `{"expire_and_compact": true}` | тесты `test_dags.py`, `test_maintenance.py`, `make dags-check` |
+| алерты | `FreshnessAbove15m` при пропавшем ряде, `DqChecksStale`, `ScrapeTargetDown`; панели bronze только по `bronze_cdc_ingest`; средняя длительность задач за час; `check_dashboards.py` проверяет имена метрик за `or vector(0)` | `make alerts-test` (11 правил), `check_dashboards.py` 35 запросов |
+| CDC и chaos | `register.sh` создаёт `oltp.message`; `make silver`, `merge_silver` и `verify.sh` отказывают, если `docker compose ps` упал; `connect-pause.sh`: ожидание подтверждения LSN до 120 с, предел добивки 10 раундов, `alert_quiet ConnectorNotRunning` до остановки | `bash -n` в `make lint`, тесты `test_makefile.py` |
+| тесты и CI | тест «счёт не убывает» ловит мутацию; `FAIL_ON_SKIP=1` валит любой пропуск в `make test-spark`; CI: `permissions`, `bash -n`, импорт DAG в образе Airflow | мутация `orders_per_minute` убита в образе; тест на три вида пропуска |
+| доки | OPERATIONS (DAG, алерты, Maintenance, CI, сценарий 6), ADR-023, ADR-025, раннбуки `connector-failed`, `slot-wal-growth`, рецепт в `00-mini-architecture-review.md` | |
+
+### Что ждёт владельца
+
+- **Prometheus перечитает правила** после `docker kill -s HUP lakehouse-prometheus-1` (не сделано в этой сессии, это изменение живого мониторинга).
+- **Живой `oltp.message` без `segment.ms`**: `register.sh` создаёт топик с ним, но существующий не меняет (`--if-not-exists`); правка живого топика это retention Kafka, нужен «ок».
+- **Образ Spark** пересобрать до любой ступени W5-T05b: проверка суффикса orphans живёт в `maintenance.py` образа.
+- Не исправлено, решение владельца: MinIO (п. 6 ревью); покой сверки с учётом источника и причина `merge_pending` (п. 10); `bronze_caught_up` против источника (п. 17); watermark в будущем (п. 27); push 23.10 без записанного «ок» (п. 28); actions по SHA (п. 39); удаление `metadata.json` bronze при пересоздании `spark-bronze` (п. 22).
+- Предложения по harness, не сделаны: гейт коммита по tree id индекса, а не рабочего дерева (п. 23); deny на `pg_replication_slot_advance` и `pg_drop_replication_slot` (п. 34).
+
 ## Состояние на 23.10.2026, конец недель 4 и 5 (кроме T05b и гейтов владельца)
 
 Недели 4 и 5 выполнены, кроме деструктивной лестницы W5-T05b (ждёт «ок» владельца), смоука на GitHub (красный из-за образов MinIO), гейтов владельца и суток наблюдения B6. Владелец 23.10 дал общую делегацию («делай все сам», коммиты и push по необходимости); деструктивные операции и решения по инфраструктуре остаются с отдельным «ок». Независимое ревью: `docs/planning/11-review-prompt-w4-w5.md` (для отдельной сессии Opus).
@@ -13,20 +38,20 @@
 | W4-T01a, T01b профиль obs, Connect JMX, StatsD | `c944851`, `aa2d0ee` | 19.10 |
 | W4-T02 lag в listener | `f5b2d3c` | 21 ряд, lag 0 на порции в 579 событий |
 | W4-T03 экспорт `dq_checks`; W5-T04 сверка по значениям | `0134d57` | 19 рядов `reconcile_rows`, отпечатки Postgres и Trino равны на 7 таблицах и 4 парах silver-gold |
-| W4-T04 дашборды; W4-T05 шесть алертов | `7a7fa2d` | 35 панелей с данными, `make alerts-test` зелёный, времена срабатывания в OPERATIONS «Alerts» |
+| W4-T04 дашборды; W4-T05 шесть алертов | `7a7fa2d` | 35 запросов (33 панели) с данными, `make alerts-test` зелёный, времена срабатывания в OPERATIONS «Alerts» |
 | W4-T06a chaos 5 и 8, `merge_silver` | `72bb8d2` | оба сценария прошли, находки ниже |
-| W4-T06b chaos 6 и 7, OPERATIONS | коммит `docs`/`cdc` после этой записи | chaos 6 прошёл дважды (30 и 1 минута), chaos 7 через Airflow-merge |
+| W4-T06b chaos 6 и 7, OPERATIONS | `f606670`, `a830b88` | chaos 6: 30-минутный прогон шёл под незакоммиченной версией с `pg_logical_emit_message` и остановил CDC (восстановление руками); закоммиченный скрипт прогнан только с HOLD=60; chaos 7 через Airflow-merge |
 | W4-T07 гейт observability | | **за владельцем** |
 | W5-T02 `ci.yml`; W5-T03 `smoke.yml` | `780795e` | CI зелёный (213 Spark-тестов без skipped); смоук красный (образы MinIO) |
 | W5-T01a, T01b `orders_per_minute` | `2441975` | демо и live-проверка пройдены, 164 окна без расхождений |
 | W5-T05a политика и код обслуживания | `432190e` | ADR-025, `maintenance.py`, DAG на паузе |
 | W5-T05b живые запуски | | **не выполнена**, ждёт «ок» на ступени лестницы |
-| Документы | `4d03d05` и коммит после этой записи | ADR-024, ADR-025, спека W5, итоги карточек |
+| Документы | `4d03d05`, `a830b88` | ADR-024, ADR-025, спека W5, итоги карточек |
 
 ### Находки недель 4 и 5 (факт, не гипотеза)
 
-- **Образы MinIO удалены из реестров** (`docker manifest inspect quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z`: `no such manifest`, то же для `mc`). Чистый клон не поднимется, смоук красный (run 40003292011, runner 4 vCPU, 15 GB, диск 145 GB). Копия образов: `/home/gusev/lakehouse-image-backup/minio-images.tar`; `docker image prune` не делать.
-- **`pg_logical_emit_message` останавливает CDC**: Debezium публикует эти записи в несуществующий topic `oltp.message`, затем упирается в 1 MB `max.request.size` (ADR-023). Восстановлено без потерь: topic `oltp.message` и `CONNECT_PRODUCER_MAX_REQUEST_SIZE` в compose. `pg_replication_slot_advance` классификатор отклонил, не выполнялся.
+- **Образы MinIO удалены из реестров** (`docker manifest inspect quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z`: `no such manifest`, то же для `mc`). Чистый клон не поднимется, смоук красный (run 40003292011, runner 4 vCPU, 15 GB, диск 145 GB). Копия образов: `~/lakehouse-image-backup/minio-images.tar` (только amd64, `docker load` не проверен, лежит на том же диске WSL); `docker image prune -a` и `docker system prune -a` не делать, пока живы контейнеры MinIO, образы держатся только ими.
+- **`pg_logical_emit_message` останавливает CDC**: Debezium публикует эти записи в несуществующий topic `oltp.message`, затем упирается в 1 MB `max.request.size` (ADR-023). Восстановлено без потерь: topic `oltp.message` и `CONNECT_PRODUCER_MAX_REQUEST_SIZE` в compose. При восстановлении была попытка `pg_replication_slot_advance` (пропустила бы записи), её отклонила проверка прав сессии агента.
 - **Kafka остановлена, Spark падает в цикле рестартов** (имя `kafka` не резолвится), 15 рестартов по ~20 с; `SparkNoBatch5m` не горит, горит `ContainerRestarting`.
 - **`dq_checks` краснеет «silver differs from Postgres at rest»**, когда Kafka или коннектор стоят (bronze молчит, источник пишет): `AirflowDagFailed`. Верный сигнал неверным путём.
 - **Слот после падения коннектора держит WAL, пока не придёт реальное изменение**: при простое Debezium не подтверждает позицию (вопрос heartbeat, ниже). После порции хвост сливается за секунды.
@@ -39,7 +64,7 @@
 
 - Профили: `core` без реплеера, `query` (Trino `-Xmx2g`), `orchestrate`, `obs`, `stateful` (`spark-orders-per-minute`). Сумма памяти контейнеров 8.2 GiB (правило остановки W4-D5: 10 GiB).
 - Airflow: `silver_upsert`, `dq_checks`, `dbt_build` включены; `iceberg_maintenance` и `iceberg_orphans` на паузе (лестница W5-D13). Pools `lake_writers`, `gold_writers` по 1 слоту.
-- Реплей: `virtual_now` 2026-07-16 21:33, событий 76 858, осталось 22 293. Потрачено за W4 и W5 вместе 3 д 17 ч 56 мин (бюджеты 5 и 3 дня): W4-T02 11 ч 54 мин, chaos 5 около 6 ч, chaos 8 около 24 ч, проверка `FreshnessAbove15m` 12 ч, chaos 6 два прогона и проверки около 40 ч, W5-T01b около 20 ч, остальное мелкие порции.
+- Реплей: `virtual_now` 2026-07-16 21:33, событий 76 858, осталось 22 293. Потрачено за W4 и W5 вместе 3 д 17 ч 56 мин (бюджеты 5 и 3 дня): W4-T02 11 ч 54 мин, chaos 5 около 6 ч, chaos 8 около 24 ч, проверка `FreshnessAbove15m` 12 ч, остальное (chaos 6 два прогона и проверки, W5-T01b, мелкие порции) около 24 ч 28 мин вместе; прежняя разбивка «40 ч и 20 ч» не сходилась с итогом.
 - Новые объекты: topic `oltp.message` (макс. сообщение 8 MB, retention 1 ч), таблицы `lake.silver.orders_per_minute`, `lake.demo.orders_per_minute`, `lake.demo.meta_probe`, лаб-топики `lab.orders.*` (удаление только с «ок»), checkpoint `orders_per_minute` и `orders_per_minute_demo/*`.
 - Скрипт цикла проверки перед коммитом: пауза `silver_upsert`, ожидание конца запусков четырёх DAG, остановка scheduler, `make verify`, запуск scheduler, снятие паузы; отметка verify привязана к дереву, после неё ничего не править до коммитов.
 

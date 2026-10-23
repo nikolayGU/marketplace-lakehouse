@@ -390,7 +390,8 @@ DAGs live in `airflow/dags/`; their shared code is `airflow/dags/lakehouse/`, wh
 | `silver_upsert` | every 5 min, `max_active_runs=1`, 1 retry | `bronze_has_new_snapshot` skips the run when bronze has no snapshot silver has not merged; `merge` starts spark-silver (DockerOperator, pool `lake_writers`) and publishes the Asset `lake.silver`; `remember_snapshot` stores the merged snapshot id in the Variable `silver_upsert_last_bronze_snapshot` |
 | `dbt_build` | Asset `lake.silver` | `dbt build` of `lake.gold` from `/opt/dbt-venv`, no retries; a manual run takes dbt vars from its conf, `{"dbt_vars": "{...}"}` |
 | `dq_checks` | every 15 min | fails on a primary key twice in silver, or on silver differing from Postgres at rest; logs `dq <name>=<value>` lines: delivery repeats and source no-ops of the last hour, new quarantine rows, freshness of each silver table, `dbt source freshness`; sends the same values to Prometheus (see "Observability", `lakehouse_*`), except the quarantine count |
-| `iceberg_maintenance` | daily | `optimize` of each silver table through Trino, in pool `lake_writers`; bronze is not touched (D11) |
+| `iceberg_maintenance` | daily | `optimize` of each silver table through Trino, in pool `lake_writers`; the Spark steps (position deletes, `expire_snapshots` of silver and gold, compaction of past bronze days) only in a run with `{"expire_and_compact": true}`, see "Maintenance" |
+| `iceberg_orphans` | weekly | `remove_orphan_files` of silver, gold and bronze metadata; a dry run unless the run has `{"dry_run": false}` |
 
 One silver writer. While `silver_upsert` is unpaused, `make silver` and `make verify` must not
 run: two processes on one checkpoint (`make verify` refuses while the scheduler runs). For a
@@ -509,8 +510,9 @@ curl -s 127.0.0.1:3000/api/health
   shows as a new `docker_container_start_time_seconds`.
 ### Alerts
 
-Six alerts in `observability/prometheus/alerts.yml`, tested by `make alerts-test` (promtool, ten
-cases, failure cases first) and each shown firing in its own scenario. No Alertmanager (ADR-023):
+Nine alerts in `observability/prometheus/alerts.yml`, tested by `make alerts-test` (promtool, failure
+cases first). The first six are each shown firing in their own scenario; the last three, added after
+the review of weeks 4 and 5, watch for a source that went silent and are proven by promtool only. No Alertmanager (ADR-023):
 read them in the Prometheus UI (`/alerts`), `curl 127.0.0.1:9090/api/v1/alerts` or the "Firing
 alerts" panel. After editing the file: `docker kill -s HUP lakehouse-prometheus-1`.
 
@@ -519,9 +521,12 @@ alerts" panel. After editing the file: `docker kill -s HUP lakehouse-prometheus-
 | `ConnectorNotRunning` | `absent(kafka_connect_connector_task_status{connector="shop-connector",status="running"} == 1)` | 1m | a task that is not `running` is no CDC; `absent` also covers a Connect that is down | scenario 6 | 95 s after `PUT /stop` |
 | `SlotWalRetainedHigh` | slot over 64 MiB and inactive, or over 512 MiB | 5m | an idle healthy slot holds about 25 MB; an inactive one grows without bound (`max_slot_wal_keep_size = -1`) | scenario 6 | 326 s after the stop (80 MB held) |
 | `SparkNoBatch5m` | `time() - last_batch_timestamp > 300`, and `absent(...)` for the dead driver | 0 / 5m | idle events keep the timestamp moving, so only a stuck or dead query trips it | stop `spark-bronze` | 315 s after the stop (`cause="gone"`) |
-| `FreshnessAbove15m` | `lakehouse_silver_lag_seconds > 900` | 0 | age of the oldest bronze snapshot silver has not merged; table freshness grows between bursts and does not alert | pause `silver_upsert`, burst | 1561 s after bronze caught up (900 s plus up to 15 min until the next `dq_checks`) |
+| `FreshnessAbove15m` | `last_over_time(lakehouse_silver_lag_seconds[1h]) > 900` (the last value holds past the TTL drop) | 0 | age of the oldest bronze snapshot silver has not merged; table freshness grows between bursts and does not alert | pause `silver_upsert`, burst | 1561 s after bronze caught up (900 s plus up to 15 min until the next `dq_checks`) |
 | `AirflowDagFailed` | `increase(airflow_dagrun_failed_seconds_count[30m]) > 0` or a series new within 30 minutes | 0 | the second half catches the first failure after statsd-exporter started | scenario 9 | 17 s after the red run ended |
 | `ContainerRestarting` | `changes(docker_container_start_time_seconds{...}[15m]) > 0`, one-shot containers excluded | 0 | `docker restart` moves the start time; `RestartCount` follows only the restart policy | scenarios 5 and 8 | 15 s after the restart |
+| `FreshnessAbove15m`, `cause="unknown"` | `absent(lakehouse_silver_lag_seconds)` | 15m | `dq_checks` sends no lag it cannot tell, and statsd-exporter drops a gauge 45 minutes after its last value: without this the lag alert goes quiet | promtool | |
+| `DqChecksStale` | `time() - last_over_time(lakehouse_dq_last_run_timestamp_seconds[1h]) > 1800` (`cause="stale"`), `absent(...)` (`cause="gone"`); no gap at the TTL drop (promtool case) | 0 / 15m | `dq_checks` runs every 15 minutes; a paused DAG, a stopped scheduler or a failing `report` stops every `lakehouse_dq_*` gauge | promtool | |
+| `ScrapeTargetDown` | `up{job!="spark-orders-per-minute"} == 0` | 2m | an exporter that is down silences its own alerts (ADR-023); the stateful job runs only with `PROFILE=stateful` | promtool | |
 
 Limits worth knowing: `absent()` alerts also burn when the source is off (obs up, core down); a
 crash-looping Spark driver (Kafka stopped, 15 restarts) does not trip `SparkNoBatch5m`, the restart
@@ -593,7 +598,12 @@ Freshness panels step every 15 minutes (the cadence of `dq_checks`); that is not
 Policy and reasons: ADR-025. `iceberg_maintenance` (daily 03:30) and `iceberg_orphans` (weekly,
 Sunday 04:00) are created paused and unpaused one rung at a time (the ladder in ADR-025); do not
 unpause them to "see what happens": `expire_snapshots` and `remove_orphan_files` delete files, and the
-lake has no backup. Rebuild the Spark image first (`docker compose ... --profile core build
+lake has no backup. `iceberg_maintenance` existed before its Spark steps, so "created paused" does
+not hold them back: they run only in a run with `{"expire_and_compact": true}` (a scheduled run does
+`optimize` only), and turning them on daily is a change of the param's default with its own "ok".
+`iceberg_orphans` resolves the dry-run flag of its mapped gold tasks in `gold_orphan_commands`
+(Airflow does not render templates in values a mapped task gets from XCom). After unpausing,
+`iceberg_orphans` starts a run at once: its last due date is in the past. Rebuild the Spark image first (`docker compose ... --profile core build
 spark-bronze`): the DAG files are live as soon as they are saved, the job `maintenance.py` only after
 the image.
 
@@ -610,7 +620,8 @@ $C maintenance rewrite-data --before-today lake.bronze.cdc_events
 
 Each call prints one JSON line (`dry_run`, the table, candidates or removed files). A refusal
 (`expire` on bronze, a term under 7 days on silver or gold, `orphans` on bronze without
-`--location-suffix metadata`) exits 1 before a Spark session starts. To read a result: for
+`--location-suffix metadata`, a suffix other than `metadata` or `data` anywhere, `--retain-last`
+under 1) exits 1 before a Spark session starts. To read a result: for
 `expire`, compare `select count(*) from silver.<t>."$snapshots"` before and after, and that
 `select count(*)` of the table did not move; for `orphans`, the dry run lists what the real run
 would remove.
@@ -622,10 +633,10 @@ branch cancels the older pull request run.
 
 | Job | What it does |
 |---|---|
-| `lint-and-test` | `uv sync --locked`, ruff, mypy, yamllint, sqlfluff, `dbt parse`, `pytest tests/unit`, compose config, gitleaks |
+| `lint-and-test` | `uv sync --locked`, ruff, `bash -n` on every tracked shell script, mypy, yamllint, sqlfluff, `dbt parse`, `pytest tests/unit`, compose config, gitleaks |
 | `hadolint` | one run per Dockerfile (matrix, a test compares it with `find`), fails on warning and above; accepted findings sit in the Dockerfile as `# hadolint ignore=` with the reason |
-| `spark-tests` | builds `lakehouse/spark:ci` (layer cache `type=gha`, scope `spark`) and runs `make test-spark SPARK_IMAGE=lakehouse/spark:ci`; `-p no:skipping` makes a skip a failure |
-| `airflow-image` | builds `lakehouse/airflow:ci` (scope `airflow`), imports Airflow, trino, psycopg and pydantic-settings, runs `dbt --version` in its venv |
+| `spark-tests` | builds `lakehouse/spark:ci` (layer cache `type=gha`, scope `spark`) and runs `make test-spark SPARK_IMAGE=lakehouse/spark:ci`; `FAIL_ON_SKIP=1` (`tests/unit/conftest.py`) turns any skip, `pytest.skip()` and `importorskip` included, into a failure |
+| `airflow-image` | builds `lakehouse/airflow:ci` (scope `airflow`), imports Airflow, trino, psycopg and pydantic-settings, runs `dbt --version` in its venv, and `make dags-check`: every DAG file imports in the image, offline, with `docker/airflow/airflow.env` |
 
 `.github/workflows/smoke.yml` (on demand and Mondays 03:00 UTC, 45 minutes at most) walks the path
 from a clean clone on the committed sample: `make secrets` with `REPLAY_DATA=sample`, `make
@@ -633,13 +644,12 @@ bootstrap`, a 60 s `make replay-burst`, `make verify`, a second `make bootstrap`
 `replay state exists, load skipped` and end `verify ok`). It builds the Spark and Connect images from
 scratch, so it is cold every time. Run it: `gh workflow run smoke.yml --ref main`, then
 `gh run watch <id> --exit-status`. On failure it uploads `smoke-logs` (container state and the last
-200 log lines of every service). Not run on GitHub yet; the runner size and the free disk it prints
-in its first steps belong here after the first run.
+200 log lines of every service). First run 2026-10-23 (run 40003292011): red at `make start`, the
+MinIO images are gone from quay.io and Docker Hub (ADR-004 needs a successor, see docs/HANDOFF.md).
 
-Repeat locally: `make test-spark` (132 passed, no skipped, 2026-10-23, ~80 s with a warm image).
+Repeat locally: `make test-spark` (213 tests in CI run 40011971965, 2026-10-23), `make dags-check`.
 `make test-spark` pins `pytest` and `jsonschema` to the versions in `uv.lock`
-(`tests/unit/test_makefile.py` compares them). Not run on GitHub yet: first push, then
-`gh run list --workflow ci`.
+(`tests/unit/test_makefile.py` compares them). Runs: `gh run list --workflow ci`.
 
 ## Failure scenarios
 
@@ -969,11 +979,14 @@ the scheduler runs) and `reconcile`: 7 of 7 tables ok.
 make chaos-connect-pause   # HOLD=1800 s by default; core + obs up, no replay running
 ```
 
-What happened (2026-10-23): `PUT /connectors/shop-connector/stop` at 18:21:55 (not `pause`: a paused
-task keeps its walsender and the slot stays active, W4-D11). The slot turned inactive 4 s later; a
-30 s burst and padding took it from 11 MB to 80.9 MB; the connector was resumed 1812 s after the
-stop, bronze had caught up 19 s later, `reconcile` 7 of 7, every offset once. A short rerun (hold
-60 s, 19:14) did the same with 83.9 MB held; after the resume and a 15 s burst the connector had
+What happened (2026-10-23), two runs of two versions of the script. The 30-minute run (18:21:55)
+was an uncommitted version that padded the WAL with `pg_logical_emit_message`; that stopped CDC
+(below), so its "bronze caught up 19 s after the resume, `reconcile` 7 of 7" measured bronze
+against a Kafka that had stopped growing, and its recovery was by hand: the topic, the producer
+setting, a recreated Connect. `PUT /connectors/shop-connector/stop` (not `pause`: a paused task keeps
+its walsender and the slot stays active, W4-D11) turned the slot inactive 4 s later; a 30 s burst
+and padding took it from 11 MB to 80.9 MB. The committed script (`f606670`) ran once, with a hold
+of 60 s (19:14), and did the same with 83.9 MB held; after the resume and a 15 s burst the connector had
 confirmed everything (28 kB unconfirmed) and `restart_lsn` retained 3.9 MB.
 What monitoring shows: `ConnectorNotRunning` 95 s after the stop (75 s in the rerun) and
 `SlotWalRetainedHigh` 326 s after it (`for: 5m` plus the scrape; both runs). `dq_checks` also goes
@@ -982,8 +995,10 @@ Data at risk: none while the slot lives; Postgres keeps every WAL file it has no
 (`max_slot_wal_keep_size = -1`), so the disk of the VM is the limit, and nothing but this alert
 watches it (runbook `docs/runbooks/slot-wal-growth.md`). Replay alone writes ~1.1 MB of WAL per
 virtual hour; the 64 MiB threshold is reached in about 2.5 virtual days of events.
-Recovery: automatic once the connector runs (`resume`), minutes. A script killed mid-hold resumes
-the connector from a trap: the STOPPED state survives a Connect restart.
+Recovery: automatic once the connector runs (`resume`), minutes; proven with the committed script
+for a 60 s hold only, the full 1800 s and an interrupted run are still to do. A script killed
+mid-hold (INT, TERM, HUP, not KILL) resumes the connector from a trap: the STOPPED state survives a
+Connect restart, so run it in the background, never under a tool timeout that sends SIGKILL.
 Why no loss or duplication: the slot, `connect-offsets` and the Kafka offsets in bronze; checked
 by `bronze_offsets_ok` and `reconcile`.
 How the WAL is added, and what not to do: replay is too slow, so the script adds a transaction
@@ -993,8 +1008,12 @@ logical messages and publishes them to `oltp.message`, a topic that does not exi
 auto-creation is off), and then hit the 1 MB `max.request.size` of the Connect producer. CDC stood
 from about 18:52 to 19:00 with no loss; fixed by creating `oltp.message` (max message 8 MB,
 retention 1 hour) and `CONNECT_PRODUCER_MAX_REQUEST_SIZE=8388608` in `docker/compose.yaml`, and the
-connector drained 66 MB in seconds. `pg_replication_slot_advance` would have skipped the records and
-was not used. The topic and the setting stay as a guard; do not use logical messages for padding.
+connector drained 66 MB in seconds. The recovery also tried `pg_replication_slot_advance`, which would
+have skipped the records; the permission check of the agent session refused it. The setting stays,
+and `connect/register.sh` now creates the topic (with `segment.ms` of an hour, which the topic made
+by hand lacks: its first segment is not dropped until it rolls). The limit is on the encoded record:
+JsonConverter writes the bytes as base64, so a message over about 6.3 MB still fails the task
+(`RecordTooLargeException`, see `docs/runbooks/connector-failed.md`). Do not use logical messages.
 
 ### 7. Corrupted event in topic
 

@@ -15,8 +15,10 @@ so the disk of the VM is what runs out, silently.
    `select slot_name, active, pg_size_pretty(pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn)) from pg_replication_slots`.
    Active and still growing: the reader is behind, look at `debezium_postgres_streaming_MilliSecondsBehindSource`
    and the Connect log.
-4. After the reader is back the slot drains by itself within minutes; watch the retained bytes
-   fall under 64 MiB. Nothing is lost while the slot exists: Postgres keeps what it has not
+4. After the reader is back it confirms what it read only once a real change arrives, and
+   `restart_lsn` (what the alert reads) follows at the next running-transactions record: with no
+   traffic the retained bytes do not fall. Wait for the next replay burst or source change, then
+   watch the retained bytes fall under 64 MiB. Nothing is lost while the slot exists: Postgres keeps what it has not
    confirmed.
 5. Do not drop the slot to free the disk. A new slot starts from the current LSN and the events
    in between are gone; that is a decision for the owner (`make cdc-snapshot` re-reads the tables,

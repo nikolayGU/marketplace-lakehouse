@@ -624,8 +624,11 @@ to `<prefix>.message` (`oltp.message`). That topic does not exist (topic auto-cr
 so the first padding run, which wrote 4 MB messages, left the task blocked on an unknown topic, and
 once the topic existed it failed on the 1 MB `max.request.size` of the Connect producer. No loss: the
 topic `oltp.message` (max message 8 MB, retention 1 hour) and `CONNECT_PRODUCER_MAX_REQUEST_SIZE=8388608`
-let the connector drain the slot. Both stay as a guard. The scenario now pads the WAL with a
-transaction and `pg_switch_wal()`, which Debezium does not forward. The connector setting
+let the connector drain the slot. The producer setting stays, and `connect/register.sh` creates the
+topic since the review of weeks 4 and 5 (on 2026-10-23 it existed only as created by hand). The
+guard is partial: the converter writes the bytes as base64, so a message over about 6.3 MB still
+fails the task. The scenario now pads the WAL with a transaction and `pg_switch_wal()`, which
+Debezium does not forward. The connector setting
 `message.prefix.exclude.list` would silence the topic but changes the connector: the owner's decision.
 
 No Alertmanager (W4-D6): ADR-015 dropped alert delivery. Rules live in Prometheus; their state is
@@ -713,15 +716,18 @@ Decision (2026-10-23, W5-D11 to D13):
 - **Pools:** silver tasks share `lake_writers` with the merge; gold tasks use a new pool
   `gold_writers` (1 slot) together with `dbt_build`, because `CREATE OR REPLACE` and
   `expire_snapshots` of one gold table race for the same commit.
-- **Metadata files:** `write.metadata.delete-after-commit.enabled` is set on every silver table and
-  on bronze. Checked on `lake.demo.meta_probe` through Lakekeeper (2026-10-23): with
+- **Metadata files:** `write.metadata.delete-after-commit.enabled` is set on every silver table, and
+  on bronze by `set_missing_properties` when `spark-bronze` starts: the running bronze stream
+  (started before the image with the change) does not have it yet, and its next recreate turns it
+  on, a rung of the ladder with its own "ok". Checked on `lake.demo.meta_probe` through Lakekeeper (2026-10-23): with
   `previous-versions-max` 5 and 12 commits, `metadata_log_entries` 6 and 6 `metadata.json` files in
   MinIO, so Lakekeeper does remove the files that left the log. Gold tables are written by dbt-trino,
   which cannot set the property: their metadata is cleaned by the weekly orphan run.
 - **Ladder of first runs** (W5-D13): the sandbox first, then the smallest silver table, then the
   rest of silver and gold, then a dry run of orphans over everything, then the real orphan run, each
   step with its own "ok". `iceberg_maintenance` and `iceberg_orphans` are created paused; the real
-  orphan run needs `{"dry_run": false}` in the trigger conf.
+  orphan run needs `{"dry_run": false}` in the trigger conf. `iceberg_maintenance` existed before
+  its Spark steps, so they also wait for `{"expire_and_compact": true}` (param, default false).
 
 Consequences: `rewrite_data_files` of bronze makes a `replace` snapshot, so `bronze_has_new_snapshot`
 sees a new id and one empty merge and one `dbt_build` follow (an extra run, not an error); because

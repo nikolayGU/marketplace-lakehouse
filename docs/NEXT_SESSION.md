@@ -1,6 +1,6 @@
 # Следующая сессия: закрытие W5 (T05b), починка пути с чистого клона, затем W6
 
-Обновлено 23.10.2026. Текст ниже копируется в новую сессию как есть.
+Обновлено 24.10.2026. Текст ниже копируется в новую сессию как есть.
 
 ```text
 Ты агент в репозитории Marketplace Lakehouse (mini). Недели 4 и 5 выполнены почти целиком:
@@ -11,7 +11,8 @@ CI на GitHub зелёный (4 job: lint-and-test, hadolint, spark-tests бе�
 
 Прочитай первым, целиком:
 1. AGENTS.md и docs/agent-rules.md.
-2. docs/HANDOFF.md: раздел «Состояние на 23.10.2026» и «Открытые вопросы».
+2. docs/HANDOFF.md: разделы «Состояние на 24.10.2026» (правки по ревью, что ждёт владельца),
+   «Состояние на 23.10.2026» и его «Открытые вопросы»; docs/planning/12-review-w4-w5.md.
 3. docs/planning/10-w5-spec.md: карточка W5-T05b и раздел 7; docs/planning/09-w4-spec.md: итоги
    карточек W4-T03..T06b.
 4. DECISIONS.md: ADR-023, ADR-024, ADR-025; OPERATIONS.md: «Maintenance», «Stateful job», сценарии 5-9.
@@ -24,7 +25,7 @@ ContainerRestarting в первые 15 минут после рестартов)
 1. Путь с чистого клона сломан: образы MinIO (quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z и
    quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z) удалены из реестров (docker manifest inspect:
    no such manifest), workflow smoke.yml упал на их загрузке (run 40003292011). Локально образы в
-   кэше и в /home/gusev/lakehouse-image-backup/minio-images.tar; docker image prune не делать.
+   кэше и в ~/lakehouse-image-backup/minio-images.tar; docker image prune -a не делать.
    Подготовь варианты с ценой ошибки (сборка MinIO из исходников по тегу релиза в docker/minio/
    Dockerfile, закреплённый по sha; замена S3-слоя) и ADR, реализуй выбранное после «ок» владельца,
    затем gh workflow run smoke.yml --ref main и добейся зелёного.
