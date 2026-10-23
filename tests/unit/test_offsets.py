@@ -27,3 +27,11 @@ def test_two_topics() -> None:
     end = '{"a": {"0": 10, "1": 20}, "b": {"0": 5}}'
     latest = '{"a": {"0": 12, "1": 20}, "b": {"0": 105}}'
     assert kafka_lag(end, latest) == {("a", 0): 2, ("a", 1): 0, ("b", 0): 100}
+
+
+def test_offsets_of_the_wrong_shape_are_skipped() -> None:
+    # JSON, but not {"topic": {"partition": offset}}: the listener must not raise on it.
+    assert kafka_lag(None, '{"t": [1]}') == {}
+    assert kafka_lag(None, '{"t": {"0": null, "1": 4}}') == {("t", 1): 4}
+    assert kafka_lag(None, '{"t": {"x": 3}}') == {}
+    assert kafka_lag('{"t": {"0": "a"}}', '{"t": {"0": 4}}') == {("t", 0): 4}

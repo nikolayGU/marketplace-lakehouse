@@ -47,9 +47,14 @@ def test_progress_sets_lag_and_idle_zeroes_it() -> None:
 
 
 def test_first_batch_without_latest_offset_sets_nothing() -> None:
+    # A query name of its own: the shared registry keeps the series other tests set.
     listener = PrometheusListener()
-    listener.onQueryProgress(_progress(None, "null"))
-    assert _lag("0") is None or _lag("0") == 0
+    listener.onQueryProgress(_progress(None, "null", name="listener_test_first_batch"))
+    sample = REGISTRY.get_sample_value(
+        "spark_streaming_kafka_lag",
+        {"query": "listener_test_first_batch", "topic": "t", "partition": "0"},
+    )
+    assert sample is None
 
 
 STATEFUL = "listener_test_stateful"

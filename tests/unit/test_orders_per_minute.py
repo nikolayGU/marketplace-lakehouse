@@ -242,8 +242,9 @@ def test_upsert_never_lowers_a_count(spark: SparkSession) -> None:
 
     upsert(make_batch(spark, [("2026-07-01 10:00:00", 5)]), 0, target)
     upsert(make_batch(spark, [("2026-07-01 10:00:00", 3)]), 1, target)
-    upsert(make_batch(spark, [("2026-07-01 10:00:00", 7)]), 2, target)
+    assert [r["orders"] for r in spark.table(target).collect()] == [5]
 
+    upsert(make_batch(spark, [("2026-07-01 10:00:00", 7)]), 2, target)
     assert [r["orders"] for r in spark.table(target).collect()] == [7]
 
 
