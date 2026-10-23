@@ -65,25 +65,30 @@ def test_gold_at_rest_waits_for_the_newest_silver_row() -> None:
     assert reconcile.gold_at_rest("2026-07-01 10:00:00", None) is True
 
 
-def test_a_null_and_an_empty_string_hash_differently() -> None:
-    sql = reconcile.row_hash_sql_trino(Column("x", "string"))
+@pytest.mark.parametrize(
+    ("kind", "postgres", "trino"),
+    [
+        ("string", r"coalesce((x)::text, '\N')", r"coalesce(cast(x as varchar), '\N')"),
+        (
+            "decimal(10,2)",
+            r"coalesce((x)::numeric(38, 2)::text, '\N')",
+            r"coalesce(cast(cast(x as decimal(38, 2)) as varchar), '\N')",
+        ),
+        # Both sides drop the sub-millisecond part: Debezium (time.precision.mode=connect) cuts
+        # it and Trino's date_diff floors, so Postgres must floor too, not round.
+        (
+            "timestamp_ntz",
+            r"coalesce((floor(extract(epoch from x) * 1000))::bigint::text, '\N')",
+            r"coalesce(cast(date_diff('millisecond', timestamp '1970-01-01 00:00:00', x) "
+            r"as varchar), '\N')",
+        ),
+    ],
+)
+def test_both_engines_build_the_same_canonical_text(kind: str, postgres: str, trino: str) -> None:
+    column = Column("x", kind)
 
-    assert r"'\N'" in sql
-    assert "coalesce" in sql
-
-
-def test_decimals_keep_their_contract_scale_on_both_sides() -> None:
-    column = Column("price", "decimal(10,2)")
-
-    assert "numeric(38, 2)" in reconcile.row_hash_sql_postgres(column)
-    assert "decimal(38, 2)" in reconcile.row_hash_sql_trino(column)
-
-
-def test_timestamps_compare_as_milliseconds() -> None:
-    column = Column("order_purchase_timestamp", "timestamp_ntz")
-
-    assert "epoch" in reconcile.row_hash_sql_postgres(column)
-    assert "millisecond" in reconcile.row_hash_sql_trino(column)
+    assert reconcile.row_hash_sql_postgres(column) == postgres
+    assert reconcile.row_hash_sql_trino(column) == trino
 
 
 def test_queries_only_contain_names_from_the_module() -> None:
@@ -131,6 +136,17 @@ def test_a_changed_value_at_an_equal_count_is_found() -> None:
     assert not verdict.clean
     assert verdict.changed == ["b"]
     assert (verdict.only_left, verdict.only_right) == ([], [])
+
+
+def test_a_duplicate_key_with_equal_values_is_not_clean() -> None:
+    # The pairs collapse into a dict, so a duplicated key shows only in the row count.
+    pairs = {"a": "h1", "b": "h2"}
+
+    verdict = reconcile.compare(
+        "silver_gold", "fct_orders", "2 aaa", "3 bbb", _pairs(pairs), _pairs(pairs)
+    )
+
+    assert not verdict.clean
 
 
 def test_missing_keys_get_a_reason() -> None:

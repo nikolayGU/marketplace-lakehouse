@@ -176,7 +176,8 @@ def row_hash_sql_postgres(column: Column) -> str:
     """One column as canonical text, in Postgres."""
     name, kind = column.name, column.silver_type
     if kind == "timestamp_ntz":
-        value = f"(round(extract(epoch from {name}) * 1000))::bigint::text"
+        # floor, as Trino's date_diff and Debezium drop the sub-millisecond part
+        value = f"(floor(extract(epoch from {name}) * 1000))::bigint::text"
     elif match := DECIMAL.fullmatch(kind):
         value = f"({name})::numeric(38, {match.group(1)})::text"
     else:
@@ -368,7 +369,10 @@ class Verdict:
 
     @property
     def clean(self) -> bool:
-        return not (self.only_left or self.only_right or self.changed)
+        # The key pairs collapse into dicts: a duplicated key differs only in the row count.
+        return self.rows_left == self.rows_right and not (
+            self.only_left or self.only_right or self.changed
+        )
 
     def summary(self) -> str:
         """The first keys of each kind of difference, with the reason for the missing ones."""

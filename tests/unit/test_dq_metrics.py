@@ -36,6 +36,14 @@ def test_trino_numbers_are_sent_as_numbers() -> None:
     assert metrics.gauge_line("lakehouse.x", "12", {}) == "lakehouse.x:12|g"
 
 
+def test_a_unix_time_keeps_its_seconds() -> None:
+    # `:g` kept 6 significant digits and sent 1792784799.8 as 1.79278e+09.
+    assert metrics.gauge_line("lakehouse.x", 1792784799.8169963, {}) == (
+        "lakehouse.x:1792784799.8169963|g"
+    )
+    assert metrics.gauge_line("lakehouse.x", Decimal("2678144.5"), {}) == "lakehouse.x:2678144.5|g"
+
+
 def test_tag_values_cannot_break_the_line() -> None:
     line = metrics.gauge_line("lakehouse.x", 1, {"table": "a,b|c:d"})
 

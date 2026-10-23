@@ -23,7 +23,7 @@ def gauge_line(name: str, value: Any, tags: Mapping[str, str]) -> str | None:
         return None
     if not math.isfinite(number) or number < 0:
         return None
-    text = f"{number:.0f}" if number == int(number) else f"{number:g}"
+    text = f"{number:.0f}" if number == int(number) else repr(number)
     line = f"{name}:{text}|g"
     if tags:
         line += "|#" + ",".join(f"{k}:{_UNSAFE_TAG.sub('_', v)}" for k, v in tags.items())
