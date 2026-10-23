@@ -395,6 +395,19 @@ exposes `spark_streaming_input_rows_total`, `spark_streaming_batch_duration_seco
 `prometheus_client` on the driver's HTTP port. Consequences: ~60 lines of Python, a real
 "how do you monitor a Spark stream" answer.
 
+W4-T02 (2026-10-23): the lag is `spark_streaming_kafka_lag{query,topic,partition}`, one row per
+topic and partition (21 for bronze), computed from the last progress as `latestOffset` minus
+`endOffset` (`spark_jobs/offsets.py`; a partition missing from `endOffset` counts from 0, the
+value is never negative, a `null` `latestOffset` gives no rows). `latestOffset` is the broker's
+end at planning time, not the end limited by `maxOffsetsPerTrigger` (the Kafka source reports it
+through `reportLatestOffset`). An idle event means no new data, so it sets every known row of the
+query to 0; otherwise the last value would hang on the dashboard. Rows appear with the first
+progress after a start. kafka-exporter was rejected for the lag: it needs the processed offsets
+joined by labels in PromQL, and it keeps growing when Spark is down, which `SparkNoBatch5m`
+already catches. The lag is above 0 only while a backlog exceeds one trigger
+(`BRONZE_MAX_OFFSETS_PER_TRIGGER`, 20000 rows); a 60 s replay burst (579 events, 890 bronze rows)
+stays at 0, so the above-zero path is covered by unit tests, not yet by a live backlog.
+
 ## ADR-016 Compose profiles; the replayer container only on request
 
 Context: on a 16 GB laptop the services run in profiles (`core`, `query`, `orchestrate`, `obs`,
@@ -592,6 +605,10 @@ statsd-exporter; `dq_checks` sends DogStatsD gauges with tags to the same export
 packets silently while `obs` is down; the `dq_checks` gauges get a TTL in the mapping (W4-T03),
 so their series disappear instead of freezing. Airflow's own counters have no TTL.
 A Pushgateway would be one more service for the same job.
+
+WAL of a replay burst (W4-T02, 2026-10-23): 60 s of `make replay-burst` (579 events, 11 h 54 min
+of virtual time) wrote 13 589 336 bytes (`0/59AEAC70` to `0/5A7E07C8`), so a 64 MiB threshold
+needs about five such bursts with an inactive slot (chaos 6 must run longer than one burst).
 
 No Alertmanager (W4-D6): ADR-015 dropped alert delivery. Rules live in Prometheus; their state is
 read from the UI, `/api/v1/alerts` and the dashboard.

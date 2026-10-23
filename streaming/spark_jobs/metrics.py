@@ -1,4 +1,4 @@
-"""Prometheus metrics from the driver (ADR-013). Kafka lag lands with W4-T02."""
+"""Prometheus metrics from the driver (ADR-013), including Kafka lag from the progress offsets."""
 
 import time
 
@@ -11,6 +11,8 @@ from pyspark.sql.streaming.listener import (
     StreamingQueryListener,
 )
 
+from spark_jobs.offsets import kafka_lag
+
 LAST_BATCH = Gauge(
     "spark_streaming_last_batch_timestamp",
     "Unix time of the last progress or idle event",
@@ -20,16 +22,25 @@ INPUT_ROWS = Counter("spark_streaming_input_rows_total", "Rows read by micro-bat
 BATCH_DURATION = Gauge(
     "spark_streaming_batch_duration_seconds", "Wall time of the last micro-batch", ["query"]
 )
+KAFKA_LAG = Gauge(
+    "spark_streaming_kafka_lag",
+    "Messages in Kafka past the last micro-batch (latestOffset minus endOffset), 0 when idle",
+    ["query", "topic", "partition"],
+)
 
 
 class PrometheusListener(StreamingQueryListener):
     """Since Spark 3.5 a query with no new data reports `onQueryIdle` instead of progress, every
     `noDataProgressEventInterval` (10 s). Both move LAST_BATCH, so it only freezes when the
-    query is stuck, not when the topic is quiet."""
+    query is stuck, not when the topic is quiet.
+
+    Kafka lag is `latestOffset - endOffset` of the last progress. Idle means no new data, so every
+    lag row of that query goes to 0; otherwise the last value would hang there forever."""
 
     def __init__(self) -> None:
         super().__init__()
         self._names: dict[str, str] = {}
+        self._lag_rows: dict[str, set[tuple[str, int]]] = {}
 
     def onQueryStarted(self, event: QueryStartedEvent) -> None:
         self._names[str(event.id)] = event.name or str(event.id)
@@ -40,9 +51,16 @@ class PrometheusListener(StreamingQueryListener):
         LAST_BATCH.labels(name).set(time.time())
         INPUT_ROWS.labels(name).inc(progress.numInputRows)
         BATCH_DURATION.labels(name).set(progress.batchDuration / 1000)
+        for source in progress.sources:
+            for (topic, partition), lag in kafka_lag(source.endOffset, source.latestOffset).items():
+                KAFKA_LAG.labels(name, topic, str(partition)).set(lag)
+                self._lag_rows.setdefault(name, set()).add((topic, partition))
 
     def onQueryIdle(self, event: QueryIdleEvent) -> None:
-        LAST_BATCH.labels(self._names.get(str(event.id), str(event.id))).set(time.time())
+        name = self._names.get(str(event.id), str(event.id))
+        LAST_BATCH.labels(name).set(time.time())
+        for topic, partition in self._lag_rows.get(name, ()):
+            KAFKA_LAG.labels(name, topic, str(partition)).set(0)
 
     def onQueryTerminated(self, event: QueryTerminatedEvent) -> None:
         pass

@@ -126,10 +126,15 @@ which happens on an empty topic too.
 - Resetting bronze means deleting both the checkpoint prefix and the table, which is on the
   blast-radius list.
 
+`spark_streaming_kafka_lag{topic,partition}` (21 rows) is messages the broker has past the last
+batch; it is 0 at rest and rises only when a backlog is bigger than one trigger
+(`BRONZE_MAX_OFFSETS_PER_TRIGGER`). Rows appear after the first batch following a start, so right
+after a restart the metric is empty until data arrives (ADR-013).
+
 Check it:
 
 ```
-curl -s 127.0.0.1:4041/metrics | grep ^spark_streaming   # input rows, last batch, duration
+curl -s 127.0.0.1:4041/metrics | grep ^spark_streaming   # input rows, last batch, duration, lag
 make logs S=spark-bronze
 ```
 
@@ -417,7 +422,7 @@ the `lake` network.
 |---|---|---|
 | `prometheus` | `localhost:9090` | Prometheus itself, `prometheus_tsdb_head_series` |
 | `kafka-connect` | `kafka-connect:9404` | JMX agent in the Connect JVM (`docker/connect/`): `kafka_connect_connector_status`, `kafka_connect_connector_task_status{connector,task,status}` (1 for the current status), `debezium_postgres_streaming_*` (`Connected`, `MilliSecondsSinceLastEvent`, `MilliSecondsBehindSource`, `TotalNumberOfEventsSeen`; -1 and 0 until the first event after a start), `jvm_*` |
-| `spark-bronze` | `spark-bronze:4041` | bronze listener: rows, batch duration, last batch time (ADR-013) |
+| `spark-bronze` | `spark-bronze:4041` | bronze listener: rows, batch duration, last batch time, `spark_streaming_kafka_lag{query,topic,partition}` (ADR-013) |
 | `kafka-exporter` | `kafka-exporter:9308` | brokers, topic and partition offsets (not Spark's lag: ADR-013) |
 | `postgres-exporter` | `postgres-exporter:9187` | `pg_*`, plus `lakehouse_slot_retained_bytes` and `lakehouse_slot_active` per slot from `observability/postgres-exporter/queries.yaml` |
 | `statsd-exporter` | `statsd-exporter:9102` | StatsD of Airflow (`AIRFLOW__METRICS__STATSD_*` in `docker/airflow/airflow.env`): `airflow_dagrun_success_seconds{dag_id}`, `airflow_dagrun_failed_seconds{dag_id}`, `airflow_ti_finish_total{dag_id,task_id,state}`, `airflow_task_duration_seconds{dag_id,task_id}` by `observability/statsd/mapping.yml`; unmapped names pass through with underscores. `dq_checks` values land with W4-T03 |
