@@ -122,6 +122,9 @@ services:
       KAFKA_HEAP_OPTS: ${CONNECT_HEAP}
       # Metrics on :9404 inside the network only; rules in docker/connect/metrics.yaml.
       ENABLE_JMX_EXPORTER: "true"
+      # Debezium publishes pg_logical_emit_message records to oltp.message: the 4 MB padding of
+      # chaos 6 (23.10) stopped CDC at 1 MB. Kept so a message that size cannot stop it again.
+      CONNECT_PRODUCER_MAX_REQUEST_SIZE: "8388608"
     volumes:
       # /kafka/config is an anonymous volume of the base image: a recreated container keeps the
       # old one, which hides the file the image layer adds, and the agent stops the JVM.
