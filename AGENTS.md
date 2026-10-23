@@ -9,7 +9,9 @@ Olist), Debezium, Kafka, Spark bronze и silver (`MERGE`), Iceberg в Lakekeeper
 
 1. `docs/HANDOFF.md`: состояние, проверки, открытые вопросы.
 2. `docs/NEXT_SESSION.md`: цель и границы текущей сессии.
-3. План задачи в `docs/planning/08-w3-plan/`, решения `Dn` в `docs/planning/07-w3-spec.md`.
+3. Спека текущей недели (решения `W<n>-Dn`, карточки задач) и план, если он отдельный: по ссылкам
+   из `docs/NEXT_SESSION.md`. Решения недели 3 без префикса (`Dn`, в том числе D13 и D14 ниже):
+   `docs/planning/07-w3-spec.md` и раздел 3 `docs/planning/08-w3-plan/README.md`.
 4. `DECISIONS.md`: код против ADR не пишется, сначала новый ADR. `OPERATIONS.md`: профили, раннбуки.
 
 ## Команды
@@ -51,7 +53,7 @@ Olist), Debezium, Kafka, Spark bronze и silver (`MERGE`), Iceberg в Lakekeeper
 - Настройки Postgres и коннектора Debezium.
 - `git push`, rebase, force-push, `commit --amend` чужого коммита, `reset --hard`.
 - DDL руками или вне миграций: источник только `oltp/migrations`, silver только контракт и
-  `ensure_table`, gold только dbt (его служебные DROP и TRUNCATE в `gold`, D13, D14).
+  `ensure_table`, gold только dbt (его служебные DROP, DELETE и TRUNCATE в `gold`, D13, D14).
 - Ослабление тестов, проверок или `reconcile` под результат.
 - Blast radius: `docker compose down -v`, `make nuke`, удаление checkpoint, тома или каталога,
   `DROP`, `DELETE`, `TRUNCATE`, `expire_snapshots`, `remove_orphan_files`, retention Kafka, `rm -rf`.

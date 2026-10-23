@@ -242,6 +242,13 @@
 
 **Не входит.** Метрика карантина (Modify-гейт владельца), перевод `dq_checks` на Asset (Modify-гейт W3), reconciliation по значениям (W5-T04).
 
+**Итог 23.10 (до коммита).**
+- `lakehouse/metrics.py` (`gauge_line`, `send`), `Settings.statsd_host` и `statsd_port`, `sql.oldest_unmerged_snapshot_age` и `BRONZE_FRESHNESS`, `checks.silver_lag_seconds`; 16 тестов `tests/unit/test_dq_metrics.py`, написаны первыми. Lag не отправляется, если Variable нет или названный в ней снапшот пропал из истории bronze (иначе «нет новее» читалось бы как ложный 0).
+- Живой прогон `dq_checks`: `count(lakehouse_table_freshness_seconds{layer="silver"})` 7, `{layer="bronze"}` 7, `lakehouse_silver_lag_seconds` 0, `count({__name__=~".*quarantin.*"})` пусто.
+- `make down PROFILE=obs`, `dq_checks` success, в логе `statsd: could not send to statsd-exporter:9125`.
+- Запрос свежести bronze по `cdc_events` целиком: 2.3 с в Trino.
+- TTL: `airflow dags pause dq_checks` 16:23 UTC, через 50 минут `grep -c ^lakehouse_` в `statsd-exporter:9102/metrics` дал 0 (было 28); затем `unpause`.
+
 ### W4-T04 Дашборды «Pipeline health» и «Infra»
 
 **Зачем.** Одна страница, по которой ревьюер и владелец видят lag, freshness, исход batch и память, и с которой идёт гейт Read («откуда каждая панель»).

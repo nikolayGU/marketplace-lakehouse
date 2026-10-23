@@ -1,3 +1,7 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
 @AGENTS.md
 
 ## Только для Claude Code
@@ -6,3 +10,18 @@
 - Сканеры: `Explore` или `feature-dev:code-explorer` с `model: sonnet` и `effort: medium`, только чтение.
 - `superpowers`: спеки и планы в `docs/planning/` на русском; без коммита после каждого шага, без worktrees и `finishing-a-development-branch`.
 - Хуки и разрешения в `.claude/settings.json` меняются только с «ок» владельца.
+
+## Точечные проверки
+
+- Один тест: `uv run pytest tests/unit/test_dags.py::<имя> -q`.
+- Spark-тесты на хосте пропускаются (нет JVM); один файл в образе:
+  `make test-spark SPARK_TESTS=test_silver_upsert.py`.
+- Одна модель dbt: `cd dbt && uv run dbt build --profiles-dir . --target dev --select <модель>`
+  (нужен `make start`, пишет в `lake.gold`).
+- Корни импорта как в образах (`pythonpath` в `pyproject.toml`): `replayer` из `oltp/`,
+  `spark_jobs` из `streaming/`, `lakehouse` из `airflow/dags/`.
+
+## Где что
+
+- Поток данных и откуда берётся exactly-once: `ARCHITECTURE.md`.
+- `make verify`: `scripts/verify.sh`; `reconcile`: `scripts/chaos/lib.sh` и `scripts/reconcile_sql.py`.

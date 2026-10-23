@@ -28,6 +28,7 @@ superseded. Longer reasoning lives in `docs/planning/00-mini-architecture-review
 | ADR-021 | Silver upsert: one AvailableNow job, newest event per key, MERGE guarded by `_last_lsn`, idempotent on replay | accepted |
 | ADR-022 | Bronze keeps Debezium's `source.sequence` as text; silver keeps ordering by `lsn` until there is a second writer | accepted |
 | ADR-023 | Observability sources: own `container-exporter` on the Docker API instead of cAdvisor; retained WAL from a custom postgres-exporter query; JMX agent in an own Connect image layer; StatsD for Airflow and `dq_checks`; no Alertmanager | accepted |
+| ADR-024 | Stateful job `orders_per_minute`: reads Kafka, not bronze; own service in profile `stateful`; distinct count under a 5 minute watermark in `update` mode; MERGE that never lowers a count | accepted |
 
 ## ADR-001 Real data via Olist replay
 
@@ -393,7 +394,9 @@ so `kafka-exporter` reports no lag for it. Decision: a `StreamingQueryListener` 
 exposes `spark_streaming_input_rows_total`, `spark_streaming_batch_duration_seconds` and
 `spark_streaming_kafka_lag` (latest broker offset minus processed offset) via
 `prometheus_client` on the driver's HTTP port. Consequences: ~60 lines of Python, a real
-"how do you monitor a Spark stream" answer.
+"how do you monitor a Spark stream" answer. For stateful queries the listener also exports the
+rows in state, the watermark (Unix seconds of event time) and a counter of rows the watermark
+dropped (W5-T01b, ADR-024).
 
 W4-T02 (2026-10-23): the lag is `spark_streaming_kafka_lag{query,topic,partition}`, one row per
 topic and partition (21 for bronze), computed from the last progress as `latestOffset` minus
@@ -510,6 +513,11 @@ milliseconds, so a silver timestamp can differ from Postgres by less than 1 ms; 
 sums of decimal columns, not timestamps. Changing a column type in the source is a contract
 change here and an Iceberg type promotion in silver.
 
+W5-T04: `dq_checks` compares values through a row fingerprint at millisecond precision for
+timestamps and at the contract scale for decimals; the fingerprints from Postgres and Trino were
+equal on all seven tables on 2026-10-23, which confirms the wire (doubles) and the casts lose
+nothing at two decimals.
+
 ## ADR-021 Silver upsert: one AvailableNow job, idempotent MERGE per table
 
 Context: ADR-007 fixes the shape (streaming read of bronze, `foreachBatch`, `MERGE`), not the
@@ -612,3 +620,49 @@ needs about five such bursts with an inactive slot (chaos 6 must run longer than
 
 No Alertmanager (W4-D6): ADR-015 dropped alert delivery. Rules live in Prometheus; their state is
 read from the UI, `/api/v1/alerts` and the dashboard.
+
+## ADR-024 Stateful job `orders_per_minute`
+
+Context: the roadmap asks for one real stateful Structured Streaming job, with a watermark, state
+and a late event shown in SQL (W5-T01, spec `docs/planning/10-w5-spec.md`, decisions W5-D1 to D5).
+Bronze and silver keep no state.
+
+Decision (2026-10-23):
+- **Input is Kafka `oltp.shop.orders`**, own checkpoint `checkpoints/orders_per_minute`, `failOnDataLoss`.
+  Bronze as input would add a permanent reader of an Iceberg table whose snapshots must not be
+  expired (apache/iceberg#18000), polling a history of 148+ snapshots on every trigger.
+- **Own service** `spark-orders-per-minute`, profile `stateful`, the image of `spark-bronze`, 1792M.
+  A failure or OOM kill of the stateful query does not take CDC ingest with it. The profile does
+  not depend on `core` services (`required: false`).
+- **Only `op = 'c'`**, window of one minute over `order_purchase_timestamp`, watermark 5 minutes,
+  `update` mode, aggregate `size(collect_set(order_id))`. A snapshot read (`r`) comes in table
+  order, not time order. `count(*)` would rise on a Debezium resend (253 repeats in chaos 2b), and
+  Spark 3.5 cannot chain `dropDuplicatesWithinWatermark` and an aggregation in `update` mode.
+- **Sink** `lake.silver.orders_per_minute` through `foreachBatch`: `MERGE`, update only when the
+  new count is higher, so a replayed batch or a rerun on a fresh checkpoint cannot lower what is
+  there. No file in `contracts/silver/`, otherwise `silver_upsert` would treat it as a CDC table.
+  `spark.sql.shuffle.partitions` 2: it is frozen in the checkpoint, and the default 200 means
+  hundreds of small state files per batch on S3A.
+- **Late events are shown on a lab topic** (`make watermark-demo`): the same code, one
+  `availableNow` run per batch on one checkpoint, into `lake.demo.orders_per_minute`. The live
+  topic only receives real records (`make watermark-live` re-publishes real inserts), so
+  `bronze_offsets_ok` and `reconcile` stay valid. `REPLAY_LATE_RATIO` moves UPDATEs, which this job
+  does not read.
+
+Facts measured on 2026-10-23 (Spark 3.5.9):
+- Spark drops a late row against the watermark of the **previous** batch. The batch that moves the
+  watermark still accepts the late event; the next one drops it. The demo therefore uses three
+  runs: orders, an order inside the watermark, then the late order and a resend.
+- `collect_set` works in a streaming aggregation in `update` mode.
+- The `foreachBatch` frame must be persisted. On the Kafka source of the first demo, every action
+  on it re-ran the aggregation and inflated the counters (dropped 3 for one late row, state rows 8
+  for 3 windows); persisted, the demo reports `dropped=1`, `state_rows=3`, then 2.
+- `numRowsDroppedByWatermark` counts rows dropped in that batch; the listener adds it to a counter
+  (`spark_streaming_late_rows_dropped_total`).
+
+Consequences: one more service (495 MiB at rest, 842 MiB while reading the topic from the start), one more checkpoint to
+reset by hand if the job is down longer than Kafka retention (24 h; the table is derived and the
+count is protected by the MERGE). The watermark is in event time; at a replay speed of 720x five
+minutes are 0.4 s of real time, so a partition skew between topic partitions can drop rows that
+are not late in the data's own time. Measured after a 60 s burst (12 virtual hours): 164 windows equal
+to `count(*)` of `silver.orders` per minute, 0 rows dropped.

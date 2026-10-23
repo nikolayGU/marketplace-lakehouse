@@ -1,5 +1,10 @@
 # Spark job without a batch for 5 minutes
 
+Two Spark streaming drivers expose these metrics: `spark-bronze` (`:4041`, alert `SparkNoBatch5m`)
+and, when profile `stateful` is up, `spark-orders-per-minute` (`query="orders_per_minute"`). The
+steps below name bronze; for the stateful job use its container and checkpoint
+(`checkpoints/orders_per_minute`).
+
 Symptom: `spark_streaming_last_batch_timestamp` (spark-bronze, `127.0.0.1:4041/metrics`) older
 than 5 minutes, or absent because the target is down (`up` = 0, the driver is gone); the container
 is unhealthy, exited or restarting.
