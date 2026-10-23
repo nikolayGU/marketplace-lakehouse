@@ -10,6 +10,9 @@ SILVER_ASSET_NAME = "lake.silver"
 # work in flight.
 LAST_BRONZE_SNAPSHOT = "silver_upsert_last_bronze_snapshot"
 LAKE_WRITERS_POOL = "lake_writers"
+# Gold writers: dbt_build and the gold maintenance, so a CREATE OR REPLACE and an expire_snapshots
+# of one table never commit at once (W5-D11).
+GOLD_WRITERS_POOL = "gold_writers"
 
 # Primary keys of the silver tables, as contracts/silver/<table>.json declares them; quarantine
 # holds one row per Kafka record. tests/unit/test_dags.py compares them with the contracts.
@@ -24,6 +27,11 @@ SILVER_KEYS: dict[str, tuple[str, ...]] = {
     "quarantine": ("topic", "kafka_partition", "kafka_offset"),
 }
 SOURCE_TABLES = tuple(t for t in SILVER_KEYS if t != "quarantine")
+
+# Silver tables the maintenance DAGs treat: the contract tables, quarantine, and the streaming
+# aggregate (W5-D12). Snapshots are kept this many days (Trino refuses fewer than 7, ADR-025).
+MAINTENANCE_TABLES = (*SILVER_KEYS, "orders_per_minute")
+RETENTION_DAYS = 7
 
 # The environment compose gives spark-silver (docker/compose.yaml); the DAG passes the same to
 # the container it starts. The secrets go to DockerOperator's private_environment, which the
@@ -63,6 +71,10 @@ class Settings(BaseSettings):
     oltp_db: str = "shop"
     oltp_user: str = "shop"
     oltp_password: str = ""
+
+    # statsd-exporter of profile obs; dq_checks sends its gauges there (W4-D2).
+    statsd_host: str = "statsd-exporter"
+    statsd_port: int = 9125
 
     @property
     def lake_network(self) -> str:

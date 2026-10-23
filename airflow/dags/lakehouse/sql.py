@@ -56,5 +56,34 @@ where quarantined_at >= current_timestamp - interval '1' hour
 """
 
 
+def oldest_unmerged_snapshot_age(remembered: str) -> str | None:
+    """Seconds since the oldest bronze snapshot committed after the one silver merged last.
+    None for an id that is not a plain number: it goes into the text of the query."""
+    if not remembered.isdigit():
+        return None
+    snapshots = 'lake.bronze."cdc_events$snapshots"'
+    return f"""
+select date_diff('second', min(committed_at), current_timestamp)
+from {snapshots}
+where committed_at > (select committed_at from {snapshots} where snapshot_id = {remembered})
+"""
+
+
+BRONZE_FRESHNESS = """
+select source_table, date_diff('second', max(ingest_ts), current_timestamp)
+from lake.bronze.cdc_events
+group by source_table
+"""
+
+
 def optimize(table: str) -> str:
     return f"alter table lake.silver.{table} execute optimize"
+
+
+# The gold tables dbt materialized as tables (views have no snapshots to expire).
+GOLD_BASE_TABLES = """
+select table_name
+from lake.information_schema.tables
+where table_schema = 'gold' and table_type = 'BASE TABLE'
+order by table_name
+"""

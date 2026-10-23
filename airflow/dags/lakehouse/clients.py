@@ -38,3 +38,16 @@ def postgres_value(settings: Settings, query: str) -> Any:
         if row is None:
             raise ValueError(f"no row from: {query}")
         return row[0]
+
+
+def postgres_rows(settings: Settings, query: str) -> list[tuple[Any, ...]]:
+    conninfo = psycopg.conninfo.make_conninfo(
+        host=settings.oltp_host,
+        port=settings.oltp_port,
+        dbname=settings.oltp_db,
+        user=settings.oltp_user,
+        password=settings.oltp_password,
+    )
+    with psycopg.connect(conninfo) as connection, connection.cursor() as cursor:
+        cursor.execute(query)
+        return cursor.fetchall()

@@ -30,6 +30,21 @@ def at_rest(
     return str(latest) == remembered
 
 
+def silver_lag_seconds(
+    latest: int | None, remembered: str | None, oldest_unmerged_age: int | None
+) -> int | None:
+    """How long the oldest bronze snapshot silver has not merged has waited, 0 when silver has
+    merged the latest one. None when it cannot be told: no Variable yet, or the remembered
+    snapshot is not in bronze's history (then "nothing newer" would read as a false 0)."""
+    if latest is None:
+        return 0
+    if remembered is None:
+        return None
+    if str(latest) == remembered:
+        return 0
+    return oldest_unmerged_age
+
+
 def count_differences(
     postgres: Mapping[str, int], silver: Mapping[str, int]
 ) -> dict[str, tuple[int, int]]:
