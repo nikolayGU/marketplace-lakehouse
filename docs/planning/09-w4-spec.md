@@ -207,6 +207,8 @@
 
 **Не входит.** Метрики silver job (silver живёт минуту, их место Airflow), state rows и watermark (W5-T01).
 
+**Итог 23.10.** `f5b2d3c`. `spark_streaming_kafka_lag` 21 ряд (`offsets.py`, 6 тестов на отказ, listener с нулём на idle). Порция 60 с: 579 событий, 890 строк bronze, lag 0 на всех замерах: бэклог меньше одного триггера (20 000); путь «больше 0» покрыт только юнит-тестами. `latestOffset` в 3.5.9 идёт через `reportLatestOffset` (метод есть в jar), не урезан лимитом. WAL порции 13 589 336 байт (ожидалось 35 MB). Реплей: 11 ч 54 мин.
+
 ### W4-T03 Экспорт `dq_checks` в Prometheus
 
 **Зачем.** DQ, который виден только в логе задачи, никто не смотрит. Нужны freshness по таблицам на дашборде и lag silver для `FreshnessAbove15m`.
@@ -284,6 +286,8 @@
 
 **Не входит.** Дашборд по gold (W6-T01).
 
+**Итог 23.10.** `7a7fa2d`. Два дашборда в classic JSON, 35 запросов, `scripts/obs/check_dashboards.py` печатает `panels ok: 35`; Grafana подхватила оба файла без ошибок provisioning. Панели state и watermark `orders_per_minute` пусты после рестарта сервиса до первого батча с данными. Скриншоты `docs/img/pipeline-health.png` и `infra.png` не сняты: шаг владельца с браузером.
+
 ### W4-T05 Шесть алертов и их проверка
 
 **Зачем.** Алерт, который не срабатывал ни разу, не доказан. Каждый из шести проверяется юнит-тестом правил и живым срабатыванием.
@@ -327,6 +331,8 @@
 
 **Не входит.** Доставка алертов (W4-D6), алерт карантина (Modify-гейт).
 
+**Итог 23.10.** `7a7fa2d`, `make alerts-test` зелёный (10 тестовых случаев, `promtool check rules`: 7 правил). Два правила `SparkNoBatch5m` различаются меткой `cause` (`stuck`, `gone`): promtool считает дубль имени без различия ошибкой. Время до срабатывания: `SparkNoBatch5m` (cause gone) 315 с после остановки bronze; `AirflowDagFailed` 17 с после конца красного запуска; `ContainerRestarting` 15 с после рестарта; `FreshnessAbove15m` 1561 с после догона bronze при паузе `silver_upsert` (порог 900 с плюс каденция `dq_checks`; ряд лага стал 0 через 9 минут после снятия паузы); `ConnectorNotRunning` 95 с и `SlotWalRetainedHigh` 326 с после остановки коннектора (chaos 6). Находка: цикл рестартов драйвера bronze при остановленной Kafka (15 рестартов по ~20 с) `SparkNoBatch5m` не ловит, ловит `ContainerRestarting`. 30 минут покоя без `firing` не снято: из-за сценариев отказа подряд.
+
 ### W4-T06a Chaos 5 (Postgres restart) и chaos 8 (Kafka down)
 
 **Зачем.** Два отказа звеньев, на которых стоит CDC. Ответ системы должен быть измерен, а не описан.
@@ -359,6 +365,8 @@
 
 **Не входит.** Правка конфигов Postgres и коннектора по итогам (решение владельца, раздел 7).
 
+**Итог 23.10.** `72bb8d2`. `merge_silver`, `alert_firing`, `alerts_in_window`, `alert_quiet`; `make silver` отказывает при запущенном scheduler (код 2, тест). Chaos 5: Postgres healthy за 13 с, коннектор стримит за 13 с без ручных действий, `ContainerRestarting` через 15 с. Chaos 8: Kafka 6 минут, 21 партиция без дублей и дыр, `reconcile` 7 из 7; Spark падал в цикле рестартов (имя `kafka` не резолвится), `dq_checks` покраснел «differs at rest» (bronze молчит, источник пишет). Реплей: 6 и 24 виртуальных часа.
+
 ### W4-T06b Chaos 6 (коннектор мёртв 30 минут), chaos 7 и OPERATIONS по всем сценариям
 
 **Зачем.** Chaos 6 это главный сценарий наблюдаемости CDC: слот держит WAL, пока потребителя нет, и диск источника заканчивается молча. После него в OPERATIONS 8 обязательных сценариев по пяти ответам.
@@ -385,6 +393,8 @@
 **Blast radius и пайплайн.** Коннектор остановлен до 30 минут, слот держит WAL (десятки MB по замеру); данные не теряются, пока слот жив. Порции до 36 ч виртуального времени. С «ок».
 
 **Не входит.** `heartbeat.action.query` (альтернатива W4-D3, отдельный ADR), алерт карантина.
+
+**Итог 23.10.** Chaos 6: `PUT /stop` делает слот неактивным за 4 с; `ConnectorNotRunning` 95 с, `SlotWalRetainedHigh` 326 с; после `resume` bronze догнал за 19 с, `reconcile` 7 из 7. **Инцидент:** первая версия добивала WAL через `pg_logical_emit_message` (4 MB), Debezium публикует такие записи в topic `oltp.message` (его нет, автосоздание выключено), CDC встал, потом на 1 MB упёрлась `max.request.size`. Восстановление без потерь: topic `oltp.message` (макс. сообщение 8 MB, retention 1 ч) и `CONNECT_PRODUCER_MAX_REQUEST_SIZE=8388608` в compose; Connect пересоздан, слот слил хвост (66 MB до 1.3 MB). `pg_replication_slot_advance` (пропуск записей) не выполнялся. Скрипт переведён на `txid_current` и `pg_switch_wal` (16 MB за раунд, Debezium не затронут). Chaos 7 прогнан через Airflow-merge. Исправлены расхождения роадмапа (`02-learning-gates.md`, `00-mini-architecture-review.md` §8).
 
 ### W4-T07 Гейт observability (владелец)
 

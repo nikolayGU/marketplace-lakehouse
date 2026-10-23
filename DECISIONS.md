@@ -29,6 +29,7 @@ superseded. Longer reasoning lives in `docs/planning/00-mini-architecture-review
 | ADR-022 | Bronze keeps Debezium's `source.sequence` as text; silver keeps ordering by `lsn` until there is a second writer | accepted |
 | ADR-023 | Observability sources: own `container-exporter` on the Docker API instead of cAdvisor; retained WAL from a custom postgres-exporter query; JMX agent in an own Connect image layer; StatsD for Airflow and `dq_checks`; no Alertmanager | accepted |
 | ADR-024 | Stateful job `orders_per_minute`: reads Kafka, not bronze; own service in profile `stateful`; distinct count under a 5 minute watermark in `update` mode; MERGE that never lowers a count | accepted |
+| ADR-025 | Iceberg maintenance policy: silver and gold keep 7 days of snapshots, bronze is only compacted and its metadata cleaned and never expired; orphan files weekly, dry run by default; the Spark job refuses what the policy forbids | accepted |
 
 ## ADR-001 Real data via Olist replay
 
@@ -618,6 +619,15 @@ WAL of a replay burst (W4-T02, 2026-10-23): 60 s of `make replay-burst` (579 eve
 of virtual time) wrote 13 589 336 bytes (`0/59AEAC70` to `0/5A7E07C8`), so a 64 MiB threshold
 needs about five such bursts with an inactive slot (chaos 6 must run longer than one burst).
 
+Incident of 2026-10-23 (chaos 6): Debezium decodes `pg_logical_emit_message` records and publishes them
+to `<prefix>.message` (`oltp.message`). That topic does not exist (topic auto-creation is off, ADR-019),
+so the first padding run, which wrote 4 MB messages, left the task blocked on an unknown topic, and
+once the topic existed it failed on the 1 MB `max.request.size` of the Connect producer. No loss: the
+topic `oltp.message` (max message 8 MB, retention 1 hour) and `CONNECT_PRODUCER_MAX_REQUEST_SIZE=8388608`
+let the connector drain the slot. Both stay as a guard. The scenario now pads the WAL with a
+transaction and `pg_switch_wal()`, which Debezium does not forward. The connector setting
+`message.prefix.exclude.list` would silence the topic but changes the connector: the owner's decision.
+
 No Alertmanager (W4-D6): ADR-015 dropped alert delivery. Rules live in Prometheus; their state is
 read from the UI, `/api/v1/alerts` and the dashboard.
 
@@ -666,3 +676,55 @@ count is protected by the MERGE). The watermark is in event time; at a replay sp
 minutes are 0.4 s of real time, so a partition skew between topic partitions can drop rows that
 are not late in the data's own time. Measured after a 60 s burst (12 virtual hours): 164 windows equal
 to `count(*)` of `silver.orders` per minute, 0 rows dropped.
+
+## ADR-025 Iceberg maintenance policy
+
+Context: silver and gold pile up snapshots and files (a MERGE with no changed rows still commits a
+snapshot of `silver.orders`: up to 2016 a week; `dbt` `CREATE OR REPLACE` makes one per run), bronze
+piles up small files and `metadata.json` (122 files in MinIO against 101 entries in the log,
+2026-10-23), and nothing was ever cleaned. `expire_snapshots` on bronze breaks the Iceberg
+streaming read of silver (apache/iceberg#18000, ADR-021). The cleaning procedures are on the
+blast-radius list.
+
+Decision (2026-10-23, W5-D11 to D13):
+
+| Layer | Operation | When | Term |
+|---|---|---|---|
+| silver | `optimize` (Trino) | daily 03:30 | as before |
+| silver.orders | `rewrite_position_delete_files` | daily, after `optimize` | default options |
+| silver | `expire_snapshots` | daily, after the rewrite | 7 days, `retain_last` 1 |
+| silver | `remove_orphan_files` | weekly, `iceberg_orphans` | older than 7 days |
+| gold | `expire_snapshots`, one task per table of `lake.gold` | daily | 7 days |
+| gold | `remove_orphan_files` | weekly | older than 7 days |
+| bronze | `rewrite_data_files` of past days only | daily, last | whole past days |
+| bronze | `remove_orphan_files` in `.../metadata` only | weekly | older than 7 days |
+| bronze | `expire_snapshots` | never | refused by the code |
+
+- **Spark job, not Trino** (`streaming/spark_jobs/maintenance.py`, run by DockerOperator like
+  `merge`): `remove_orphan_files` there has `dry_run` and `location`, Trino's has neither, and
+  `rewrite_position_delete_files` exists only in Spark. `optimize` of silver stays in Trino.
+- **The rules live in the job**, checked before a Spark session starts: `expire_snapshots` on
+  bronze fails naming ADR-021; silver and gold keep at least 7 days (Trino's own minimum is the
+  same, `iceberg.expire-snapshots.min-retention`); `remove_orphan_files` on bronze needs
+  `--location-suffix metadata` (data files of bronze are never removed: Kafka keeps 24 hours,
+  history cannot be rebuilt); an orphan file younger than a week may be a commit still in flight;
+  `orphans` is a dry run unless `--no-dry-run`. Iceberg refuses `older_than` below 24 hours on its
+  own. `demo.*` accepts any term, so the procedures can be tried where nothing depends on them.
+- **Pools:** silver tasks share `lake_writers` with the merge; gold tasks use a new pool
+  `gold_writers` (1 slot) together with `dbt_build`, because `CREATE OR REPLACE` and
+  `expire_snapshots` of one gold table race for the same commit.
+- **Metadata files:** `write.metadata.delete-after-commit.enabled` is set on every silver table and
+  on bronze. Checked on `lake.demo.meta_probe` through Lakekeeper (2026-10-23): with
+  `previous-versions-max` 5 and 12 commits, `metadata_log_entries` 6 and 6 `metadata.json` files in
+  MinIO, so Lakekeeper does remove the files that left the log. Gold tables are written by dbt-trino,
+  which cannot set the property: their metadata is cleaned by the weekly orphan run.
+- **Ladder of first runs** (W5-D13): the sandbox first, then the smallest silver table, then the
+  rest of silver and gold, then a dry run of orphans over everything, then the real orphan run, each
+  step with its own "ok". `iceberg_maintenance` and `iceberg_orphans` are created paused; the real
+  orphan run needs `{"dry_run": false}` in the trigger conf.
+
+Consequences: `rewrite_data_files` of bronze makes a `replace` snapshot, so `bronze_has_new_snapshot`
+sees a new id and one empty merge and one `dbt_build` follow (an extra run, not an error); because
+bronze is never expired, the compaction does not free space (the old files stay in older snapshots).
+Time travel deeper than 7 days on silver and gold is gone by design (chaos 9 rolls a mart back by one
+snapshot, well within).

@@ -507,6 +507,28 @@ curl -s 127.0.0.1:3000/api/health
   scrape too: it means `COMPOSE_PROJECT_NAME` does not match the stack.
   `docker_container_restart_count` counts restarts by the restart policy only; `docker restart`
   shows as a new `docker_container_start_time_seconds`.
+### Alerts
+
+Six alerts in `observability/prometheus/alerts.yml`, tested by `make alerts-test` (promtool, ten
+cases, failure cases first) and each shown firing in its own scenario. No Alertmanager (ADR-023):
+read them in the Prometheus UI (`/alerts`), `curl 127.0.0.1:9090/api/v1/alerts` or the "Firing
+alerts" panel. After editing the file: `docker kill -s HUP lakehouse-prometheus-1`.
+
+| Alert | Expression | `for` | Why this threshold | Shown in | Time to fire (2026-10-23) |
+|---|---|---|---|---|---|
+| `ConnectorNotRunning` | `absent(kafka_connect_connector_task_status{connector="shop-connector",status="running"} == 1)` | 1m | a task that is not `running` is no CDC; `absent` also covers a Connect that is down | scenario 6 | 95 s after `PUT /stop` |
+| `SlotWalRetainedHigh` | slot over 64 MiB and inactive, or over 512 MiB | 5m | an idle healthy slot holds about 25 MB; an inactive one grows without bound (`max_slot_wal_keep_size = -1`) | scenario 6 | 326 s after the stop (80 MB held) |
+| `SparkNoBatch5m` | `time() - last_batch_timestamp > 300`, and `absent(...)` for the dead driver | 0 / 5m | idle events keep the timestamp moving, so only a stuck or dead query trips it | stop `spark-bronze` | 315 s after the stop (`cause="gone"`) |
+| `FreshnessAbove15m` | `lakehouse_silver_lag_seconds > 900` | 0 | age of the oldest bronze snapshot silver has not merged; table freshness grows between bursts and does not alert | pause `silver_upsert`, burst | 1561 s after bronze caught up (900 s plus up to 15 min until the next `dq_checks`) |
+| `AirflowDagFailed` | `increase(airflow_dagrun_failed_seconds_count[30m]) > 0` or a series new within 30 minutes | 0 | the second half catches the first failure after statsd-exporter started | scenario 9 | 17 s after the red run ended |
+| `ContainerRestarting` | `changes(docker_container_start_time_seconds{...}[15m]) > 0`, one-shot containers excluded | 0 | `docker restart` moves the start time; `RestartCount` follows only the restart policy | scenarios 5 and 8 | 15 s after the restart |
+
+Limits worth knowing: `absent()` alerts also burn when the source is off (obs up, core down); a
+crash-looping Spark driver (Kafka stopped, 15 restarts) does not trip `SparkNoBatch5m`, the restart
+series and `ContainerRestarting` show it; `dq_checks` itself goes red with "differs at rest" when the
+source writes and nothing arrives (Kafka or connector down), which raises `AirflowDagFailed`. The
+`lakehouse_*` gauges arrive every 15 minutes, so alerts on them lag by that much.
+
 ### Dashboards
 
 Grafana provisions `observability/grafana/dashboards/*.json` (classic JSON, edits in the UI are
@@ -566,6 +588,33 @@ Freshness panels step every 15 minutes (the cadence of `dq_checks`); that is not
   service; re-sends the oldest real order, which the watermark must drop once, and the newest, which
   it must count once; `lsn_repeats_last_hour` grows by 2, silver absorbs both by LSN).
 
+## Maintenance
+
+Policy and reasons: ADR-025. `iceberg_maintenance` (daily 03:30) and `iceberg_orphans` (weekly,
+Sunday 04:00) are created paused and unpaused one rung at a time (the ladder in ADR-025); do not
+unpause them to "see what happens": `expire_snapshots` and `remove_orphan_files` delete files, and the
+lake has no backup. Rebuild the Spark image first (`docker compose ... --profile core build
+spark-bronze`): the DAG files are live as soon as they are saved, the job `maintenance.py` only after
+the image.
+
+By hand, from the repo root (nothing runs by itself; `--entrypoint` skips `run-job.sh` only for
+probes, the job form is):
+
+```
+C="docker compose --env-file .env -f docker/compose.yaml --profile core run --rm --no-deps spark-silver"
+$C maintenance orphans silver.sellers                       # dry run: counts, does not delete
+$C maintenance expire --days 7 silver.sellers               # deletes snapshots older than a week
+$C maintenance rewrite-position-deletes silver.orders
+$C maintenance rewrite-data --before-today lake.bronze.cdc_events
+```
+
+Each call prints one JSON line (`dry_run`, the table, candidates or removed files). A refusal
+(`expire` on bronze, a term under 7 days on silver or gold, `orphans` on bronze without
+`--location-suffix metadata`) exits 1 before a Spark session starts. To read a result: for
+`expire`, compare `select count(*) from silver.<t>."$snapshots"` before and after, and that
+`select count(*)` of the table did not move; for `orphans`, the dry run lists what the real run
+would remove.
+
 ## CI
 
 `.github/workflows/ci.yml`, on every pull request and push to main; a newer push to the same
@@ -606,8 +655,8 @@ why nothing is lost or duplicated (or where it can be). Filled in as scenarios a
 | 3 | Duplicate events from source | `chaos-duplicates` | done 2026-10-07 UTC |
 | 4 | Late events | `chaos-late` | done 2026-10-07 UTC |
 | 5 | PostgreSQL restart | `chaos-postgres-restart` | done 2026-10-23 |
-| 6 | Connector down for 30 minutes (WAL growth) | `chaos-connect-pause` | planned (week 4) |
-| 7 | Corrupted event in topic | `chaos-poison-event` | data half done (W2-T04), alert in week 4 |
+| 6 | Connector down for 30 minutes (WAL growth) | `chaos-connect-pause` | done 2026-10-23 |
+| 7 | Corrupted event in topic | `chaos-poison-event` | done 2026-10-23 (re-run through the Airflow merge); alert is the owner's Modify gate |
 | 8 | Kafka down | `chaos-kafka-down` | done 2026-10-23 |
 | 9 | Airflow task failure (dbt test) | `chaos-break-dbt-test` | done 2026-10-18 |
 | 10 (optional) | Partial processing (Trino memory) | `chaos-trino-memory` | planned (week 3) |
@@ -649,7 +698,7 @@ kill came 4 s after `offsets/80` was written, while the first stage of batch 80 
 reached MinIO.
 What monitoring shows: the container exits and stays down until it is started again (`docker
 kill` counts as a manual stop, the restart policy does not apply). The `:4041` endpoint goes away
-with the driver, so once Prometheus scrapes it (W4-T01, not running on 2026-10-07) the scrape
+with the driver, so since W4 Prometheus scrapes it, the scrape
 fails (`up` = 0) and Prometheus marks `spark_streaming_last_batch_timestamp` stale: Grafana shows
 no data, not an old timestamp.
 `SparkNoBatch5m` (week 4) written as `time() - spark_streaming_last_batch_timestamp > 300` alone
@@ -724,7 +773,9 @@ What happened: no shutdown hook ran. Connect stores source offsets every 60 s
 re-sends from the slot's last confirmed position, Debezium skips up to the stored offset, and every
 event emitted after the stored offset is sent a second time with the same LSN.
 What monitoring shows: the container is gone until someone starts it (a manual kill is not
-restarted by the policy); `ConnectorNotRunning` (week 4). In bronze, repeated `(source_table,
+restarted by the policy). A kill shorter than the `for: 1m` of `ConnectorNotRunning` does not trip
+it; `ContainerRestarting` fires for `kafka-connect` (the start time moves, checked 2026-10-23
+for Postgres and Kafka in scenarios 5 and 8). In bronze, repeated `(source_table,
 key, lsn)`: the second copy arrives after the restart, the first can be up to 60 s older than the
 kill.
 Data at risk: none lost. Repeats only.
@@ -914,11 +965,60 @@ the scheduler runs) and `reconcile`: 7 of 7 tables ok.
 
 ### 6. Connector stopped for 30 minutes (WAL growth)
 
-Planned: see below once run.
+```
+make chaos-connect-pause   # HOLD=1800 s by default; core + obs up, no replay running
+```
+
+What happened (2026-10-23): `PUT /connectors/shop-connector/stop` at 18:21:55 (not `pause`: a paused
+task keeps its walsender and the slot stays active, W4-D11). The slot turned inactive 4 s later; a
+30 s burst and padding took it from 11 MB to 80.9 MB; the connector was resumed 1812 s after the
+stop, bronze had caught up 19 s later, `reconcile` 7 of 7, every offset once. A short rerun (hold
+60 s, 19:14) did the same with 83.9 MB held; after the resume and a 15 s burst the connector had
+confirmed everything (28 kB unconfirmed) and `restart_lsn` retained 3.9 MB.
+What monitoring shows: `ConnectorNotRunning` 95 s after the stop (75 s in the rerun) and
+`SlotWalRetainedHigh` 326 s after it (`for: 5m` plus the scrape; both runs). `dq_checks` also goes
+red with "differs at rest": bronze is quiet because nothing arrives, while the source writes.
+Data at risk: none while the slot lives; Postgres keeps every WAL file it has not confirmed
+(`max_slot_wal_keep_size = -1`), so the disk of the VM is the limit, and nothing but this alert
+watches it (runbook `docs/runbooks/slot-wal-growth.md`). Replay alone writes ~1.1 MB of WAL per
+virtual hour; the 64 MiB threshold is reached in about 2.5 virtual days of events.
+Recovery: automatic once the connector runs (`resume`), minutes. A script killed mid-hold resumes
+the connector from a trap: the STOPPED state survives a Connect restart.
+Why no loss or duplication: the slot, `connect-offsets` and the Kafka offsets in bronze; checked
+by `bronze_offsets_ok` and `reconcile`.
+How the WAL is added, and what not to do: replay is too slow, so the script adds a transaction
+and `pg_switch_wal()` per round (one 16 MB segment each; Debezium forwards nothing of it). The first
+run used `pg_logical_emit_message` with 4 MB records instead, and that stopped CDC: Debezium decodes
+logical messages and publishes them to `oltp.message`, a topic that does not exist (topic
+auto-creation is off), and then hit the 1 MB `max.request.size` of the Connect producer. CDC stood
+from about 18:52 to 19:00 with no loss; fixed by creating `oltp.message` (max message 8 MB,
+retention 1 hour) and `CONNECT_PRODUCER_MAX_REQUEST_SIZE=8388608` in `docker/compose.yaml`, and the
+connector drained 66 MB in seconds. `pg_replication_slot_advance` would have skipped the records and
+was not used. The topic and the setting stay as a guard; do not use logical messages for padding.
 
 ### 7. Corrupted event in topic
 
-Planned: see below once run.
+```
+make chaos-poison-event   # core up; with the Airflow scheduler running the merge is the silver_upsert DAG
+```
+
+What happened: one record that is not a Debezium envelope (`not json at all {poison-<ts>`) is
+produced into `oltp.shop.orders`. Bronze keeps it as raw text (`raw` set, `op` null). The next
+`silver_upsert` run routes it to `silver.quarantine` (`reason = unparsed_envelope`, topic, partition,
+offset and payload kept) and carries on with the rest of the batch; a second run does not
+quarantine it again.
+What monitoring shows: the number of quarantined rows in the last hour is a line of the
+`dq_checks` log (`dq quarantined_last_hour=<n>`, task `report`). It is deliberately not exported
+to Prometheus and has no alert: `quarantine_rows_total` and its alert are the owner's Modify gate
+(W4-D8, `02-learning-gates.md`). The `lakehouse_dq_*` series cover duplicates, repeats and
+reconciliation, not quarantine. Detection today is manual: `select reason, count(*) from
+silver.quarantine group by 1`.
+Data at risk: none. The record stays in bronze and in quarantine with its payload.
+Recovery: nothing to recover; a human reads the payload and decides.
+Why no loss or duplication: bronze is append-only and keeps the raw value; the quarantine key is
+(topic, partition, offset), so a rerun merges onto the same row.
+Verification: the script ends with one quarantine row for its marker after the first merge and
+still one after the second.
 
 ### 8. Kafka down for 6 minutes
 
@@ -960,8 +1060,9 @@ What happened: `dbt_build` ran with the conf `{"dbt_vars": "{chaos_break_test: t
 singular test `assert_chaos_break_test` on `fct_orders` returned every order under that switch and
 failed.
 What monitoring shows: `dbt_build` red in the Airflow UI; the task log names the test
-(`Failure in test assert_chaos_break_test`). Alert `AirflowDagFailed` comes with week 4. Seen when
-the run ends, 16 s after the trigger.
+(`Failure in test assert_chaos_break_test`). Alert `AirflowDagFailed` fired 17 s after the red run
+ended (2026-10-23: run ended 16:39:47, the counter appeared at the 16:39:50 scrape, the alert at
+16:40:05; 15 s evaluation plus the scrape). Seen in the UI when the run ends, 16 s after the trigger.
 Data at risk: none. `fct_orders` was rebuilt before its test ran; every model after it was skipped,
 so the marts kept their previous snapshot (`mart_daily_sales`: 9 snapshots before
 and after).
