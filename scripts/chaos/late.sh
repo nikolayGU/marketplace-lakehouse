@@ -21,7 +21,7 @@ echo "window: ingest_ts >= timestamp '$t0' (UTC)"
 replay_burst 120
 wait_until 300 "bronze to catch up with Kafka" bronze_caught_up
 echo "bronze caught up at $(date -u +%T)"
-run_silver
+merge_silver
 
 # The oldest change, insert or update, of an order with a newer one. Comparing LSNs, not counting
 # rows, keeps two copies of one change (a Connect re-send) from passing for two changes.
@@ -76,7 +76,15 @@ wait_until 120 "bronze to take in the re-sent record" resent
 # Positive control: a silver run that never read the re-sent record would leave the row as it was
 # too, so this run must report orders events merged. Kept in a file on failure, like run_silver.
 log=$(mktemp -t silver_upsert.XXXXXX.log)
-if ! make -C "$ROOT" --no-print-directory silver >"$log" 2>&1; then
+if [ -n "$("${COMPOSE[@]}" --profile '*' ps -q airflow-scheduler)" ]; then
+  # Airflow is the silver writer (W4-D12): the merge task's log carries the same lines.
+  run="chaos-late-$(date -u +%Y%m%dT%H%M%S)"
+  if ! run_dag silver_upsert "$run" || ! task_log silver_upsert "$run" merge >"$log" 2>&1; then
+    tail -40 "$log" >&2
+    echo "silver_upsert failed, full log: $log" >&2
+    exit 1
+  fi
+elif ! make -C "$ROOT" --no-print-directory silver >"$log" 2>&1; then
   tail -40 "$log" >&2
   echo "silver_upsert failed, full log: $log" >&2
   exit 1

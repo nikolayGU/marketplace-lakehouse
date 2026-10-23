@@ -43,6 +43,17 @@ run_silver() {
   rm -f "$log"
 }
 
+# merge_silver [run id]: bring silver up to bronze with its one writer. While the Airflow scheduler
+# runs that is silver_upsert, triggered here (W4-D12; the DAG must not be paused: run_dag waits
+# for a queued run until it times out); with the scheduler stopped it is `make silver`.
+merge_silver() {
+  if [ -n "$("${COMPOSE[@]}" --profile '*' ps -q airflow-scheduler)" ]; then
+    run_dag silver_upsert "${1:-chaos-$(date -u +%Y%m%dT%H%M%S)}"
+  else
+    run_silver
+  fi
+}
+
 healthy() { [ "$(docker inspect -f '{{.State.Health.Status}}' "$1" 2>/dev/null)" = healthy ]; }
 
 # service_healthy <service>: the container of a compose service reports healthy. Looked up by id,
@@ -224,4 +235,53 @@ task_log() {
 import json, sys
 for entry in json.load(sys.stdin).get("content") or []:
     print(entry.get("event", "") if isinstance(entry, dict) else entry)'
+}
+
+# alert_firing <name> <seconds>: poll Prometheus every 5 s until the alert is firing, print
+# `alert <name> firing after <n> s`, 1 on a timeout (W4-D7). A pending alert does not count.
+alert_firing() {
+  local name=$1 limit=$2 started=$SECONDS
+  while :; do
+    if curl -sf 127.0.0.1:9090/api/v1/alerts | python3 -c '
+import json, sys
+alerts = json.load(sys.stdin)["data"]["alerts"]
+sys.exit(not any(a["labels"]["alertname"] == sys.argv[1] and a["state"] == "firing" for a in alerts))' "$name"; then
+      echo "alert $name firing after $((SECONDS - started)) s"
+      return 0
+    fi
+    if ((SECONDS - started >= limit)); then
+      echo "alert $name not firing after $limit s" >&2
+      return 1
+    fi
+    sleep 5
+  done
+}
+
+# alerts_in_window <seconds>: every alert that was firing in the last <seconds>, one per line, as
+# name and series labels. Prints `none` for a quiet window.
+alerts_in_window() {
+  curl -sf 127.0.0.1:9090/api/v1/query --data-urlencode "query=max_over_time(ALERTS{alertstate=\"firing\"}[${1}s])" |
+    python3 -c '
+import json, sys
+rows = json.load(sys.stdin)["data"]["result"]
+for r in sorted(rows, key=lambda r: r["metric"]["alertname"]):
+    labels = {k: v for k, v in r["metric"].items() if k not in ("__name__", "alertname", "alertstate", "severity")}
+    print(r["metric"]["alertname"], labels or "")
+if not rows:
+    print("none")'
+}
+
+# alert_quiet <name>: the alert is neither firing nor pending, so a later `alert_firing` proves
+# this scenario and not a leftover of the last one.
+alert_quiet() {
+  curl -sf 127.0.0.1:9090/api/v1/alerts | python3 -c '
+import json, sys
+alerts = json.load(sys.stdin)["data"]["alerts"]
+sys.exit(any(a["labels"]["alertname"] == sys.argv[1] for a in alerts))' "$1"
+}
+
+# slot_retained_bytes: WAL the slot of the connector holds back, as the alert reads it.
+slot_retained_bytes() {
+  psql_value "select pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn)::bigint
+              from pg_replication_slots where slot_name = 'shop_slot'"
 }

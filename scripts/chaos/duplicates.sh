@@ -45,7 +45,7 @@ if [ "$repeats" != 0 ]; then
 fi
 
 echo "silver run at $(date -u +%T)"
-run_silver
+merge_silver
 # Positive control: a repeat never changes a row count, so reconcile alone cannot show that silver
 # read it. An order with a repeat ends on one, and silver must hold exactly that LSN and status.
 counts=$(trino_value "

@@ -12,7 +12,7 @@ ingested() {
   [ "$(trino_value "select count(*) from bronze.cdc_events where raw like '%$marker%'")" -ge 1 ]
 }
 wait_until 120 "bronze to ingest it" ingested
-run_silver
+merge_silver
 
 trino "select reason, topic, kafka_partition, kafka_offset, payload
        from silver.quarantine where payload like '%$marker%'"
@@ -21,6 +21,6 @@ quarantined() {
                where reason = 'unparsed_envelope' and payload like '%$marker%'"
 }
 [ "$(quarantined)" = 1 ] || { echo "FAIL: expected one quarantine row for $marker" >&2; exit 1; }
-run_silver
+merge_silver
 [ "$(quarantined)" = 1 ] || { echo "FAIL: a rerun of silver quarantined it again" >&2; exit 1; }
 echo "ok: bronze kept the record, silver quarantined it once and carried on"

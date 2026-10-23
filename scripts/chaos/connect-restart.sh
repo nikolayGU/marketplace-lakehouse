@@ -72,7 +72,7 @@ if [ "$mode" = kill ]; then
   fi
 fi
 
-run_silver
+merge_silver
 reconcile
 echo "expected: MODE=restart no rows above; MODE=kill repeated events; reconcile ok (live row" \
   "counts) either way"
