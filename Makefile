@@ -92,7 +92,11 @@ kafka-groups: ## consumer groups and lag
 	$(COMPOSE) exec kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --all-groups --describe
 
 silver: ## merge everything bronze committed since the last run into silver, then exit (refuses while the Airflow scheduler runs)
-	@if [ -n "$$($(COMPOSE) --profile '*' ps -q airflow-scheduler)" ]; then \
+	@ids=$$($(COMPOSE) --profile '*' ps -q airflow-scheduler) || { \
+	  echo "docker compose ps failed: cannot tell whether airflow-scheduler runs, not merging" >&2; \
+	  exit 2; \
+	}; \
+	if [ -n "$$ids" ]; then \
 	  echo "airflow-scheduler is running and may merge silver at the same time: pause silver_upsert and stop the scheduler first, or trigger the DAG (OPERATIONS.md, Airflow)" >&2; \
 	  exit 2; \
 	fi
@@ -121,8 +125,9 @@ chaos-%: ## run a failure scenario: make chaos-spark-kill
 	bash scripts/chaos/$*.sh
 
 # ---------------------------------------------------------------- quality
-lint: ## ruff, mypy, yamllint, sqlfluff, compose config
+lint: ## ruff, mypy, yamllint, sqlfluff, compose config, bash -n on the shell scripts
 	uv run ruff check . && uv run ruff format --check .
+	for script in $$(git ls-files '*.sh'); do bash -n "$$script" || exit 1; done
 	uv run mypy
 	uv run yamllint -c .yamllint docker observability airflow .github
 	uv run sqlfluff lint oltp/migrations
@@ -143,11 +148,20 @@ SPARK_IMAGE ?= lakehouse/spark:dev
 # Versions of the test tools inside the image; tests/unit/test_makefile.py compares them with uv.lock.
 SPARK_TEST_PIP := pytest==9.1.1 jsonschema==4.26.0
 
-test-spark: ## the Spark unit tests, inside $(SPARK_IMAGE) because the host has no JVM; a skip fails
+test-spark: ## the Spark unit tests, inside $(SPARK_IMAGE) because the host has no JVM; any skip fails
 	docker run --rm --user root --entrypoint bash -v "$(CURDIR)":/repo:ro \
-	  -e PYTHONPATH=/opt/spark/python:/opt/spark/python/lib/py4j-0.10.9.7-src.zip:/repo/streaming \
+	  -e FAIL_ON_SKIP=1 -e PYTHONPATH=/opt/spark/python:/opt/spark/python/lib/py4j-0.10.9.7-src.zip:/repo/streaming \
 	  $(SPARK_IMAGE) -c 'pip install -q $(SPARK_TEST_PIP) && cd /repo/tests/unit && \
 	  python3 -m pytest -q -p no:cacheprovider -p no:skipping --rootdir=/tmp $(SPARK_TESTS)'
+
+AIRFLOW_IMAGE ?= lakehouse/airflow:dev
+
+dags-check: ## every DAG file imports in $(AIRFLOW_IMAGE), offline, with docker/airflow/airflow.env
+	docker run --rm --network none -v "$(CURDIR)/airflow/dags":/opt/airflow/dags:ro \
+	  --env-file docker/airflow/airflow.env -e PYTHONPATH=/opt/airflow/dags \
+	  -e AIRFLOW__METRICS__STATSD_ON=False --entrypoint python $(AIRFLOW_IMAGE) -c \
+	  "from airflow.models.dagbag import DagBag; b = DagBag('/opt/airflow/dags'); \
+	  assert not b.import_errors, b.import_errors; print(len(b.dags), 'dags import:', sorted(b.dags))"
 
 watermark-demo: ## orders_per_minute on a lab topic: inside the watermark updates, behind it drops (needs make start)
 	bash scripts/demo/watermark.sh
@@ -164,4 +178,4 @@ dbt-build: ## seed, run and test lake.gold through Trino on 127.0.0.1:8080 (need
 dbt-docs: ## dbt docs generate into dbt/target (needs Trino)
 	cd dbt && uv run dbt docs generate --profiles-dir . --target dev
 
-.PHONY: alerts-test watermark-demo watermark-live help secrets hooks data migrate replay-load replay-start replay-reset start up down status logs nuke bootstrap verify verify-fast reconcile report replay-burst replay-live replay-status silver psql trino kafka-topics kafka-groups cdc-snapshot connector-status iceberg-demo lakekeeper-bootstrap airflow-init lint test test-spark dbt-parse dbt-build dbt-docs
+.PHONY: alerts-test dags-check watermark-demo watermark-live help secrets hooks data migrate replay-load replay-start replay-reset start up down status logs nuke bootstrap verify verify-fast reconcile report replay-burst replay-live replay-status silver psql trino kafka-topics kafka-groups cdc-snapshot connector-status iceberg-demo lakekeeper-bootstrap airflow-init lint test test-spark dbt-parse dbt-build dbt-docs

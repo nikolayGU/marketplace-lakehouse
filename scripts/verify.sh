@@ -19,10 +19,16 @@ fail() {
   exit 1
 }
 
-if [ "$mode" = full ] && [ -n "$("${COMPOSE[@]}" --profile '*' ps -q airflow-scheduler)" ]; then
-  echo "airflow-scheduler is running and may merge silver at the same time: pause silver_upsert" \
-    "and stop the scheduler first (OPERATIONS.md, Airflow)" >&2
-  exit 2
+if [ "$mode" = full ]; then
+  scheduler=$("${COMPOSE[@]}" --profile '*' ps -q airflow-scheduler) || {
+    echo "docker compose ps failed: cannot tell whether airflow-scheduler runs" >&2
+    exit 2
+  }
+  if [ -n "$scheduler" ]; then
+    echo "airflow-scheduler is running and may merge silver at the same time: pause" \
+      "silver_upsert and stop the scheduler first (OPERATIONS.md, Airflow)" >&2
+    exit 2
+  fi
 fi
 no_other_replayer
 wait="${VERIFY_WAIT:-900}"

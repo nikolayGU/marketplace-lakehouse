@@ -1,5 +1,6 @@
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -53,6 +54,19 @@ def test_silver_refuses_while_the_scheduler_runs() -> None:
     assert "spark-silver" not in result.stdout
 
 
+def test_silver_refuses_when_it_cannot_tell_whether_the_scheduler_runs() -> None:
+    # A failing `docker compose ps` must not read as "no scheduler": two writers on one checkpoint.
+    result = make("silver", "COMPOSE=false")
+
+    assert result.returncode == 2
+    assert "cannot tell" in result.stderr
+
+
+def test_silver_runs_the_merge_when_no_scheduler_runs() -> None:
+    # COMPOSE=true: `ps -q` prints nothing and succeeds, the merge command runs (as `true`).
+    assert make("silver", "COMPOSE=true").returncode == 0
+
+
 def _locked(package: str) -> str:
     lock = (REPO / "uv.lock").read_text()
     block = lock.split(f'name = "{package}"\nversion = "', 1)[1]
@@ -64,6 +78,53 @@ def test_spark_tests_run_in_the_image_given_and_fail_on_skips() -> None:
 
     assert "lakehouse/spark:ci" in result.stdout
     assert "-p no:skipping" in result.stdout
+    assert "FAIL_ON_SKIP=1" in result.stdout
+
+
+SKIPPING = """
+import pytest
+
+pytestmark = pytest.mark.parametrize("n", [1])
+
+
+def test_calls_skip(n):
+    pytest.skip("no JVM")
+
+
+@pytest.fixture
+def jvm():
+    pytest.skip("no JVM")
+
+
+def test_fixture_skips(n, jvm):
+    pass
+
+
+def test_runs(n):
+    pass
+"""
+
+
+@pytest.mark.parametrize(
+    ("fail_on_skip", "code", "line"),
+    [("1", 1, "1 failed, 1 passed, 1 error"), ("", 0, "1 passed, 2 skipped")],
+)
+def test_fail_on_skip_fails_every_kind_of_skip(
+    tmp_path: Path, fail_on_skip: str, code: int, line: str
+) -> None:
+    (tmp_path / "test_skipping.py").write_text(SKIPPING)
+    env = {**os.environ, "PYTHONPATH": str(REPO / "tests" / "unit"), "FAIL_ON_SKIP": fail_on_skip}
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "-p", "conftest", "-p", "no:cacheprovider", "."],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == code, result.stdout
+    assert line in result.stdout
 
 
 def test_spark_test_pins_follow_the_lock_file() -> None:

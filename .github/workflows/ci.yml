@@ -9,6 +9,11 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# Read the repo; gitleaks-action lists the commits of a pull request through the API.
+permissions:
+  contents: read
+  pull-requests: read
+
 jobs:
   lint-and-test:
     runs-on: ubuntu-latest
@@ -23,6 +28,7 @@ jobs:
           python-version: "3.12"
       - run: uv sync --locked --group dev
       - run: uv run ruff check . && uv run ruff format --check .
+      - run: for script in $(git ls-files '*.sh'); do bash -n "$script" || exit 1; done
       - run: uv run mypy
       - run: uv run yamllint -c .yamllint docker observability airflow .github
       - run: uv run sqlfluff lint oltp/migrations
@@ -58,8 +64,8 @@ jobs:
           failure-threshold: warning
 
   # The Spark tests of MERGE, quarantine and epoch skipping need the Iceberg jar, which only the
-  # image has: pytest on the runner skips them. -p no:skipping in `make test-spark` turns a skip
-  # into a failure, so green here means they ran.
+  # image has: pytest on the runner skips them. `make test-spark` sets FAIL_ON_SKIP=1
+  # (tests/unit/conftest.py), which turns any skip into a failure, so green here means they ran.
   spark-tests:
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -93,5 +99,9 @@ jobs:
         run: docker run --rm --entrypoint python lakehouse/airflow:ci -c "import airflow, trino, psycopg, pydantic_settings"
       - name: dbt is in its own venv
         run: docker run --rm --entrypoint /opt/dbt-venv/bin/dbt lakehouse/airflow:ci --version
+      # The unit tests read the DAG files without Airflow; this imports them in the real image,
+      # with its Jinja and its mapping rules.
+      - name: every DAG imports in the image
+        run: make dags-check AIRFLOW_IMAGE=lakehouse/airflow:ci
 
 # smoke: smoke.yml (W5-T03).

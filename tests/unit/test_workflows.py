@@ -46,3 +46,21 @@ def test_smoke_runs_on_demand_and_weekly_and_checks_verify_ok() -> None:
     assert "make verify" in text
     assert "grep -qx 'verify ok'" in text
     assert smoke["permissions"] == {"contents": "read"}
+
+
+def test_ci_runs_the_checks_it_claims() -> None:
+    # Dropping a step must turn a test red, not leave CI green with less checked.
+    ci = yaml.safe_load((WORKFLOWS / "ci.yml").read_text())
+    runs = {
+        job: " ".join(step.get("run", "") for step in spec["steps"])
+        for job, spec in ci["jobs"].items()
+    }
+
+    assert "make test-spark" in runs["spark-tests"]
+    assert "make dags-check AIRFLOW_IMAGE=lakehouse/airflow:ci" in runs["airflow-image"]
+
+
+def test_ci_reads_the_repo_and_nothing_more() -> None:
+    ci = yaml.safe_load((WORKFLOWS / "ci.yml").read_text())
+
+    assert ci["permissions"] == {"contents": "read", "pull-requests": "read"}

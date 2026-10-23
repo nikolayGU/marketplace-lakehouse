@@ -47,7 +47,12 @@ run_silver() {
 # runs that is silver_upsert, triggered here (W4-D12; the DAG must not be paused: run_dag waits
 # for a queued run until it times out); with the scheduler stopped it is `make silver`.
 merge_silver() {
-  if [ -n "$("${COMPOSE[@]}" --profile '*' ps -q airflow-scheduler)" ]; then
+  local ids
+  ids=$("${COMPOSE[@]}" --profile '*' ps -q airflow-scheduler) || {
+    echo "docker compose ps failed: cannot tell who writes silver, not merging" >&2
+    return 2
+  }
+  if [ -n "$ids" ]; then
     run_dag silver_upsert "${1:-chaos-$(date -u +%Y%m%dT%H%M%S)}"
   else
     run_silver
