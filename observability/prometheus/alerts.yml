@@ -1,3 +1,63 @@
+# The six alerts of week 4 (W4-T05). No Alertmanager (W4-D6): state is read from the Prometheus
+# UI, /api/v1/alerts and the Pipeline health dashboard. Tests: alerts_test.yml (make alerts-test);
+# live proof per alert: OPERATIONS.md, "Observability".
 groups:
   - name: lakehouse
-    rules: []
+    rules:
+      # absent() also fires when the source is off: with obs up and core down this one burns.
+      - alert: ConnectorNotRunning
+        expr: absent(kafka_connect_connector_task_status{connector="shop-connector",status="running"} == 1)
+        for: 1m
+        labels:
+          severity: page
+
+      # An inactive slot over 64 MiB is a consumer that is gone; any slot over 512 MiB fills the
+      # disk even with one (W4-D3). A live slot holds ~25 MB of WAL on an idle laptop.
+      - alert: SlotWalRetainedHigh
+        expr: >-
+          (lakehouse_slot_retained_bytes{slot_name="shop_slot"} > 64 * 1024 * 1024
+            and on (slot_name) lakehouse_slot_active == 0)
+          or lakehouse_slot_retained_bytes{slot_name="shop_slot"} > 512 * 1024 * 1024
+        for: 5m
+        labels:
+          severity: page
+
+      # Idle events keep the timestamp moving, so only a stuck or dead query trips this.
+      - alert: SparkNoBatch5m
+        expr: time() - spark_streaming_last_batch_timestamp{query="bronze_cdc_ingest"} > 300
+        labels:
+          severity: page
+          cause: stuck
+      # The driver died: its series is gone, and the rule above has nothing to compare.
+      - alert: SparkNoBatch5m
+        expr: absent(spark_streaming_last_batch_timestamp{query="bronze_cdc_ingest"})
+        for: 5m
+        labels:
+          severity: page
+          cause: gone
+
+      # The age of the oldest bronze snapshot silver has not merged (W4-D4); 0 at rest. Table
+      # freshness is "no traffic" between replay bursts and does not alert.
+      - alert: FreshnessAbove15m
+        expr: lakehouse_silver_lag_seconds > 900
+        labels:
+          severity: warn
+
+      # increase() misses the first value of a new counter series, so the second half catches the
+      # first failure after statsd-exporter started.
+      - alert: AirflowDagFailed
+        expr: >-
+          increase(airflow_dagrun_failed_seconds_count[30m]) > 0
+          or (airflow_dagrun_failed_seconds_count unless airflow_dagrun_failed_seconds_count offset 30m)
+        labels:
+          severity: warn
+
+      # docker restart moves the start time; RestartCount only follows the restart policy
+      # (ADR-023). One-shot containers run again on every make start.
+      - alert: ContainerRestarting
+        expr: >-
+          changes(docker_container_start_time_seconds{
+            name=~"lakehouse-.+", name!~".*-init-.*", name!~".*-bootstrap-.*", name!~".*-migrate-.*"
+          }[15m]) > 0
+        labels:
+          severity: warn

@@ -1,0 +1,151 @@
+# promtool test rules (make alerts-test). The failure cases come first: what must not fire.
+rule_files:
+  - alerts.yml
+
+evaluation_interval: 1m
+
+tests:
+  # A live slot holds more than 64 MiB after three days at 24 MB a day: no alert.
+  - interval: 1m
+    input_series:
+      - series: 'lakehouse_slot_retained_bytes{slot_name="shop_slot"}'
+        values: '25000000+16667x4320'
+      - series: 'lakehouse_slot_active{slot_name="shop_slot"}'
+        values: '1+0x4320'
+    alert_rule_test:
+      - eval_time: 3d
+        alertname: SlotWalRetainedHigh
+        exp_alerts: []
+
+  # A dead consumer with 70 MiB: fires once the 5 minutes of `for` have passed.
+  - interval: 1m
+    input_series:
+      - series: 'lakehouse_slot_retained_bytes{slot_name="shop_slot"}'
+        values: '73400320+0x10'
+      - series: 'lakehouse_slot_active{slot_name="shop_slot"}'
+        values: '0+0x10'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: SlotWalRetainedHigh
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: SlotWalRetainedHigh
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              slot_name: shop_slot
+
+  # Even an active slot over 512 MiB fires.
+  - interval: 1m
+    input_series:
+      - series: 'lakehouse_slot_retained_bytes{slot_name="shop_slot"}'
+        values: '600000000+0x10'
+      - series: 'lakehouse_slot_active{slot_name="shop_slot"}'
+        values: '1+0x10'
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: SlotWalRetainedHigh
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              slot_name: shop_slot
+
+  # Stale tables with nothing waiting to be merged are no traffic, not a fault.
+  - interval: 1m
+    input_series:
+      - series: 'lakehouse_table_freshness_seconds{layer="silver",table="orders"}'
+        values: '7200+0x10'
+      - series: 'lakehouse_silver_lag_seconds'
+        values: '0+0x10'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: FreshnessAbove15m
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'lakehouse_silver_lag_seconds'
+        values: '0 0 1000 1000'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: FreshnessAbove15m
+        exp_alerts:
+          - exp_labels:
+              severity: warn
+
+  # The first failure after statsd-exporter started: the series is born with the value 1.
+  - interval: 1m
+    input_series:
+      - series: 'airflow_dagrun_failed_seconds_count{dag_id="dbt_build"}'
+        values: '_ _ _ _ _ 1 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: AirflowDagFailed
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: AirflowDagFailed
+        exp_alerts:
+          - exp_labels:
+              severity: warn
+              dag_id: dbt_build
+
+  # The driver died: the series goes stale and the absent() rule fires after its 5 minutes.
+  - interval: 1m
+    input_series:
+      - series: 'spark_streaming_last_batch_timestamp{query="bronze_cdc_ingest"}'
+        values: '0 0 0 stale'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: SparkNoBatch5m
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: SparkNoBatch5m
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              cause: gone
+              query: bronze_cdc_ingest
+
+  # A query that is alive but stuck: the timestamp stays at 0, so time() is far past it.
+  - interval: 1m
+    input_series:
+      - series: 'spark_streaming_last_batch_timestamp{query="bronze_cdc_ingest"}'
+        values: '0+0x10'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: SparkNoBatch5m
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              cause: stuck
+              query: bronze_cdc_ingest
+
+  # lakekeeper-bootstrap runs again on every make start: no alert. Kafka restarting: alert.
+  - interval: 1m
+    input_series:
+      - series: 'docker_container_start_time_seconds{name="lakehouse-lakekeeper-bootstrap-1"}'
+        values: '100 100 200 200'
+      - series: 'docker_container_start_time_seconds{name="lakehouse-kafka-1"}'
+        values: '100 100 200 200'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: ContainerRestarting
+        exp_alerts:
+          - exp_labels:
+              severity: warn
+              name: lakehouse-kafka-1
+
+  # The connector task is running, then gone.
+  - interval: 1m
+    input_series:
+      - series: 'kafka_connect_connector_task_status{connector="shop-connector",task="0",status="running"}'
+        values: '1 1 1 1 stale'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: ConnectorNotRunning
+        exp_alerts: []
+      - eval_time: 7m
+        alertname: ConnectorNotRunning
+        exp_alerts:
+          - exp_labels:
+              severity: page

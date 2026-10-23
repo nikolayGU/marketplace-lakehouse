@@ -1,6 +1,6 @@
 # StatsD names to Prometheus names with labels (glob, `*` stops at a dot). Unmapped names are
 # still exported with dots turned into underscores. Airflow timers arrive in milliseconds and
-# leave as seconds (summaries with _count and _sum). lakehouse.* lands with W4-T03.
+# leave as seconds (summaries with _count and _sum). lakehouse.* is dq_checks (W4-T03).
 mappings:
   - match: "airflow.dagrun.duration.success.*"
     name: airflow_dagrun_success_seconds
@@ -21,3 +21,11 @@ mappings:
     labels:
       dag_id: "$1"
       task_id: "$2"
+  # dq_checks gauges (W4-T03). A gauge that stops arriving disappears after the TTL, three
+  # cadences of 15 minutes, instead of showing the last value for ever. Tags become labels.
+  - match: "lakehouse.dq.*"
+    name: "lakehouse_dq_$1"
+    ttl: 45m
+  - match: "lakehouse.*"
+    name: "lakehouse_$1"
+    ttl: 45m

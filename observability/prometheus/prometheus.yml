@@ -13,6 +13,9 @@ scrape_configs:
   - job_name: spark-bronze
     static_configs:
       - targets: ["spark-bronze:4041"]
+  - job_name: spark-orders-per-minute
+    static_configs:
+      - targets: ["spark-orders-per-minute:4041"]
   - job_name: kafka-connect
     static_configs:
       - targets: ["kafka-connect:9404"]
