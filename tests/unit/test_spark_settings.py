@@ -108,3 +108,24 @@ def test_trigger_and_offsets_come_from_env(monkeypatch: pytest.MonkeyPatch) -> N
     settings = Settings()
 
     assert (settings.bronze_trigger_seconds, settings.bronze_max_offsets_per_trigger) == (10, 5000)
+
+
+def test_orders_per_minute_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    for key in ("OPM_SOURCE_TOPIC", "OPM_TARGET", "OPM_TRIGGER", "OPM_SHUFFLE_PARTITIONS"):
+        monkeypatch.delenv(key, raising=False)
+    settings = Settings()
+
+    assert settings.opm_source_topic == "oltp.shop.orders"
+    assert settings.opm_target == "lake.silver.orders_per_minute"
+    assert settings.opm_watermark == "5 minutes"
+    assert settings.opm_trigger == "processing"
+    assert settings.opm_shuffle_partitions == 2
+
+
+def test_orders_per_minute_trigger_accepts_only_known_modes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPM_TRIGGER", "continuous")
+
+    with pytest.raises(ValidationError):
+        Settings()

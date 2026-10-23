@@ -1,4 +1,5 @@
-"""Prometheus metrics from the driver (ADR-013), including Kafka lag from the progress offsets."""
+"""Prometheus metrics from the driver (ADR-013): Kafka lag from the progress offsets, and for
+stateful queries the state size, the watermark and the rows it dropped (W5-T01b)."""
 
 import time
 
@@ -12,6 +13,7 @@ from pyspark.sql.streaming.listener import (
 )
 
 from spark_jobs.offsets import kafka_lag
+from spark_jobs.progress import state_totals, watermark_seconds
 
 LAST_BATCH = Gauge(
     "spark_streaming_last_batch_timestamp",
@@ -26,6 +28,19 @@ KAFKA_LAG = Gauge(
     "spark_streaming_kafka_lag",
     "Messages in Kafka past the last micro-batch (latestOffset minus endOffset), 0 when idle",
     ["query", "topic", "partition"],
+)
+STATE_ROWS = Gauge(
+    "spark_streaming_state_rows", "Rows held in the state of stateful operators", ["query"]
+)
+WATERMARK = Gauge(
+    "spark_streaming_watermark_timestamp_seconds",
+    "Event-time watermark as Unix seconds; the time of the data, not of the clock",
+    ["query"],
+)
+LATE_ROWS = Counter(
+    "spark_streaming_late_rows_dropped_total",
+    "Rows the watermark dropped as too late",
+    ["query"],
 )
 
 
@@ -51,6 +66,14 @@ class PrometheusListener(StreamingQueryListener):
         LAST_BATCH.labels(name).set(time.time())
         INPUT_ROWS.labels(name).inc(progress.numInputRows)
         BATCH_DURATION.labels(name).set(progress.batchDuration / 1000)
+        operators = getattr(progress, "stateOperators", None)
+        if operators:
+            held, dropped = state_totals(operators)
+            STATE_ROWS.labels(name).set(held)
+            LATE_ROWS.labels(name).inc(dropped)
+            watermark = watermark_seconds(getattr(progress, "eventTime", None))
+            if watermark is not None:
+                WATERMARK.labels(name).set(watermark)
         for source in progress.sources:
             for (topic, partition), lag in kafka_lag(source.endOffset, source.latestOffset).items():
                 KAFKA_LAG.labels(name, topic, str(partition)).set(lag)

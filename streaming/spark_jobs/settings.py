@@ -41,3 +41,15 @@ class Settings(BaseSettings):
     # Spark stores the value in the checkpoint on the first run and restores it on every later
     # one, so changing it takes effect only with a new checkpoint.
     silver_shuffle_partitions: int = 4
+
+    # orders_per_minute (W5-T01a). An empty checkpoint means <checkpoint_root>/orders_per_minute.
+    opm_source_topic: str = "oltp.shop.orders"
+    opm_target: str = "lake.silver.orders_per_minute"
+    opm_checkpoint: str = ""
+    opm_watermark: str = "5 minutes"
+    opm_trigger: Literal["processing", "available_now"] = "processing"
+    opm_trigger_seconds: int = 20
+    opm_starting_offsets: str = "earliest"
+    # Stored in the checkpoint on the first run: 200 state partitions would mean hundreds of small
+    # files per batch in S3A, and only a new checkpoint changes the number.
+    opm_shuffle_partitions: int = 2

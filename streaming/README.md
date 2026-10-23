@@ -32,4 +32,21 @@ Spark image and jobs.
 
 Unit tests that build a SparkSession need a JVM and skip without one. The host has no Java;
 `make test-spark` runs the Spark test files (`SPARK_TESTS` in the Makefile) inside
-`lakehouse/spark:dev` instead; a new Spark test file has to be added to that list.
+`lakehouse/spark:dev` instead (`make test-spark SPARK_IMAGE=lakehouse/spark:ci` in CI); a new
+Spark test file has to be added to that list. Inside the image a skipped test fails the run
+(`-p no:skipping`).
+
+## orders_per_minute (W5-T01a)
+
+`spark_jobs/orders_per_minute.py`: distinct new orders (`op = 'c'`) per one-minute window of
+`order_purchase_timestamp`, read from Kafka `oltp.shop.orders`, watermark 5 minutes, `update`
+mode, MERGE into `lake.silver.orders_per_minute` (a count only rises). Settings `OPM_*` in
+`spark_jobs/settings.py`: source topic, target, checkpoint, watermark, trigger (`processing` every
+`OPM_TRIGGER_SECONDS`, or `available_now`), starting offsets, shuffle partitions (2, frozen in the
+checkpoint on the first run). `make watermark-demo` runs the same code on a lab topic, one
+`available_now` run per batch, into `lake.demo.orders_per_minute`.
+
+Two facts the tests pin: Spark drops a late row against the watermark of the *previous* batch, so
+the batch that moves the watermark still accepts the late event (one batch of grace); and the batch
+frame of `foreachBatch` must be persisted, or every action on it re-runs the aggregation and
+inflates the progress counters.
