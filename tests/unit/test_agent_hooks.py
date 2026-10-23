@@ -68,6 +68,8 @@ def repo(tmp_path: Path) -> Path:
         "echo X=1 >> .env",
         "sed -i s/a/b/ .env",
         "cp /tmp/x .env",
+        "psql -c \"select pg_replication_slot_advance('shop_slot', '0/5A000000')\"",
+        "psql -c \"select pg_drop_replication_slot('shop_slot')\"",
         "git -C /repo push --force",
         'grep -l x f | xargs psql -c "drop table t"',
         'grep x $(psql -c "drop table t")',
@@ -200,6 +202,23 @@ def test_guard_fails_closed() -> None:
 
     assert decision(result) == "ask"
     assert "guard.py failed" in result.stdout
+
+
+def test_docs_changed_after_a_full_verify_can_be_committed(repo: Path) -> None:
+    # The stop gate needs no check for Markdown and docs/; a commit of them needs none either.
+    write_stamp(repo, "full")
+    (repo / "NOTES.md").write_text("x")
+    assert decision(bash("git add -A && git commit -m notes", repo)) == "allow"
+
+    (repo / "job.py").write_text("x = 9\n")
+    assert decision(bash("git add -A && git commit -m code", repo)) == "deny"
+
+
+def test_docs_after_a_fast_verify_do_not_open_the_commit(repo: Path) -> None:
+    write_stamp(repo, "fast")
+    (repo / "NOTES.md").write_text("x")
+
+    assert decision(bash("git commit -m notes", repo)) == "deny"
 
 
 def test_commit_chained_after_a_full_verify_is_allowed(repo: Path) -> None:

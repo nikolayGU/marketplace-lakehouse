@@ -23,6 +23,7 @@ class Stamp:
     mode: str
     written_at: str
     fresh: bool
+    tree: str
 
 
 def _git(root: Path, *args: str, env: dict[str, str] | None = None) -> bytes:
@@ -56,7 +57,7 @@ def read_stamp(root: Path) -> Stamp | None:
     if len(parts) != 3 or parts[0] not in MODES:
         return None
     mode, written_at, digest = parts
-    return Stamp(mode, written_at, digest == tree_hash(root))
+    return Stamp(mode, written_at, digest == tree_hash(root), digest)
 
 
 def describe_stamp(root: Path) -> str:
@@ -66,11 +67,22 @@ def describe_stamp(root: Path) -> str:
     return f"{stamp.mode} at {stamp.written_at}, {'fresh' if stamp.fresh else 'stale'}"
 
 
+def _is_code(path: str) -> bool:
+    return not path.endswith(".md") and not path.startswith("docs/")
+
+
 def code_changes(root: Path) -> list[str]:
     """Changed or untracked paths other than Markdown and `docs/`: what a check must cover."""
     lines = _git(root, "status", "--porcelain", "--untracked-files=all").decode().splitlines()
     paths = [line[3:].split(" -> ")[-1] for line in lines]
-    return sorted(p for p in paths if not p.endswith(".md") and not p.startswith("docs/"))
+    return sorted(p for p in paths if _is_code(p))
+
+
+def code_changes_since(root: Path, stamp: Stamp) -> list[str]:
+    """Paths other than Markdown and `docs/` that differ from the tree the stamp verified. The
+    stamped tree was written to the object store by `tree_hash`, so git can diff against it."""
+    names = _git(root, "diff", "--name-only", stamp.tree, tree_hash(root)).decode().splitlines()
+    return sorted(p for p in names if _is_code(p))
 
 
 def main() -> None:

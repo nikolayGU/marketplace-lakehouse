@@ -4,7 +4,14 @@ from pathlib import Path
 
 import pytest
 
-from scripts.agent_state import code_changes, describe_stamp, read_stamp, tree_hash, write_stamp
+from scripts.agent_state import (
+    code_changes,
+    code_changes_since,
+    describe_stamp,
+    read_stamp,
+    tree_hash,
+    write_stamp,
+)
 
 REPO = Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "scripts" / "agent_state.py"
@@ -104,3 +111,17 @@ def test_cli_writes_a_stamp(repo: Path) -> None:
     stamp = read_stamp(repo)
 
     assert stamp is not None and stamp.mode == "full" and stamp.fresh
+
+
+def test_changes_since_the_stamp_are_listed_by_path(repo: Path) -> None:
+    write_stamp(repo, "full")
+    (repo / "NOTES.md").write_text("x")
+    (repo / "docs").mkdir()
+    (repo / "docs" / "a.txt").write_text("y")
+    stamp = read_stamp(repo)
+
+    assert stamp is not None and not stamp.fresh
+    assert code_changes_since(repo, stamp) == []
+
+    (repo / "job.py").write_text("x = 9\n")
+    assert code_changes_since(repo, stamp) == ["job.py"]

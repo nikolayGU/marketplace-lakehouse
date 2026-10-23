@@ -2,8 +2,9 @@
 """PreToolUse guard for AGENTS.md's hard rules.
 
 deny (exit 2, stderr is the reason): writes to secret files, force push, DROP, TRUNCATE, DELETE
-without WHERE, shell writes to .env, and `git commit` unless a full `make verify` passed on this
-working tree (.verify-stamp) or runs right before it in the same `&&` chain.
+without WHERE, advancing or dropping a replication slot, shell writes to .env, and `git commit`
+unless a full `make verify` passed on this working tree (.verify-stamp; Markdown and docs/ edited
+after it do not count) or runs right before it in the same `&&` chain.
 ask (a permission prompt, so the owner's ok is a click): replay, silver and other lake writes,
 push, rebase, history rewrites, volume and recursive deletes, connector and Postgres settings, DDL.
 The match is on the command text. A command made only of searches and reads (grep, rg, git log,
@@ -38,6 +39,8 @@ FORCE_PUSH = re.compile(GIT + r"push\b[^\n;&|]*(\s--force(-with-lease)?\b|\s-[a-
 DROP = re.compile(r"\bdrop\s+(table|view|schema|namespace|database|materialized\s+view)\b")
 TRUNCATE = re.compile(r"\btruncate\s+(table\s+)?[a-z_\"][\w.\"]*")
 DELETE = re.compile(r"\bdelete\s+from\s+[\w.\"]+([^;]*)")
+# Moving the slot past records skips them for good; dropping it forces a new initial snapshot.
+SLOT_SKIP = re.compile(r"\bpg_(replication_slot_advance|drop_replication_slot)\b")
 SHELL_WRITE_ENV = re.compile(
     r"(>>?|\btee\b(\s+-a)?)\s*[\"']?[^\s;|&]*\.env\b(?!\.example)"
     r"|\bsed\b[^\n;|&]*\s-i\S*[^\n;|&]*\.env\b(?!\.example)"
@@ -126,12 +129,15 @@ def reads_only(command: str) -> bool:
 
 
 def commit_allowed(low: str) -> bool:
-    from scripts.agent_state import read_stamp
+    from scripts.agent_state import code_changes_since, read_stamp
 
     if VERIFY_THEN_COMMIT.search(low):
         return True
     stamp = read_stamp(ROOT)
-    return stamp is not None and stamp.mode == "full" and stamp.fresh
+    if stamp is None or stamp.mode != "full":
+        return False
+    # Markdown and docs/ edited after the verify need no new one, as in stop_gate.py.
+    return stamp.fresh or not code_changes_since(ROOT, stamp)
 
 
 def check(event: dict[str, Any]) -> None:
@@ -154,6 +160,8 @@ def check(event: dict[str, Any]) -> None:
         deny("DROP")
     if TRUNCATE.search(low):
         deny("TRUNCATE")
+    if SLOT_SKIP.search(low):
+        deny("advancing or dropping a replication slot loses CDC records")
     for match in DELETE.finditer(low):
         if not re.search(r"\bwhere\b", match.group(1)):
             deny("DELETE without WHERE")
