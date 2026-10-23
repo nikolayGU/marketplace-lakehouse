@@ -16,7 +16,7 @@ from lakehouse.clients import trino_rows
 from lakehouse.maintenance_commands import (
     BRONZE_EVENTS,
     BRONZE_ORPHAN_SUFFIX,
-    gold_table,
+    gold_orphans_command,
     orphans_command,
     silver_tables,
 )
@@ -36,10 +36,12 @@ settings = Settings()
 )
 def iceberg_orphans() -> None:
     @task
-    def gold_orphan_commands() -> list[list[str]]:
+    def gold_orphan_commands(params: dict[str, object] | None = None) -> list[list[str]]:
+        # Airflow does not render templates in values a mapped task gets from XCom, so the dry
+        # run flag is resolved here from the run's params, not left to DRY_RUN_FLAG.
         names = [str(row[0]) for row in trino_rows(settings, sql.GOLD_BASE_TABLES)]
         print(f"gold base tables: {names}")
-        return [orphans_command([gold_table(name)]) for name in names]
+        return [gold_orphans_command(name, params or {}) for name in names]
 
     orphans_silver = DockerOperator(
         task_id="orphans_silver",

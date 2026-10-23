@@ -10,9 +10,11 @@ from lakehouse import checks, sql
 from lakehouse.maintenance_commands import (
     DRY_RUN_FLAG,
     compact_bronze_command,
+    dry_run_flag,
+    expire_and_compact_enabled,
     expire_command,
     gold_expire_command,
-    gold_table,
+    gold_orphans_command,
     orphans_command,
     position_deletes_command,
     silver_tables,
@@ -203,22 +205,40 @@ def test_gold_tables_come_from_base_tables_only() -> None:
     assert "lake.information_schema.tables" in sql.GOLD_BASE_TABLES
 
 
-def dry_run_flag(**params: object) -> str:
+def template_flag(**params: object) -> str:
     return jinja2.Environment().from_string(DRY_RUN_FLAG).render(params=params)
 
 
 def test_a_scheduled_orphans_run_is_a_dry_run() -> None:
-    assert dry_run_flag(dry_run=True) == "--dry-run"
+    assert template_flag(dry_run=True) == dry_run_flag({"dry_run": True}) == "--dry-run"
 
 
 @pytest.mark.parametrize("value", ["false", "False", 0, None, ""])
 def test_only_a_real_false_turns_the_dry_run_off(value: object) -> None:
     # A string "false" from a hand-typed conf is truthy in Jinja: it must not delete anything.
-    assert dry_run_flag(dry_run=value) == "--dry-run"
+    assert template_flag(dry_run=value) == dry_run_flag({"dry_run": value}) == "--dry-run"
 
 
 def test_false_in_the_conf_turns_the_dry_run_off() -> None:
-    assert dry_run_flag(dry_run=False) == "--no-dry-run"
+    assert template_flag(dry_run=False) == dry_run_flag({"dry_run": False}) == "--no-dry-run"
+
+
+@pytest.mark.parametrize("dry_run", [True, False])
+def test_mapped_gold_orphans_commands_carry_no_template(dry_run: bool) -> None:
+    # Airflow does not render values a mapped task gets from XCom: the flag is resolved in the
+    # task that builds the commands, from the run's params.
+    command = gold_orphans_command("orders_daily", {"dry_run": dry_run})
+
+    assert not any("{{" in part for part in command)
+    assert assert_accepted_by_the_job(command) == ["lake.gold.orders_daily"]
+    assert maintenance.parse_args(command[1:]).dry_run is dry_run
+
+
+def test_the_gold_orphans_task_builds_commands_from_the_params() -> None:
+    source = (REPO / "airflow" / "dags" / "iceberg_orphans.py").read_text()
+
+    assert "gold_orphans_command(name, params or {})" in source
+    assert "orphans_command([gold_table" not in source
 
 
 def test_orphans_dag_is_a_weekly_dry_run_by_default() -> None:
@@ -227,6 +247,30 @@ def test_orphans_dag_is_a_weekly_dry_run_by_default() -> None:
     assert ast.literal_eval(dag["params"]) == {"dry_run": True}
     assert ast.literal_eval(dag["schedule"]) == "0 4 * * 0"
     assert ast.literal_eval(dag["max_active_runs"]) == 1
+
+
+def test_maintenance_expires_and_compacts_only_when_asked() -> None:
+    # Unpausing the existing DAG must not start the W5-D13 ladder: expire and compaction wait
+    # for a run with {"expire_and_compact": true} or for a code change of the default.
+    dag = dag_keywords("iceberg_maintenance.py", "dag")
+
+    assert ast.literal_eval(dag["params"]) == {"expire_and_compact": False}
+
+
+@pytest.mark.parametrize(
+    ("params", "enabled"),
+    [({"expire_and_compact": True}, True), ({"expire_and_compact": "true"}, False), ({}, False)],
+)
+def test_only_a_real_true_enables_expire_and_compaction(
+    params: dict[str, object], enabled: bool
+) -> None:
+    assert expire_and_compact_enabled(params) is enabled
+
+
+def test_every_spark_step_of_maintenance_waits_for_the_switch() -> None:
+    source = (REPO / "airflow" / "dags" / "iceberg_maintenance.py").read_text()
+
+    assert "switch >> [rewrite_position_deletes, gold_commands]" in source
 
 
 def test_airflow_env_pauses_new_dags() -> None:
@@ -273,7 +317,6 @@ def test_bronze_is_compacted_up_to_yesterday_and_never_expired() -> None:
 def test_orphans_commands_pass_the_rules_of_the_job(dry_run: bool) -> None:
     for command in (
         orphans_command(silver_tables()),
-        orphans_command([gold_table("orders_daily")]),
         orphans_command(["lake.bronze.cdc_events"], location_suffix="metadata"),
     ):
         assert_accepted_by_the_job(rendered(command, dry_run=dry_run))

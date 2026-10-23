@@ -30,6 +30,7 @@ SANDBOX = "demo"
 MIN_RETENTION_DAYS = 7
 DEFAULT_DAYS = 7
 BRONZE_ORPHAN_SUFFIX = "metadata"
+ORPHAN_SUFFIXES = (BRONZE_ORPHAN_SUFFIX, "data")
 # The partition column of bronze; --before-today limits a compaction to its past days.
 DAY_COLUMN = "ingest_ts"
 MAX_LISTED_FILES = 200
@@ -81,6 +82,12 @@ def check_orphans(table: str, days: int, location_suffix: str | None) -> None:
         raise PolicyError(
             f"remove_orphan_files on {table} only with --location-suffix {BRONZE_ORPHAN_SUFFIX}: "
             "bronze data files are never deleted, Kafka no longer has them (ADR-021, ADR-005)"
+        )
+    if location_suffix is not None and location_suffix not in ORPHAN_SUFFIXES:
+        # `..` or a path would list the files of other tables, bronze among them, as orphans.
+        raise PolicyError(
+            f"remove_orphan_files on {table} only inside the table: --location-suffix one of "
+            f"{', '.join(ORPHAN_SUFFIXES)}, got {location_suffix!r}"
         )
     if layer(table) != SANDBOX and days < MIN_RETENTION_DAYS:
         raise PolicyError(
@@ -203,6 +210,13 @@ def non_negative(text: str) -> int:
     return value
 
 
+def positive(text: str) -> int:
+    value = int(text)
+    if value < 1:
+        raise argparse.ArgumentTypeError("must be at least 1")
+    return value
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="maintenance", description="Iceberg maintenance of the lake"
@@ -211,7 +225,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     expire = commands.add_parser("expire", help="expire_snapshots, the latest snapshot stays")
     expire.add_argument("--days", type=non_negative, default=DEFAULT_DAYS)
-    expire.add_argument("--retain-last", type=int, default=1)
+    expire.add_argument("--retain-last", type=positive, default=1)
 
     deletes = commands.add_parser(
         "rewrite-position-deletes", help="fold position delete files (merge-on-read tables)"

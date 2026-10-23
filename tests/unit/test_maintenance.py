@@ -123,6 +123,24 @@ def test_orphans_of_bronze_data_is_refused_without_the_metadata_location() -> No
     check_orphans(bronze, 7, "metadata")
 
 
+@pytest.mark.parametrize("raw", ["silver.orders", "gold.x", "demo.x"])
+@pytest.mark.parametrize("suffix", ["..", "../bronze", "metadata/../..", "/wh", "data/x", ""])
+def test_orphans_stay_inside_their_table_in_every_layer(raw: str, suffix: str) -> None:
+    # A location outside the table lists files of other tables (bronze among them) as orphans.
+    with pytest.raises(PolicyError, match="inside the table"):
+        check_orphans(parse_table(raw), 30, suffix)
+
+
+@pytest.mark.parametrize("suffix", [None, "metadata", "data"])
+def test_orphans_take_the_table_or_one_of_its_directories(suffix: str | None) -> None:
+    check_orphans(parse_table("silver.orders"), 7, suffix)
+
+
+def test_retain_last_is_at_least_one() -> None:
+    with pytest.raises(SystemExit):
+        parse_args(["expire", "--retain-last", "0", "silver.orders"])
+
+
 @pytest.mark.parametrize("raw", ["lake.bronze.cdc_events", "lake.silver.orders", "gold.x"])
 def test_orphans_younger_than_a_week_is_refused_outside_the_sandbox(raw: str) -> None:
     # A stream writes its files before it commits: a younger file may be a commit in flight.

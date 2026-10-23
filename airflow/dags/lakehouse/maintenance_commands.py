@@ -2,7 +2,7 @@
 maintenance.py). The job checks its own rules; tests/unit/test_dags.py feeds it every command
 built here."""
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 from lakehouse.settings import MAINTENANCE_TABLES, RETENTION_DAYS
 
@@ -12,6 +12,18 @@ BRONZE_ORPHAN_SUFFIX = "metadata"
 # Rendered by Airflow from the run's params. Only a real `false` (a boolean from the trigger form
 # or conf) deletes: a string such as "false" is truthy in Jinja, so it is no reason to.
 DRY_RUN_FLAG = "{{ '--no-dry-run' if params.dry_run is sameas false else '--dry-run' }}"
+
+
+def dry_run_flag(params: Mapping[str, object]) -> str:
+    """DRY_RUN_FLAG in Python, for commands a mapped task gets from XCom: Airflow does not render
+    those, so the task that builds them resolves the flag from the run's params itself."""
+    return "--no-dry-run" if params.get("dry_run") is False else "--dry-run"
+
+
+def expire_and_compact_enabled(params: Mapping[str, object]) -> bool:
+    """iceberg_maintenance runs its Spark steps (expire, position deletes, bronze compaction) only
+    for a real `true`: unpausing the DAG is not the owner's ok for the W5-D13 ladder."""
+    return params.get("expire_and_compact") is True
 
 
 def silver_tables() -> list[str]:
@@ -42,3 +54,7 @@ def compact_bronze_command() -> list[str]:
 def orphans_command(tables: Sequence[str], location_suffix: str | None = None) -> list[str]:
     suffix = ["--location-suffix", location_suffix] if location_suffix else []
     return ["maintenance", "orphans", DRY_RUN_FLAG, *suffix, *tables]
+
+
+def gold_orphans_command(name: str, params: Mapping[str, object]) -> list[str]:
+    return ["maintenance", "orphans", dry_run_flag(params), gold_table(name)]

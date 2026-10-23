@@ -6,6 +6,10 @@ of lake.gold, in the pool gold_writers with dbt_build. Bronze: compaction of pas
 bronze snapshots are never expired (ADR-021). Silver tasks share the pool lake_writers with
 silver_upsert's merge: two commits to one table at once and the loser fails (ADR-010).
 Orphan files are the weekly iceberg_orphans.
+
+Only optimize runs by default. The Spark steps wait for {"expire_and_compact": true} in the run's
+conf: the DAG existed before them, so "created paused" does not hold them back, and unpausing it
+is not the owner's ok for the W5-D13 ladder.
 """
 
 from datetime import datetime, timedelta
@@ -16,6 +20,7 @@ from lakehouse import sql
 from lakehouse.clients import trino_rows
 from lakehouse.maintenance_commands import (
     compact_bronze_command,
+    expire_and_compact_enabled,
     expire_command,
     gold_expire_command,
     position_deletes_command,
@@ -32,9 +37,18 @@ settings = Settings()
     start_date=datetime(2026, 10, 1),
     catchup=False,
     max_active_runs=1,
+    params={"expire_and_compact": False},
     tags=["maintenance"],
 )
 def iceberg_maintenance() -> None:
+    @task.short_circuit
+    def expire_and_compact(params: dict[str, object] | None = None) -> bool:
+        enabled = expire_and_compact_enabled(params or {})
+        print(
+            f"expire_and_compact={enabled}: the Spark steps {'run' if enabled else 'are skipped'}"
+        )
+        return enabled
+
     @task(pool=LAKE_WRITERS_POOL)
     def optimize(table: str) -> None:
         for row in trino_rows(settings, sql.optimize(table)):
@@ -62,7 +76,7 @@ def iceberg_maintenance() -> None:
         retries=2,
         retry_delay=timedelta(minutes=5),
         **spark_job_kwargs(GOLD_WRITERS_POOL),
-    ).expand(command=gold_expire_commands())
+    ).expand(command=(gold_commands := gold_expire_commands()))
     compact_bronze = DockerOperator(
         task_id="compact_bronze",
         command=compact_bronze_command(),
@@ -70,7 +84,9 @@ def iceberg_maintenance() -> None:
     )
 
     optimized = optimize.expand(table=list(SILVER_KEYS))
-    # expire_gold depends on nothing above: its own pool, its own tables.
+    switch = expire_and_compact()
+    # expire_gold waits for the switch only: its own pool, its own tables.
+    switch >> [rewrite_position_deletes, gold_commands]
     optimized >> rewrite_position_deletes >> expire_silver >> compact_bronze
 
 
