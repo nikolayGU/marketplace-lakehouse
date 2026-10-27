@@ -16,7 +16,9 @@
   `uv run pytest tests/unit -q`: 458 passed, 83 skipped (Spark на хосте); ruff и mypy чистые.
 - Отметка verify: полный, 23.10 20:41 UTC, дерево `4153eaf` равно дереву HEAD. О текущем стеке она
   ничего не говорит.
-- Ноутбук выключен 24.10 01:25 UTC, включён 27.10 17:23 UTC (журнал System, события 1074, 6006).
+- Ноутбук выключен 24.10 01:25, включён 27.10 17:23 по времени Windows (UTC+4, `tzutil /g`:
+  Georgian Standard Time), то есть 23.10 21:25 и 27.10 13:23 UTC (журнал System, события 1074, 6006;
+  последние запуски DAG 23.10 21:25 UTC совпадают). `wevtutil` печатает местное время.
   Docker Desktop не запущен: `AutoStart = False`, интеграция с дистрибутивом `Ubuntu` уже включена
   (`IntegratedWslDistros`), данные Docker на `D:\DockerDesktop\DockerDesktopWSL`. Стек и реплей не
   проверены.
@@ -48,7 +50,7 @@ S3FileIO, `expire_snapshots` bronze (ADR-021), замена S3-слоя.
 
 | ID | Решение | Группа | Рекомендация | Цена отказа | Обратимо | Блокирует | Статус |
 |---|---|---|---|---|---|---|---|
-| W6-D1 | Источник образов MinIO и mc | B | сборка из исходников тех же тегов, ADR-026 | smoke красный, чистый клон не стартует | да | W6-T00 | принимается вердиктом `reviewer` в W6-T00 |
+| W6-D1 | Источник образов MinIO и mc | B | сборка из исходников тех же тегов, ADR-026 | smoke красный, чистый клон не стартует | да | W6-T00 | принято, B, 27.10: вердикт `reviewer` «принять» (второй проход по изменённым строкам; первый «принять с замечаниями», 11 замечаний закрыты); ADR-026 `Accepted`. Отклонения от текста: Go 1.24.6, healthcheck `wget`, `pull_policy: never`, ADR-004 заменён только по источнику образа |
 | W6-D2 | Расписание smoke до починки | A; правка `smoke.yml` идёт через ревью W6-T00 | только `workflow_dispatch` до первого зелёного | красный запуск каждый понедельник | да | ничего | принято исполнителем 27.10, A |
 | W6-D3 | Push и запуск smoke агентом | C | постоянное разрешение без force, строка в журнал | каждая карточка ждёт владельца на последнем шаге | нет, история публичная | W6-T00 часть 5, карточки на GitHub | ждёт владельца |
 | W6-D4 | Делегация на блок | C | как W4: решения A и B, коммиты, цикл verify | каждый коммит ждёт «ок» на diff | да | коммиты | ждёт владельца |
@@ -67,13 +69,20 @@ S3FileIO, `expire_snapshots` bronze (ADR-021), замена S3-слоя.
 **W6-D1. Источник образов MinIO и mc.** B.
 - Зачем: образы удалены из реестров, smoke падает на `make bootstrap`; ADR-004 закрепил quay.
 - Варианты: (a) сборка из исходников тех же тегов (`RELEASE.2025-09-07T16-13-09Z`, коммит
-  `01ce918`; mc `RELEASE.2025-08-13T08-35-41Z`, `d6541ea`) в `docker/minio/Dockerfile`, Go `1.24.2`
-  и `1.23.10` по digest, `CGO_ENABLED=0`, база с `curl` для healthcheck; (b) tar в GHCR владельца;
+  `07c3a429bfed433e49018cb0f78a52145d4bedeb`; mc `RELEASE.2025-08-13T08-35-41Z`, коммит
+  `7394ce0dd2a80935aded936b09fa12cbb3cb8096`; хеши `01ce918` и `d6541ea`, которые стояли здесь,
+  это объекты аннотированных тегов, не коммиты: `git ls-remote` строка `^{}`) в
+  `docker/minio/Dockerfile`, Go `1.24.6` по digest (официальные бинарники печатают
+  `Runtime: go1.24.6`; в `go.mod` тегов `toolchain` 1.24.2 и 1.23.10 это нижняя граница),
+  `CGO_ENABLED=0`, рантайм alpine (healthcheck через busybox `wget`, без `curl`); (b) tar в GHCR владельца;
   (c) форк `pgsty/silo` (живой, `RELEASE.2026-10-26`); (d) SeaweedFS, Garage, RustFS.
 - Рекомендация: (a). Тот же код и формат тома, ничего не публикуется, воспроизводится из репо.
 - Цена отказа: smoke красный, «чистый клон одной командой» недостижим, образы только в локальном
   хранилище Docker.
-- Обратимость: полная (строки `image` и `build` в compose; том не меняется).
+- Обратимость: полная, но блоком, а не строкой `image`: весь блок `minio` и `minio-init` в compose
+  из git (`image: quay.io/...`, без `build:` и `pull_policy`, healthcheck на `curl -sf`); в образе
+  upstream нет `wget`, и одна строка `image` оставит `minio` нездоровым. Том не меняется
+  (ревью W6-T00, замечание 1).
 - Последствия: Dockerfile с двумя target; сборка в CI дольше (не замерено); CVE тега 2025-09
   остаются, как и сейчас; upstream Dockerfile тега (`FROM minio/minio:latest`) не годится; ADR-026
   заменяет ADR-004.
@@ -206,8 +215,9 @@ verify), без реплея и живых правок. Владелец обе
 `docker/minio/create-bucket.sh`; ADR-004 (`DECISIONS.md:48-66`); `ls -la ~/lakehouse-image-backup/`.
 **Сделать.**
 0. `scout`: флаги сборки тега из `Makefile` и `buildscripts/` репозиториев `minio/minio` и
-   `minio/mc` на коммитах `01ce918` и `d6541ea` (`-ldflags`, `-tags`, `CGO_ENABLED`), digest образов
-   `golang:1.24.2` и `golang:1.23.10`, база для рантайма с `curl` и её digest. Источники с URL.
+   `minio/mc` на коммитах `07c3a429` и `7394ce0d` (теги `^{}`; `-ldflags`, `-tags`, `CGO_ENABLED`),
+   digest образов `golang:1.24.6-bookworm` и рантайма alpine, база для рантайма с `sh` и `wget`.
+   Источники с URL.
 1. ADR-026 первым, статус `Proposed` (замена ADR-004): код против ADR не пишется (`AGENTS.md`).
 2. Тест на отказ: `tests/unit/test_workflows.py` или `test_makefile.py` проверяет, что сервисы
    `minio` и `minio-init` собираются из `docker/minio/` и не ссылаются на `quay.io/minio`, а базовые
@@ -215,8 +225,9 @@ verify), без реплея и живых правок. Владелец обе
 3. `docker/minio/Dockerfile` (два target: `minio`, `mc`), `compose.yaml` с `build:` и `image:
    lakehouse/minio:<тег>`, `lakehouse/mc:<тег>`; hadolint в матрице `ci.yml`; `smoke.yml` по W6-D2;
    кэш слоёв сборки MinIO.
-4. OPERATIONS, README «Quick start». ADR-026 `Accepted`, ADR-004 `Superseded` только с вердиктом
-   `reviewer` «принять» (W6-D1, группа B).
+4. OPERATIONS, README «Quick start». ADR-026 `Accepted`, а у ADR-004 источник образа заменён
+   (статус «accepted; image source superseded by ADR-026», как у ADR-005: остальное решение
+   ADR-004 действует) только с вердиктом `reviewer` «принять» (W6-D1, группа B).
 5. Живая часть. Агент сам (класс A, `13-harness.md`): копия `~/lakehouse-image-backup/minio-images.tar`
    в `/mnt/d/lakehouse-backup/` и `docker load -i` с проверкой, что digest образов до и после равны
    (не равны: стоп). По W6-D3: push, `gh workflow run smoke.yml --ref main`. По «ок» (C): на живом
@@ -227,11 +238,24 @@ run); после пересоздания на живом стеке `make verif
 до и после равно.
 **Ловушки.** Upstream Dockerfile тега тянет `minio/minio:latest`, его не брать. Флаги сборки MinIO
 (`-ldflags` с версией) сверить с `Makefile` тега, не по памяти. Не делать `docker image prune`.
-После коммита compose любой `make start`, `make up` или `compose up` без `--no-deps` пересоздаст
-`minio` на новом образе: это шаг части 5, только по «ок».
+`make start`, `make up` и `compose up` без `--no-deps` читают compose рабочего дерева: уже с правки
+файла они собирают `minio` и `minio-init` (`make start` идёт с `--build`, `minio` зависимость
+`spark-bronze`) и пересоздают их, когда id образа отличается от id запущенного. Это шаг части 5,
+только по «ок»; до него `make start` не запускать.
 **Blast radius и пайплайн.** Код: нет. Живое пересоздание `minio`: стек без S3 на десятки секунд,
 bronze и DAG ретраят; том не меняется.
 **Не входит.** Замена S3-слоя, переход на форк.
+
+**Итог 27.10 (части 0-4; часть 5 не начата).**
+
+```text
+Критерий: «docker run --rm lakehouse/minio:<тег> --version» печатает тег RELEASE.2025-09-07T16-13-09Z; «make lint», «make test» зелёные (14-closeout-spec.md, W6-T00 «Готово, когда»); smoke и живой стек: часть 5
+Изменение: 6e114af (10 файлов: docker/minio/Dockerfile, docker/compose.yaml, .github/workflows/ci.yml и smoke.yml, scripts/check-minio-images.sh, tests/unit/test_minio_image.py и test_workflows.py, DECISIONS.md ADR-026, OPERATIONS.md, README.md); исполнитель оркестратор, ADR и доки он же, тест и код он же (implementer не привлекался: одна карточка, связанные файлы), разведка scout, ревью reviewer
+Проверка: docker run --rm lakehouse/minio:RELEASE.2025-09-07T16-13-09Z --version -> «minio version RELEASE.2025-09-07T16-13-09Z (commit-id=07c3a429bfed433e49018cb0f78a52145d4bedeb)», Runtime go1.24.6; mc -> «mc version RELEASE.2025-08-13T08-35-41Z (commit-id=7394ce0dd2a80935aded936b09fa12cbb3cb8096)»; bash scripts/check-minio-images.sh <оба образа> -> «minio images ok» (build info vcs.revision и vcs.modified=false, sh и wget, healthcheck compose, create-bucket.sh дважды, mc admin info: version 2025-09-07T16:13:09Z и commitID); uv run pytest tests/unit -q -> 581 passed, 83 skipped; make lint rc 0; hadolint 2.15.1 rc 0; server --help и mc --help идентичны официальным; make verify -> verify ok (full 2026-10-27T15:43:00Z, HEAD 5ca361a плюс дерево коммита), 27.10 UTC
+Независимо: reviewer, два прохода: «принять с замечаниями» (1 высокое, 4 средних, 6 низких, все закрыты) и «принять» по изменённым строкам (5 низких, закрыты); W6-D1 остаётся группой B, ADR-026 Accepted. Мутации (скрипт в scratchpad) убиты тестами и скриптом проверки
+Не проверено: smoke и job minio-images на GitHub (push по W6-D3: gh workflow run smoke.yml --ref main, gh run view <id>); время холодной сборки в CI; docker load архива (образы quay уже в хранилище с теми же digest: 14cea493... и a7fe349e...); живая смена образа minio и minio-init, make verify-fast после неё, число объектов в бакете до и после (часть 5, «ок» по шаблону); make test-spark, dags-check, alerts-test (diff их не задевает)
+Риски: make start, make up и compose up читают compose рабочего дерева и пересоздадут minio и minio-init на новом образе (до части 5 не запускать); откат только блоком compose из git, не строкой image; остальные build-сервисы compose без pull_policy (раздел 7); теги lakehouse/minio:ci, lakehouse/mc:ci, lakehouse/minio:mut остались в хранилище (удаление образов класс C); часть 5 копия tar на /mnt/d/lakehouse-backup/ ещё не сделана (каталога нет)
+```
 
 ### W5-T05b Первые живые запуски обслуживания (поправки к `10-w5-spec.md:347-387`)
 
@@ -397,8 +421,6 @@ W6-D14. `docs/evidence.md`: числа chaos 1-9, сверка, обслужив
 
 | # | Задача | Область | Зависит от |
 |---|---|---|---|
-| # | Задача | Область | Зависит от |
-|---|---|---|---|
 | 0 | Внедрение регламента: владелец применяет патч хука и коммитит (`13-harness.md`, раздел 10) | `infra` | владелец |
 | 1 | Старт сессии; со стеком: проверка контейнеров, образов (MinIO на месте), версий, `verify-fast` | | Docker для живой части |
 | 2 | W6-T00, части 0-4 (код, ADR-026) | `infra`, `ci` | ничего |
@@ -449,3 +471,8 @@ W6-D14. `docs/evidence.md`: числа chaos 1-9, сверка, обслужив
 - JDBC-строки `iceberg_catalog`, два анонимных тома, лаб-топики `lab.orders.*`, `lake.demo.meta_probe`:
   удаление в blast radius, решение владельца.
 - dbt 1.10.23 deprecated, S3FileIO и vended credentials, снятие запрета expire bronze (ADR-021).
+- Ревью W6-T00, замечание 4: у остальных сервисов compose с собственным `build:` (`spark-bronze`,
+  `kafka-connect`, `oltp-replayer`, `airflow-api-server`, `container-exporter`) тоже нет
+  `pull_policy` (`yaml.safe_load` по `services`, 27.10), а `lakehouse` на Docker Hub чужой
+  неймспейс; `spark-silver` и `spark-orders-per-minute` уже с `never`. Кандидат в буфер:
+  `pull_policy: never` и тот же тест; `minio` и `minio-init` закрыты в W6-T00.

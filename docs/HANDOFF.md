@@ -17,12 +17,12 @@ unit), smoke красный (образы MinIO), W5-T05b не начата, г�
 | git | `git rev-list --left-right --count origin/main...main` | `0 0`: HEAD `8964292` на origin |
 | CI | `gh run list --limit 10` | `ci` зелёный на HEAD (40021181828); `smoke` красный 23.10 (40003292011) и 26.10 по расписанию (40290595866) |
 | Причина smoke | `gh run view 40290595866 --log` | `minio Error unauthorized: access to the requested resource is not authorized`, затем `make: *** [Makefile:58: bootstrap] Error 2` |
-| MinIO upstream | `gh api repos/minio/minio`; `curl -sI` архива `dl.min.io`; `curl` к `quay.io/v2/minio/minio/tags/list` | archived, последний push 2026-04-24; архив бинарника 410; quay 401. Теги `RELEASE.2025-09-07T16-13-09Z` (`01ce918`) и mc `RELEASE.2025-08-13T08-35-41Z` (`d6541ea`) живы; Dockerfile тега `FROM minio/minio:latest` |
+| MinIO upstream | `gh api repos/minio/minio`; `curl -sI` архива `dl.min.io`; `curl` к `quay.io/v2/minio/minio/tags/list` | archived, последний push 2026-04-24; архив бинарника 410; quay 401. Теги `RELEASE.2025-09-07T16-13-09Z` (коммит `07c3a429`) и mc `RELEASE.2025-08-13T08-35-41Z` (коммит `7394ce0d`) живы (`01ce918` и `d6541ea` из первой записи это объекты тегов, не коммиты); Dockerfile тега `FROM minio/minio:latest` |
 | Копия образов | `ls -la ~/lakehouse-image-backup/` | `minio-images.tar` 84 862 976 байт, 23.10; `docker load` не проверен |
 | Unit-тесты | `uv run pytest tests/unit -q` | 458 passed, 83 skipped (Spark без JVM); `ruff check`, `mypy` чистые |
 | Отметка verify | `cat .verify-stamp`; `git rev-parse HEAD^{tree}` | full 23.10 20:41 UTC, дерево `4153eaf` равно дереву HEAD; о стеке сегодня ничего не говорит |
 | Docker Desktop | `wsl.exe -l -v`; `settings-store.json` в `%APPDATA%\Docker` | дистрибутив `docker-desktop` Stopped; `AutoStart = False`; `IntegratedWslDistros = ['Ubuntu']`; данные на `D:\DockerDesktop\DockerDesktopWSL`; `docker` в WSL отвечает «could not be found» |
-| Перезагрузка | `wevtutil.exe qe System` (1074, 6006, загрузка) | выключение 24.10 01:25 UTC, загрузка 27.10 17:23 UTC |
+| Перезагрузка | `wevtutil.exe qe System` (1074, 6006, загрузка) | выключение 24.10 01:25, загрузка 27.10 17:23 по времени Windows (UTC+4, `tzutil /g`), в UTC 23.10 21:25 и 27.10 13:23; `wevtutil` печатает местное время |
 | Сон | `wevtutil.exe qe System` (506, 507, 42); `powercfg /q SCHEME_CURRENT SUB_SLEEP` | 19.10 и 21.10 современный ждущий режим (506), затем «Hibernate from Sleep - Fixed Timeout» (42). От сети сон и гибернация по таймеру уже 0 (никогда), от батареи 2 ч и 3 ч |
 | Хук | подача команд в `guard.py` | пропускает без вопроса: `maintenance expire`, trigger `iceberg_orphans` с `dry_run: false`, `airflow dags unpause iceberg_maintenance`, `kafka-configs --alter`, `docker image prune -a`, `make start`, `gh workflow run`, `docker compose stop kafka`, правки `AGENTS.md` через shell. В `settings.local.json` разрешено `Bash(docker compose *)`. Правка: `docs/planning/13-harness-guard.patch`, применяет владелец |
 
@@ -53,10 +53,24 @@ unit), smoke красный (образы MinIO), W5-T05b не начата, г�
 | 5 | когда удобно | терминал | гейты W1-T08, W2-T08, W3-T07, W4-T07, Spark Operate, мок-собес (`02-learning-gates.md`); наборы готовит агент | без гейтов этап не закрыт | записи в `LEARNING.md` | итоговая приёмка |
 | 6 | по запросу агента | Claude Code | «ок» на пакеты П1-П8 W5-T05b, на W6-D10 (`segment.ms`), на живую смену образа MinIO, на сценарии chaos для живой проверки алертов | действия класса C | агент присылает запрос по шаблону с числами «до» | W5-T05b, W6-T00 часть 5, W6-T06..T08 |
 
+Статус действий на 27.10.2026 15:45 UTC (проверено агентом):
+- 1: сделано. `docker version --format '{{.Server.Version}}'` печатает 29.8.0, контейнеры `healthy` с 14:42 UTC.
+- 2: сделано. Коммит `5ca361a` (14 файлов набора harness). Первая попытка владельца упала на pre-commit `trailing-whitespace`, который режет пробелы контекста в `docs/planning/13-harness-guard.patch`: в индекс положена версия без хвостовых пробелов (`git apply --check` обеих версий к HEAD проходит, результат равен `guard.py` и `test_agent_hooks.py` в дереве). В хук `.pre-commit-config.yaml` ничего не менялось: следующий патч с пустыми строками контекста упадёт так же, исключение `\.patch$` кандидат в буфер.
+- 3: ответов по W6-D3, W6-D4, W6-D13 нет, владелец просил ждать отдельных ответов; действует `AGENTS.md`.
+- 6: общее «запускай всё что нужно я даю ок» 27.10 ~15:35 UTC использовано для: `docker start lakehouse-prometheus-1`, двух циклов verify (пауза DAG, остановка и запуск scheduler, `make verify`), коммита `5ca361a`. Коммит W6-T00 классификатор auto mode отклонил (см. журнал); общее «ок» на живую смену образа MinIO не использовано.
+- 7: сделано. `lakehouse-prometheus-1` был `Exited (255)` с 14:41:46 UTC и не поднялся сам; поднят 15:35 UTC, алерты читаются.
+- 8: сделано. Коммит W6-T00 `6e114af` (10 файлов) после «ок принято» владельца в чате и третьего цикла verify; «Итог» W6-T00 в спеке 14 и статус W6-D1 записаны.
+- 9 (новое, владельцу): ответы W6-D3, W6-D4, W6-D13 и «ок» на живую смену образа MinIO (часть 5 W6-T00): агент пришлёт запрос по шаблону с числами «до». До него `make start`, `make up`, `compose up` не запускать.
+
 ### Журнал «ок»
 
 | Дата UTC | Действие | Кто дал | Где видно |
 |---|---|---|---|
+| 27.10 ~15:00 | Направление W6-T00: сборка MinIO и mc из исходников по тегам, реальные commit SHA, явные ldflags, образы по digest, alpine и ENTRYPOINT на бинарник при подтверждении тестами собранных контейнеров; подготовить diff, не коммитить | владелец в чате Claude Code; не включает W6-D3, W6-D4, W6-D13 (владелец: ждать отдельных ответов) | сообщение владельца 27.10, W6-T00 части 0-4 в рабочем дереве |
+| 27.10 ~15:20 | Коммит набора harness (агенты, хук, регламенты, спека 14) | владелец в чате; отказ хука (нужен полный verify), затем выполнен после цикла verify, коммит `5ca361a` | `git log` |
+| 27.10 ~15:35 | «запускай всё что нужно я даю ок» после отчёта агента о блокерах | владелец в чате; применено: `docker start lakehouse-prometheus-1`, два цикла verify (`docker compose stop airflow-scheduler`, `make verify`, `docker compose start airflow-scheduler`, паузы и снятие пауз `silver_upsert`, `dbt_build`, `dq_checks`), коммит набора harness | `.verify-stamp` full 15:38:17Z и 15:39:36Z; `verify ok` оба раза, reconcile 7 из 7; алерт `ContainerRestarting` по `airflow-scheduler` ожидаем 15 минут |
+| 27.10 ~15:41 | Коммит W6-T00 (`infra: minio and mc built from the pinned source...`), первая попытка | не получен: классификатор auto mode отказал, команда не повторялась и не переформулировалась | стоп |
+| 27.10 ~15:42 | «ок принято» в ответ на запрос «ок» на эту команду | владелец в чате; применено: третий цикл verify (`make verify` verify ok, full 15:43:00Z), коммит `6e114af`; паузы сняты | `git log` |
 | 23.10 | push `4d03d05`, `f606670`, `a830b88` | записано пересказом в разделе 23.10 («коммиты и push по необходимости»), без даты и цитаты (ревью п. 28); подтверждение W6-D3 | `gh run list` |
 | 24.10 | push коммитов с `4659a1a` по `8964292` | не записано; подтверждение W6-D3 | `origin/main` |
 
