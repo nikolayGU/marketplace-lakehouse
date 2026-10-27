@@ -53,6 +53,7 @@ jobs:
         dockerfile:
           - airflow/Dockerfile
           - docker/connect/Dockerfile
+          - docker/minio/Dockerfile
           - observability/container-exporter/Dockerfile
           - oltp/Dockerfile
           - streaming/Dockerfile
@@ -103,5 +104,33 @@ jobs:
       # with its Jinja and its mapping rules.
       - name: every DAG imports in the image
         run: make dags-check AIRFLOW_IMAGE=lakehouse/airflow:ci
+
+  # ADR-026: no registry serves MinIO and mc, so they are built from the source of their tags.
+  # The check runs the built images: the release and the commit they print, sh and wget, MinIO
+  # healthy on the compose healthcheck, create-bucket.sh (minio-init) twice.
+  minio-images:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/build-push-action@v7
+        with:
+          context: docker/minio
+          target: minio
+          tags: lakehouse/minio:ci
+          load: true
+          cache-from: type=gha,scope=minio
+          cache-to: type=gha,mode=max,scope=minio
+      - uses: docker/build-push-action@v7
+        with:
+          context: docker/minio
+          target: mc
+          tags: lakehouse/mc:ci
+          load: true
+          cache-from: type=gha,scope=mc
+          cache-to: type=gha,mode=max,scope=mc
+      - name: the images do what compose needs
+        run: bash scripts/check-minio-images.sh lakehouse/minio:ci lakehouse/mc:ci
 
 # smoke: smoke.yml (W5-T03).

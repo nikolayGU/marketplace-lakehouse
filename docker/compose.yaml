@@ -144,8 +144,15 @@ services:
 
   minio:
     <<: *common
-    # ADR-004: last community release, pulled from quay.io (the Docker Hub repo was removed).
-    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+    # ADR-026: the last community release, built from the source of its tag (no registry serves
+    # it any more). The runtime is alpine, which has wget and no curl.
+    build:
+      context: ./minio
+      target: minio
+    image: lakehouse/minio:RELEASE.2025-09-07T16-13-09Z
+    # Never pulled: `lakehouse` on Docker Hub is somebody else's namespace, and with the image
+    # absent (a clean clone) compose would try the registry before it builds.
+    pull_policy: never
     profiles: [core]
     command: server /data
     environment:
@@ -156,7 +163,7 @@ services:
     ports:
       - "${BIND_IP}:9000:9000"
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:9000/minio/health/live"]
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:9000/minio/health/live"]
       interval: 10s
       timeout: 5s
       retries: 6
@@ -167,7 +174,12 @@ services:
     networks: [lake]
 
   minio-init:
-    image: quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z   # creates bucket + warehouse prefix
+    # Creates the bucket and the warehouse prefix; built with minio from the same Dockerfile (ADR-026).
+    build:
+      context: ./minio
+      target: mc
+    image: lakehouse/mc:RELEASE.2025-08-13T08-35-41Z
+    pull_policy: never
     profiles: [core]
     depends_on:
       minio:

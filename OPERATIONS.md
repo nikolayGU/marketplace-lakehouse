@@ -637,15 +637,47 @@ branch cancels the older pull request run.
 | `hadolint` | one run per Dockerfile (matrix, a test compares it with `find`), fails on warning and above; accepted findings sit in the Dockerfile as `# hadolint ignore=` with the reason |
 | `spark-tests` | builds `lakehouse/spark:ci` (layer cache `type=gha`, scope `spark`) and runs `make test-spark SPARK_IMAGE=lakehouse/spark:ci`; `FAIL_ON_SKIP=1` (`tests/unit/conftest.py`) turns any skip, `pytest.skip()` and `importorskip` included, into a failure |
 | `airflow-image` | builds `lakehouse/airflow:ci` (scope `airflow`), imports Airflow, trino, psycopg and pydantic-settings, runs `dbt --version` in its venv, and `make dags-check`: every DAG file imports in the image, offline, with `docker/airflow/airflow.env` |
+| `minio-images` | builds `lakehouse/minio:ci` and `lakehouse/mc:ci` from `docker/minio/Dockerfile` (scopes `minio`, `mc`) and runs `bash scripts/check-minio-images.sh`: the release and commit each binary prints, `sh` and `wget` in both images, a throwaway MinIO healthy on the compose healthcheck, `create-bucket.sh` (minio-init) twice |
 
-`.github/workflows/smoke.yml` (on demand and Mondays 03:00 UTC, 45 minutes at most) walks the path
+`.github/workflows/smoke.yml` (on demand only until its first green run, W6-D2; 45 minutes at most) walks the path
 from a clean clone on the committed sample: `make secrets` with `REPLAY_DATA=sample`, `make
 bootstrap`, a 60 s `make replay-burst`, `make verify`, a second `make bootstrap` (must say
-`replay state exists, load skipped` and end `verify ok`). It builds the Spark and Connect images from
-scratch, so it is cold every time. Run it: `gh workflow run smoke.yml --ref main`, then
+`replay state exists, load skipped` and end `verify ok`). It builds the Spark, Connect, MinIO and mc
+images from scratch, so it is cold every time. Run it: `gh workflow run smoke.yml --ref main`, then
 `gh run watch <id> --exit-status`. On failure it uploads `smoke-logs` (container state and the last
-200 log lines of every service). First run 2026-10-23 (run 40003292011): red at `make start`, the
-MinIO images are gone from quay.io and Docker Hub (ADR-004 needs a successor, see docs/HANDOFF.md).
+200 log lines of every service). Runs 2026-10-23 (40003292011) and 2026-10-26 (40290595866, the
+Monday schedule): red at `make start`, the MinIO images are gone from quay.io and Docker Hub; they
+are built from source since ADR-026. The schedule (`0 3 * * 1`) returns after the first green run.
+
+### MinIO and mc images (ADR-026)
+
+`docker/minio/Dockerfile` builds both from the source of the tags of ADR-004
+(`RELEASE.2025-09-07T16-13-09Z`, `RELEASE.2025-08-13T08-35-41Z`): `git clone` of the tag, a check
+that `HEAD` is the commit written in the `ARG`, `CGO_ENABLED=0`, explicit `-ldflags`, Go
+`1.24.6-bookworm` and `alpine:3.22` pinned by digest. `docker compose` builds them (`minio` target
+`minio`, `minio-init` target `mc`) as `lakehouse/minio:<tag>` and `lakehouse/mc:<tag>`.
+- Check built images: `bash scripts/check-minio-images.sh lakehouse/minio:<tag> lakehouse/mc:<tag>`
+  (a throwaway container, no port, the live stack is not touched).
+- Changing a tag: the `ARG` pair (tag and commit, `git ls-remote <repo> 'refs/tags/<tag>^{}'`), the
+  `image:` line in compose and the two constants in `tests/unit/test_minio_image.py`.
+- A host short of memory: `--build-arg GOFLAGS=-p=2` (`docker compose build --build-arg
+  GOFLAGS=-p=2 minio minio-init`). The first build on 2026-10-27 with that flag (an earlier
+  revision of the same Dockerfile; the compile step took 137 s) took about 4 minutes for `minio`
+  including the pull of the Go image and under half a minute for `mc` after it; 40 s for `minio`
+  when only the ldflags changed (the Go build cache stays in the builder). A cold CI run is not
+  measured yet: `gh run view <id>` of the first `minio-images` job.
+- The healthcheck is `wget -q --spider` because the runtime has no `curl`; `pull_policy: never`
+  keeps compose from trying Docker Hub, where `lakehouse` is somebody else's namespace.
+- A compose command that creates containers (`make start`, `make up`, `compose up`) reads the
+  compose file of the working tree: from the moment it names `lakehouse/minio:<tag>` it builds
+  `minio` and `minio-init` (`make start` has `--build` and `minio` is a dependency of
+  `spark-bronze`) and recreates them when the image id differs from the running container's. The
+  data volume does not change. On a live stack that is a separate step with its own "ok".
+- Rollback: the whole compose block of `minio` and `minio-init` as it was in git (`image:
+  quay.io/minio/...`, no `build:` and no `pull_policy`, healthcheck `curl -sf ...`), not the
+  `image:` line alone: the upstream image has no `wget`, `minio` would stay unhealthy and
+  everything that waits for `minio-init` with it. The images of ADR-004 stay in the local store;
+  do not prune them (`~/lakehouse-image-backup/minio-images.tar` is the copy).
 
 Repeat locally: `make test-spark` (213 tests in CI run 40011971965, 2026-10-23), `make dags-check`.
 `make test-spark` pins `pytest` and `jsonschema` to the versions in `uv.lock`

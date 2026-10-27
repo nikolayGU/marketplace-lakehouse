@@ -8,7 +8,7 @@ superseded. Longer reasoning lives in `docs/planning/00-mini-architecture-review
 | ADR-001 | Real data via Olist replay, not synthetic generators | accepted |
 | ADR-002 | Two PostgreSQL instances: `postgres-oltp` (CDC source) and `postgres-meta` | accepted |
 | ADR-003 | Kafka 4 KRaft, single broker, RF=1, 3 partitions per topic, retention 24h | accepted |
-| ADR-004 | Object storage: MinIO, last community release pulled from quay.io (Docker Hub repo removed) | accepted |
+| ADR-004 | Object storage: MinIO, last community release pulled from quay.io (Docker Hub repo removed) | accepted; the image source is superseded by ADR-026 |
 | ADR-005 | JDBC catalog in `postgres-meta` first; REST catalog (Lakekeeper) as should-have after the vertical slice | accepted; Spark and Trino switched to Lakekeeper, cutover done 2026-10-08 |
 | ADR-006 | Spark 3.5 + Iceberg 1.11 runtime in `local[2]`, no standalone cluster | accepted |
 | ADR-007 | Bronze append-only streaming (at-least-once contract, idempotent epoch commit verified 2026-09-26 and 2026-10-07); silver via AvailableNow + foreachBatch MERGE is the no-duplicates guarantee | accepted |
@@ -30,6 +30,7 @@ superseded. Longer reasoning lives in `docs/planning/00-mini-architecture-review
 | ADR-023 | Observability sources: own `container-exporter` on the Docker API instead of cAdvisor; retained WAL from a custom postgres-exporter query; JMX agent in an own Connect image layer; StatsD for Airflow and `dq_checks`; no Alertmanager | accepted |
 | ADR-024 | Stateful job `orders_per_minute`: reads Kafka, not bronze; own service in profile `stateful`; distinct count under a 5 minute watermark in `update` mode; MERGE that never lowers a count | accepted |
 | ADR-025 | Iceberg maintenance policy: silver and gold keep 7 days of snapshots, bronze is only compacted and its metadata cleaned and never expired; orphan files weekly, dry run by default; the Spark job refuses what the policy forbids | accepted |
+| ADR-026 | MinIO and `mc` are built from the source of the pinned release tags (`docker/minio/Dockerfile`), because no registry serves the images any more; replaces the image source of ADR-004 | accepted |
 
 ## ADR-001 Real data via Olist replay
 
@@ -734,3 +735,70 @@ sees a new id and one empty merge and one `dbt_build` follow (an extra run, not 
 bronze is never expired, the compaction does not free space (the old files stay in older snapshots).
 Time travel deeper than 7 days on silver and gold is gone by design (chaos 9 rolls a mart back by one
 snapshot, well within).
+
+## ADR-026 MinIO and mc built from the pinned source
+
+Status: accepted (2026-10-27, W6-D1, group B: it keeps the components, the versions and the volume
+format and changes only where the binaries come from; independent review of the diff, verdict
+"accept" after a second pass on the changed lines). Replaces the image source of ADR-004; the
+rest of ADR-004 (MinIO as the store, `mc` as the console, the fallbacks) stands.
+
+Context (checked 2026-10-27):
+- `quay.io/minio/minio` and `quay.io/minio/mc` no longer pull in CI: the weekly smoke of 2026-10-26
+  (run 40290595866) stopped at `minio Error unauthorized`, and `make bootstrap` with it. The Docker
+  Hub repositories were already gone (ADR-004), the `dl.min.io` archive answers 410.
+- `minio/minio` and `minio/mc` are archived on GitHub (AGPL-3.0) but the tags still resolve:
+  `RELEASE.2025-09-07T16-13-09Z` is commit `07c3a429bfed433e49018cb0f78a52145d4bedeb`, mc
+  `RELEASE.2025-08-13T08-35-41Z` is `7394ce0dd2a80935aded936b09fa12cbb3cb8096` (`git ls-remote`, the
+  `^{}` line; the shorter hashes of the tag objects, `01ce918` and `d6541ea`, are not commits).
+- The images of ADR-004 exist only in the local Docker store and in a tar copy: a clean clone
+  cannot start, and neither can the CI runner.
+- The Dockerfile of the tag starts from `FROM minio/minio:latest` and `Dockerfile.release` of mc
+  downloads a binary from the dead archive: neither builds the tag from source.
+
+Decision: `docker/minio/Dockerfile` with two targets, `minio` and `mc`, built by `docker compose`
+(`build:` with `image: lakehouse/minio:<tag>` and `lakehouse/mc:<tag>`).
+- **Source:** `git clone --branch <tag>` and a check that `git rev-parse HEAD` equals the commit
+  SHA written in the Dockerfile, so a moved tag fails the build.
+- **Flags** as in the `Makefile` of each tag (`CGO_ENABLED=0`, `-tags kqueue`, `-trimpath`), with
+  `-ldflags` given explicitly: upstream `gen-ldflags.go` takes the version from `git log` and
+  calls the result `DEVELOPMENT.<date>` unless `MINIO_RELEASE` is set, and the tests of this repo
+  must not depend on git history. `Version`, `CopyrightYear`, `ReleaseTag`, `CommitID` and
+  `ShortCommitID` are set, so `--version` prints what the official image printed.
+- **Go:** `golang:1.24.6-bookworm` by digest for both. The official binaries report
+  `Runtime: go1.24.6` (probed on the local images); `toolchain go1.24.2` and `go1.23.10` in `go.mod`
+  are only floors, and a newer standard library is the safer side of them.
+- **Runtime:** `alpine:3.22` by digest, the binary as `ENTRYPOINT`, `CMD ["server", "/data"]`
+  for MinIO, so `command: server /data` of compose is unchanged. What the upstream image has and
+  this one has not: the wrapper `docker-entrypoint.sh` (puts `minio` before a first argument that
+  is not `minio`, and switches user when `MINIO_USERNAME` and `MINIO_GROUPNAME` are set); the
+  variables `MINIO_ACCESS_KEY_FILE`, `MINIO_SECRET_KEY_FILE`, `MINIO_ROOT_USER_FILE`,
+  `MINIO_ROOT_PASSWORD_FILE` and `MINIO_KMS_SECRET_KEY_FILE` that make the binary read Docker
+  secrets from `/run/secrets` (compose passes plain variables, and a missing secret file is
+  ignored; `MINIO_CONFIG_ENV_FILE` is kept); `MINIO_UPDATE_MINISIGN_PUBKEY`
+  and `MC_CONFIG_DIR`; `mc` and `curl` inside the minio image (nothing in the repo runs them in that container).
+  There is no `curl` here: `apk add curl` cannot be pinned (the
+  mirror keeps the current version only, and hadolint fails CI on an unpinned one), so the
+  healthcheck is `wget -q --spider` of busybox against the same `/minio/health/live`; `mc` needs
+  only `sh` for `create-bucket.sh`.
+- **Never pulled:** `pull_policy: never` on `minio` and `minio-init`. `lakehouse` on Docker Hub is
+  somebody else's namespace (it holds `lakehouse/osmosis`; `lakehouse/minio` and `lakehouse/mc`
+  answer 404 today), and compose tries the registry before it builds when the image is absent and
+  the command has no `--build` (a plain `compose up`, `make lakekeeper-bootstrap`; `make start`
+  has `--build`). A tag published there later would run with the S3 root keys in its environment.
+- **Not done:** no image is published anywhere (AGPL: nothing is distributed), no fork, no change
+  of S3 layer. The licence text of the tag goes to `/licenses/` in both images.
+
+Alternatives: a tar of the images in the owner's GHCR (publication, owner's decision); the
+`pgsty/silo` fork (new code on a live volume); SeaweedFS, Garage or RustFS (replacing the S3 layer,
+a change of the project's boundaries). Each stays open if this one stops working.
+
+Consequences: the same code and the same volume, so the swap of a running stack is a recreate of
+`minio` and `minio-init` with nothing to migrate. Rollback is the whole compose block of both
+services as it was (`image: quay.io/minio/...`, no `build:` and `pull_policy`, healthcheck
+`curl -sf ...`), from git: the upstream image has no `wget`, so putting back only `image:` leaves
+`minio` unhealthy and `minio-init`, `spark-bronze` and what depends on them waiting. The old
+images stay in the local store, do not prune them. The CVEs of the 2025-09 tag stay, as ADR-004
+said.
+The build needs the network (GitHub, the Go module proxy) and takes minutes on a cold cache, which
+CI keeps in the layer cache. `README` and `OPERATIONS` say "built from source", not "pulled".

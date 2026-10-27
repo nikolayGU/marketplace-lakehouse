@@ -64,6 +64,13 @@ committed 2 000-order slice in `data/sample`. From a fresh clone on the sample, 
 took 4 minutes with the images built; the first build of the Spark image adds about 80 seconds
 with its base image already pulled, mostly 400 MB of jars (2026-10-17).
 
+MinIO and its `mc` client are built from the source of their last community tags on the first
+start (no registry serves the images any more, ADR-026): it needs the network for GitHub and the
+Go module proxy. The first build on a laptop (2026-10-27, `--build-arg GOFLAGS=-p=2`, an earlier
+revision of the same Dockerfile) took about 4 minutes for MinIO and under half a minute for `mc`
+after it; the cold time on a CI runner is not measured. On a host short of memory build them first:
+`docker compose --env-file .env -f docker/compose.yaml build --build-arg GOFLAGS=-p=2 minio minio-init`.
+
 `make start` brings up `core` and `query` without the replayer container, which would play the
 rest of the history at full speed; `make up` refuses any `PROFILE` that contains `core`
 (ADR-016). Never start every profile at once on 16 GB. Working combinations are listed in
@@ -109,12 +116,13 @@ set of primary keys and sums of decimal columns. Planned (weeks 3 and 5): dbt te
 
 ## Testing and CI
 
-CI (`.github/workflows/ci.yml`) has four jobs: `lint-and-test` (`uv sync --locked`, `ruff`,
+CI (`.github/workflows/ci.yml`) has five jobs: `lint-and-test` (`uv sync --locked`, `ruff`,
 `mypy`, `sqlfluff`, `yamllint`, `dbt parse`, `pytest tests/unit`, `docker compose config`,
-`gitleaks`), `hadolint` on the five Dockerfiles, `spark-tests` (builds `lakehouse/spark:ci` and runs
-`make test-spark` in it, where the Iceberg jar exists and a skipped test is a failure) and
-`airflow-image` (builds the Airflow image and imports what the DAGs need). `smoke.yml` (on demand and
-weekly) walks the clean-clone path on the sample.
+`gitleaks`), `hadolint` on the six Dockerfiles, `spark-tests` (builds `lakehouse/spark:ci` and runs
+`make test-spark` in it, where the Iceberg jar exists and a skipped test is a failure),
+`airflow-image` (builds the Airflow image and imports what the DAGs need) and `minio-images`
+(builds MinIO and `mc` from source and runs them, ADR-026). `smoke.yml` (on demand only until its
+first green run) walks the clean-clone path on the sample.
 
 ## What I learned
 
