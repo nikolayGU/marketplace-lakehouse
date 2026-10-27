@@ -39,6 +39,8 @@ Olist), Debezium, Kafka, Spark bronze и silver (`MERGE`), Iceberg в Lakekeeper
 - `session_context.py`: на старте сессии подгружает git, отметку verify, HANDOFF, NEXT_SESSION.
 - `guard.py` читает текст команды: правку, в тексте которой есть такие слова, делать через Edit.
 - Правки `.claude/hooks/` агент готовит в копии в scratchpad, владелец применяет их командой `cp`.
+- Полный список того, что спрашивает хук: docstring `guard.py`. Классы действий агента и правка
+  хука, ждущая владельца: `docs/planning/13-harness.md`, разделы 2 и 10.
 
 ## Цикл
 
@@ -91,6 +93,8 @@ Olist), Debezium, Kafka, Spark bronze и silver (`MERGE`), Iceberg в Lakekeeper
 
 ## Подагенты
 
+- Роли `scout`, `implementer`, `reviewer`, `docs-writer`: `.claude/agents/`; брифы, ревью и
+  доказательства: `docs/planning/13-harness.md`.
 - Сканеры только читают, модель Sonnet, effort medium.
 - Параллельная запись только в разные файлы; сведение и коммит в основной сессии.
 - Итог проверяет независимый агент в свежем контексте.

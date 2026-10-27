@@ -1,0 +1,424 @@
+diff --git a/.claude/hooks/guard.py b/.claude/hooks/guard.py
+index 5b0ee9d..e237a5f 100644
+--- a/.claude/hooks/guard.py
++++ b/.claude/hooks/guard.py
+@@ -2,11 +2,15 @@
+ """PreToolUse guard for AGENTS.md's hard rules.
+
+ deny (exit 2, stderr is the reason): writes to secret files, force push, DROP, TRUNCATE, DELETE
+-without WHERE, advancing or dropping a replication slot, shell writes to .env, and `git commit`
+-unless a full `make verify` passed on this working tree (.verify-stamp; Markdown and docs/ edited
+-after it do not count) or runs right before it in the same `&&` chain.
+-ask (a permission prompt, so the owner's ok is a click): replay, silver and other lake writes,
+-push, rebase, history rewrites, volume and recursive deletes, connector and Postgres settings, DDL.
++without WHERE, advancing or dropping a replication slot, pg_logical_emit_message, shell writes to
++.env, writes to the hooks and settings in this repository's .claude/, and `git commit` unless a
++full `make verify` passed on this working tree (.verify-stamp; Markdown and docs/ edited after it
++do not count) or runs right before it in the same `&&` chain.
++ask (a permission prompt, so the owner's ok is a click): replay and scenarios, source, silver and
++other lake writes, Iceberg maintenance and its DAGs, push, rebase, history rewrites, discarded work,
++volume, image and recursive deletes, stopped, removed or recreated containers (not the scheduler
++stop of the verify cycle), Kafka topic settings, connector, catalog and Postgres settings, DDL,
++actions on GitHub, Windows and WSL settings, edits of the agent roles and rules.
+ The match is on the command text. A command made only of searches and reads (grep, rg, git log,
+ cat and the like, no substitution or redirect) runs none of these words and passes. If the guard
+ itself fails, it asks instead of letting the call through.
+@@ -47,6 +51,43 @@ SHELL_WRITE_ENV = re.compile(
+     r"|\b(cp|mv|install|ln)\b[^\n;|&]*\s[\"']?[^\s;|&]*\.env(\.(?!example\b)[^\s;|&\"']*)?[\"']?"
+     r"(\s+[12]?>>?\s*\S+)*\s*($|[;&|\n])"
+ )
++# Pg_logical_emit_message lands in topic oltp.message and stopped CDC once (ADR-023).
++LOGICAL_MESSAGE = re.compile(r"\bpg_logical_emit_message\b")
++# The guard and its settings (the owner applies changes from a copy, AGENTS.md "Хуки") and the
++# agent rules. Only inside this repository: a copy in the scratchpad is free to edit.
++HARNESS_FILE = re.compile(r"^\.claude/(hooks/|settings(\.local)?\.json$)")
++HARNESS_DOC = re.compile(
++    r"^(\.claude/agents/[^/]+|AGENTS\.md|CLAUDE\.md|docs/agent-rules\.md"
++    r"|docs/planning/13-harness\.md)$"
++)
++# A relative path at the start of a word, or an absolute one under the repository root.
++IN_REPO = r"(?:^|(?<=[\s\"'=>])|" + re.escape(str(ROOT)) + r"/)(?:\./)?"
++
++
++def shell_write(target: str) -> re.Pattern[str]:
++    """A shell command that writes, moves or removes a file of this repository matching target."""
++    path = IN_REPO + target
++    return re.compile(
++        r"(>>?|\btee\b(\s+-a)?)\s*[\"']?"
++        + path
++        + r"|\b(sed|perl)\b[^\n;|&]*\s-i\S*[^\n;|&]*"
++        + path
++        + r"|\b(rm|chmod|chown|truncate|touch)\b[^\n;|&]*"
++        + path
++        + r"|\b(cp|mv|install|ln|rsync)\b[^\n;|&]*\s[\"']?"
++        + path
++        + r"[^\s;|&\"']*[\"']?\s*($|[;&|\n])"
++        + r"|\bopen\([^)]*"
++        + path
++    )
++
++
++SHELL_WRITE_HARNESS = shell_write(r"\.claude/(hooks|settings)")
++SHELL_WRITE_RULES = shell_write(
++    r"(\.claude/agents/|AGENTS\.md|CLAUDE\.md|docs/agent-rules\.md|docs/planning/13-harness\.md)"
++)
++# The Debezium connector (8083) and the Lakekeeper catalog (8181) change by any HTTP write.
++HTTP_WRITE = r"(?=[^\n]*:(8083|8181)/)[^\n]*"
+ COMMIT = re.compile(GIT + r"commit\b")
+ # A full verify chained with && before the commit: the commit only runs if it passed.
+ VERIFY_THEN_COMMIT = re.compile(r"\bmake\s+verify(\s[^;|\n]*?)?\s*&&[^;|\n]*" + GIT + r"commit\b")
+@@ -54,19 +95,132 @@ VERIFY_THEN_COMMIT = re.compile(r"\bmake\s+verify(\s[^;|\n]*?)?\s*&&[^;|\n]*" +
+ ASK = [
+     (
+         re.compile(
+-            r"\bmake\b[^;&|\n]*\s(replay-burst|replay-start|replay-live|replay-reset|silver|"
+-            r"bootstrap|nuke|iceberg-demo|chaos-[\w-]+)(\s|$)"
++            r"\bmake\b[^;&|\n]*\s(replay-burst|replay-start|replay-live|replay-reset|replay-load|"
++            r"silver|bootstrap|nuke|iceberg-demo|chaos-[\w-]+|cdc-snapshot|migrate|"
++            r"watermark-demo|watermark-live)(\s|$)"
++        ),
++        "spends the replay budget or writes to the source, bronze, silver or the demo tables",
++    ),
++    (
++        re.compile(
++            r"-m\s+replayer\s+(start|reset|load)\b"
++            r"|\b(start|restart|up|run)\b[^\n;&|]*\boltp-replayer\b"
++            r"|scripts/(replay-burst|chaos/[\w-]+)\.sh|connect/snapshot\.sh"
+         ),
+-        "spends the replay budget or writes to bronze, silver or the demo table",
++        "runs the replayer or a scenario",
+     ),
+-    (re.compile(r"-m\s+replayer\s+(start|reset|load)\b"), "runs the replayer"),
+     (re.compile(GIT + r"push\b"), "git push"),
+     (re.compile(GIT + r"rebase\b"), "git rebase"),
+     (re.compile(GIT + r"reset\b[^\n;&|]*--hard\b"), "git reset --hard"),
+     (re.compile(GIT + r"commit\b[^\n;&|]*--amend\b"), "git commit --amend"),
+     (re.compile(r"\bdocker\b[^\n;&|]*\bdown\b[^\n;&|]*\s(-v|--volumes)\b"), "removes volumes"),
+     (re.compile(r"\bdocker\s+(volume\s+(rm|prune)|system\s+prune)\b"), "removes volumes"),
+-    (re.compile(r"\brm\s+(-[a-z]*r[a-z]*f|-[a-z]*f[a-z]*r|-r\s+-f|-f\s+-r)"), "rm -rf"),
++    (re.compile(r"\brm\s+(-[a-z]*r|--recursive)"), "recursive delete"),
++    (
++        re.compile(
++            GIT + r"(clean\b[^\n;&|]*\s-[a-z]*f|checkout\s+(--\s|\.(\s|$))|restore\b"
++            r"|stash\s+(drop|clear)|branch\s+-d\b)"
++        ),
++        "discards uncommitted work or a branch",
++    ),
++    # spark-silver with no arguments merges silver; with arguments it runs maintenance or the demo.
++    (
++        re.compile(r"\bcompose\b[^\n;&|]*\brun\b[^\n;&|]*\bspark-silver\b"),
++        "a Spark job that writes silver or rewrites lake files",
++    ),
++    (
++        re.compile(
++            r"\b(maintenance\s+(expire|orphans|rewrite-data|rewrite-position-deletes)|iceberg_demo"
++            r"|expire_snapshots|remove_orphan_files|rewrite_data_files|rewrite_position_delete_files"
++            r"|rollback_to_snapshot|set_current_snapshot|cherrypick_snapshot|fast_forward"
++            r"|(un)?register_table)\b"
++        ),
++        "an Iceberg procedure that rewrites or deletes table files (W5-D13 ladder)",
++    ),
++    (
++        re.compile(
++            r"\bairflow\s+(dags\s+(trigger|unpause|backfill|test)|tasks\s+(run|test))\b"
++            r"[^\n;&|]*iceberg_|/api/v\d+/dags/iceberg_"
++            r"|[\"']?dry_run[\"']?\s*:\s*false|[\"']?expire_and_compact[\"']?\s*:\s*true"
++        ),
++        "the Iceberg maintenance DAGs or their destructive switch (W5-D13 ladder)",
++    ),
++    (
++        re.compile(r"\bairflow\s+(dags\s+delete|tasks\s+clear|db\s+(clean|reset))\b"),
++        "deletes or rewrites Airflow run history",
++    ),
++    (
++        re.compile(
++            r"\bkafka-(configs|topics)(\.sh)?\b[^\n;&|]*\s--(alter|delete)\b"
++            r"|\bkafka-(delete-records|reassign-partitions|leader-election)(\.sh)?\b"
++            r"|\bkafka-consumer-groups(\.sh)?\b[^\n;&|]*\s--(reset-offsets|delete(-offsets)?)\b"
++        ),
++        "changes Kafka topics, retention or offsets",
++    ),
++    (
++        re.compile(
++            r"\bdocker\b[^\n;&|]*\s(image\s+(prune|rm|remove)|rmi|builder\s+prune|buildx\s+prune)\b"
++            r"|\b(docker|compose)\b[^\n;&|]*\s--rmi\b"
++        ),
++        "removes images: the MinIO images exist only in the local store (review item 6)",
++    ),
++    # `compose` also catches $COMPOSE, the Makefile's name for the compose command.
++    (
++        re.compile(
++            r"\b(docker|compose)\b[^\n;&|]*\s(down|rm|container\s+(rm|prune))\b"
++            r"|\b(docker|compose)\b(?![^\n;&|]*\bexec\b)[^\n;&|]*\s(stop|kill|restart|pause)\b"
++            r"(?![^\n;&|]*airflow-scheduler)"
++        ),
++        "stops or removes stack containers (the scheduler stop of the verify cycle is free)",
++    ),
++    # A changed image recreates spark-bronze, and its start sets the bronze metadata property.
++    (
++        re.compile(r"\bmake\b[^;&|\n]*\s(start|up)(\s|$)|\bcompose\b[^\n;&|]*\sup(\s|$)"),
++        "may recreate spark-bronze or minio (ADR-025 bronze metadata property, MinIO image)",
++    ),
++    (
++        re.compile(
++            r"\bgh(\s+(-r|--repo)[\s=]\S+)?\s+(workflow\s+(run|enable|disable)"
++            r"|run\s+(rerun|cancel|delete)|pr\s+(create|merge|close|comment|review|edit)"
++            r"|release\s+(create|delete|upload|edit)|repo\s+(edit|delete|rename|archive)"
++            r"|secret\s+(set|delete)|variable\s+(set|delete)|issue\s+(create|close|comment|edit)"
++            r"|cache\s+delete)\b"
++            r"|\bgh\s+api\b[^\n;&|]*((-x|--method)\s*(post|put|patch|delete)\b"
++            r"|\s(-f|--field|--raw-field|--input)[\s=])"
++            r"|\bdocker\s+(push|login)\b"
++        ),
++        "acts on GitHub or a registry, visible outside the laptop",
++    ),
++    (
++        re.compile(
++            HTTP_WRITE + r"(-x\s*|--request[\s=]*)(post|put|patch|delete)\b"
++            r"|" + HTTP_WRITE + r"\s(-d|--data(-raw|-binary|-urlencode)?|--json)[\s=]"
++            r"|scripts/lakekeeper/(protect|register|bootstrap)\.sh"
++        ),
++        "changes the Debezium connector or the Lakekeeper catalog",
++    ),
++    (
++        re.compile(
++            r"\bmc\s+(rm|rb|mv|cp|mirror|retention|ilm|version|admin)\b"
++            r"|\baws\s+s3(api)?\s+(rm|rb|mv|cp|sync|delete)"
++        ),
++        "changes or copies objects of the lake bucket",
++    ),
++    (
++        re.compile(
++            r"\b(insert\s+into|update|copy)\s+\"?(shop|replay|cdc)\"?\."
++            r"|\bdelete\s+from\s+\"?(shop|replay)\"?\."
++            r"|\b(create|alter)\s+(publication|subscription)\b|\balter\s+(role|database)\b"
++            r"|\bpg_(terminate_backend|create_logical_replication_slot)\b"
++        ),
++        "writes to the source database or its replication setup",
++    ),
++    (
++        re.compile(
++            r"\b(powercfg|wsl|powershell|pwsh)\.exe\b|\bpowercfg\b|\bwsl\s+--|\.wslconfig\b"
++        ),
++        "Windows and WSL settings are the owner's",
++    ),
+     (
+         re.compile(r"connect/register\.sh|:8083/connectors\S*[^\n]*-x\s*(put|post|delete)"),
+         "changes the Debezium connector",
+@@ -140,6 +294,14 @@ def commit_allowed(low: str) -> bool:
+     return stamp.fresh or not code_changes_since(ROOT, stamp)
+
+
++def repo_path(path: str) -> str | None:
++    """The path relative to the repository root, None outside it."""
++    try:
++        return Path(path).resolve().relative_to(ROOT.resolve()).as_posix()
++    except ValueError:
++        return None
++
++
+ def check(event: dict[str, Any]) -> None:
+     tool = event.get("tool_name", "")
+     args = event.get("tool_input", {})
+@@ -147,6 +309,14 @@ def check(event: dict[str, Any]) -> None:
+         path = args.get("file_path") or args.get("notebook_path") or ""
+         if SECRET_FILE.search(path) and not path.endswith(".env.example"):
+             deny(f"write to a secret file: {path}")
++        inside = repo_path(path)
++        if inside is not None and HARNESS_FILE.search(inside):
++            deny(
++                f"write to the agent hooks or settings: {path}",
++                "prepare a copy in the scratchpad, the owner applies it with cp",
++            )
++        if inside is not None and HARNESS_DOC.search(inside):
++            ask(f"edits the agent roles or rules: {path}")
+         return
+     if tool != "Bash":
+         return
+@@ -162,13 +332,22 @@ def check(event: dict[str, Any]) -> None:
+         deny("TRUNCATE")
+     if SLOT_SKIP.search(low):
+         deny("advancing or dropping a replication slot loses CDC records")
++    if LOGICAL_MESSAGE.search(low):
++        deny("pg_logical_emit_message lands in oltp.message and stopped CDC (ADR-023)")
+     for match in DELETE.finditer(low):
+         if not re.search(r"\bwhere\b", match.group(1)):
+             deny("DELETE without WHERE")
+     if SHELL_WRITE_ENV.search(command):
+         deny("shell write to .env")
++    if SHELL_WRITE_HARNESS.search(command):
++        deny(
++            "shell write to the agent hooks or settings",
++            "prepare a copy in the scratchpad, the owner applies it with cp",
++        )
+     if COMMIT.search(low) and not commit_allowed(low):
+         deny("git commit without a full make verify on this working tree", "run make verify first")
++    if SHELL_WRITE_RULES.search(command):
++        ask("edits the agent roles or rules")
+     for pattern, reason in ASK:
+         if pattern.search(low):
+             ask(reason)
+diff --git a/tests/unit/test_agent_hooks.py b/tests/unit/test_agent_hooks.py
+index 184443d..171cd54 100644
+--- a/tests/unit/test_agent_hooks.py
++++ b/tests/unit/test_agent_hooks.py
+@@ -90,6 +90,13 @@ def repo(tmp_path: Path) -> Path:
+         "rg '--pre=sh' 'drop table t' .",
+         "git grep '-Osh' 'drop table t'",
+         "git grep --open 'drop table t'",
++        "cp /tmp/guard.py .claude/hooks/guard.py",
++        "sed -i s/ask/allow/ .claude/hooks/guard.py",
++        "echo '{}' > .claude/settings.local.json",
++        "rm .claude/hooks/stop_gate.py",
++        "chmod -x .claude/hooks/guard.py",
++        f"cp /tmp/guard.py {REPO}/.claude/hooks/guard.py",
++        "psql -c \"select pg_logical_emit_message(true, 'p', 'x')\"",
+     ],
+ )
+ def test_guard_denies(command: str) -> None:
+@@ -124,6 +131,86 @@ def test_guard_denies(command: str) -> None:
+         "git --no-pager rebase main",
+         'grep -n "make silver" Makefile && make silver',
+         "git --git-dir .git --work-tree . push origin main",
++        # The W5-D13 ladder by any route, not only through make.
++        "docker compose --profile core run --rm --no-deps spark-silver maintenance expire "
++        "--days 7 silver.sellers",
++        "docker compose --profile core run --rm --no-deps spark-silver",
++        "docker run --rm lakehouse/spark:dev maintenance orphans --no-dry-run silver.orders",
++        "trino --execute \"call lake.system.rollback_to_snapshot('silver.orders', 1)\"",
++        "airflow dags unpause iceberg_maintenance",
++        "docker compose exec -T airflow-scheduler airflow dags trigger iceberg_orphans",
++        "airflow dags trigger x --conf '{\"dry_run\": false}'",
++        "airflow dags trigger x --conf '{\"expire_and_compact\": true}'",
++        "curl -X PATCH 127.0.0.1:8080/api/v2/dags/iceberg_orphans -d '{\"is_paused\": false}'",
++        "airflow tasks clear dq_checks",
++        # Retention and offsets of a live topic.
++        "kafka-configs.sh --bootstrap-server localhost:9092 --alter --entity-type topics "
++        "--entity-name oltp.message --add-config segment.ms=3600000",
++        "kafka-topics.sh --bootstrap-server localhost:9092 --delete --topic lab.orders.x",
++        "kafka-consumer-groups.sh --bootstrap-server localhost:9092 --reset-offsets --group g",
++        # The MinIO images exist only in the local image store.
++        "docker image prune -a -f",
++        "docker rmi quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z",
++        # A changed image recreates spark-bronze, which turns on the bronze metadata property.
++        "TRINO_XMX=2g make start",
++        "make up PROFILE=obs",
++        "docker compose -f docker/compose.yaml up -d --force-recreate spark-bronze",
++        # Visible outside the laptop.
++        "gh workflow run smoke.yml --ref main",
++        "gh pr create --fill",
++        "gh api -X DELETE repos/o/r/actions/caches",
++        "docker push ghcr.io/o/minio:frozen",
++        # The catalog, the bucket, the source database.
++        "curl -X DELETE 127.0.0.1:8181/management/v1/warehouse/w/protection",
++        "bash scripts/lakekeeper/protect.sh",
++        "mc rm --recursive --force lake/lakehouse/warehouse/x",
++        "psql -c \"update shop.orders set order_status = 'x' where order_id = '1'\"",
++        'psql -c "alter publication dbz_publication add table cdc.heartbeat"',
++        "powercfg.exe /change standby-timeout-ac 0",
++        # Uncommitted work.
++        "git checkout -- airflow/dags/dq_checks.py",
++        "git clean -fd",
++        "git stash drop",
++        "rm -r data/checkpoints/x",
++        # Found by the cold-start review of 27.10.
++        "airflow dags unpause --treat-dag-id-as-regex 'iceberg_.*'",
++        "airflow dags test iceberg_orphans",
++        "airflow tasks test iceberg_maintenance optimize",
++        "docker compose -f docker/compose.yaml down",
++        "docker compose down --rmi all",
++        "docker image remove lakehouse/minio:x",
++        "docker --context x image prune -a",
++        "docker rm -f lakehouse-spark-bronze-1",
++        "docker compose rm -f minio",
++        "docker compose stop kafka",
++        "$COMPOSE stop kafka",
++        "$COMPOSE down",
++        "$COMPOSE --profile core run --rm --no-deps spark-silver maintenance expire silver.x",
++        "docker kill lakehouse-spark-bronze-1",
++        "docker compose start oltp-replayer",
++        "bash scripts/replay-burst.sh 60 720",
++        "bash scripts/chaos/kafka-down.sh",
++        "make replay-load",
++        "make cdc-snapshot",
++        "make migrate",
++        "make watermark-demo",
++        "curl --request DELETE 127.0.0.1:8181/management/v1/warehouse/w",
++        "curl -d @w.json 127.0.0.1:8181/management/v1/warehouse",
++        "curl -X POST 127.0.0.1:8083/connectors/shop-connector/restart",
++        "mc cp --recursive lake/lakehouse/warehouse /backup",
++        "gh -R o/r workflow run smoke.yml",
++        "gh api repos/o/r/actions/workflows/smoke.yml/dispatches -f ref=main",
++        "psql -c \"delete from shop.orders where order_id = '1'\"",
++        'psql -c "create publication p for table cdc.heartbeat"',
++        "psql -c \"select pg_create_logical_replication_slot('s', 'pgoutput')\"",
++        "wsl.exe --shutdown",
++        "echo '[wsl2]' >> ~/.wslconfig",
++        # The agent roles and rules by a shell write, not only through Edit.
++        "sed -i s/a/b/ AGENTS.md",
++        "cat /tmp/x > CLAUDE.md",
++        "cp /tmp/x .claude/agents/scout.md",
++        "tee docs/agent-rules.md < /tmp/x",
++        "python3 -c \"open('AGENTS.md', 'w').write('')\"",
+     ],
+ )
+ def test_guard_asks_the_owner(command: str) -> None:
+@@ -151,6 +238,31 @@ def test_guard_asks_the_owner(command: str) -> None:
+         "git log --grep push --oneline",
+         'cd /x && git show HEAD -- Makefile | grep "make replay-burst"',
+         "rg -n 'truncate table|git push --force' .",
++        # Routine steps of the pre-commit cycle and read-only probes stay a click-free path.
++        "docker compose --env-file .env -f docker/compose.yaml --profile core build spark-bronze",
++        "docker compose exec -T airflow-scheduler airflow dags pause silver_upsert",
++        "docker compose exec -T airflow-scheduler airflow dags list-runs iceberg_maintenance",
++        "docker compose stop airflow-scheduler",
++        "kafka-configs.sh --bootstrap-server localhost:9092 --describe --entity-type topics",
++        "gh run list --limit 5",
++        "gh run view 40290595866 --log-failed",
++        "uv run ruff check airflow/dags/iceberg_orphans.py",
++        "uv run pytest tests/unit/test_dags.py -k dry_run -q",
++        "curl -s 127.0.0.1:8181/management/v1/warehouse",
++        "docker image ls",
++        'grep -rn "dry_run": docs',
++        "make dags-check",
++        "cp .claude/hooks/guard.py /tmp/scratchpad/guard.py",
++        # A copy of the hooks outside the repository is where their changes are prepared.
++        "cp /tmp/x /tmp/scratchpad/copy/.claude/hooks/guard.py",
++        "sed -i s/a/b/ /tmp/scratchpad/copy/.claude/settings.json",
++        "docker compose start airflow-scheduler",
++        "$COMPOSE stop airflow-scheduler && make verify && $COMPOSE start airflow-scheduler",
++        "$COMPOSE --profile core build spark-bronze",
++        "docker compose exec -T airflow-scheduler airflow dags unpause silver_upsert",
++        "docker run --rm --entrypoint sh lakehouse/spark:dev -c 'sha256sum spark_jobs/*.py'",
++        "docker compose logs --tail=200 airflow-scheduler",
++        "curl -s 127.0.0.1:8083/connectors/shop-connector/status",
+     ],
+ )
+ def test_guard_allows(command: str) -> None:
+@@ -159,7 +271,25 @@ def test_guard_allows(command: str) -> None:
+
+ @pytest.mark.parametrize(
+     ("path", "expected"),
+-    [(".env", "deny"), ("certs/server.key", "deny"), (".env.example", "allow"), ("a.md", "allow")],
++    [
++        (".env", "deny"),
++        ("certs/server.key", "deny"),
++        (".env.example", "allow"),
++        ("a.md", "allow"),
++        # The guard must not be able to edit itself or its settings.
++        (".claude/hooks/guard.py", "deny"),
++        (".claude/settings.json", "deny"),
++        (".claude/settings.local.json", "deny"),
++        # Role definitions and the rules: a click from the owner.
++        (".claude/agents/reviewer.md", "ask"),
++        ("AGENTS.md", "ask"),
++        ("CLAUDE.md", "ask"),
++        ("docs/agent-rules.md", "ask"),
++        ("docs/planning/13-harness.md", "ask"),
++        ("docs/HANDOFF.md", "allow"),
++        ("/tmp/scratchpad/copy/.claude/hooks/guard.py", "allow"),
++        ("/tmp/scratchpad/copy/AGENTS.md", "allow"),
++    ],
+ )
+ def test_guard_on_file_writes(path: str, expected: str) -> None:
+     event = {"tool_name": "Write", "tool_input": {"file_path": str(REPO / path)}}

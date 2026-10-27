@@ -2,6 +2,64 @@
 
 Обновляется в конце каждой недели или смыслового блока. Читать первым в каждой сессии.
 
+## Состояние на 27.10.2026, подготовка автономного закрытия проекта
+
+Аудит только чтением, функциональных правок нет. Бэклог, решения W6-D1..D15 и порядок: только
+`docs/planning/14-closeout-spec.md`; правила исполнения: `docs/planning/13-harness.md`; списки
+«следующих шагов» и «решений» в разделах ниже исторические. Код на HEAD `8964292` зелёный (CI,
+unit), smoke красный (образы MinIO), W5-T05b не начата, гейты открыты, Docker Desktop не запущен:
+стек и реплей на 27.10 не проверены. Первая задача исполнителя: W6-T00.
+
+### Проверено 27.10
+
+| Что | Команда | Результат |
+|---|---|---|
+| git | `git rev-list --left-right --count origin/main...main` | `0 0`: HEAD `8964292` на origin |
+| CI | `gh run list --limit 10` | `ci` зелёный на HEAD (40021181828); `smoke` красный 23.10 (40003292011) и 26.10 по расписанию (40290595866) |
+| Причина smoke | `gh run view 40290595866 --log` | `minio Error unauthorized: access to the requested resource is not authorized`, затем `make: *** [Makefile:58: bootstrap] Error 2` |
+| MinIO upstream | `gh api repos/minio/minio`; `curl -sI` архива `dl.min.io`; `curl` к `quay.io/v2/minio/minio/tags/list` | archived, последний push 2026-04-24; архив бинарника 410; quay 401. Теги `RELEASE.2025-09-07T16-13-09Z` (`01ce918`) и mc `RELEASE.2025-08-13T08-35-41Z` (`d6541ea`) живы; Dockerfile тега `FROM minio/minio:latest` |
+| Копия образов | `ls -la ~/lakehouse-image-backup/` | `minio-images.tar` 84 862 976 байт, 23.10; `docker load` не проверен |
+| Unit-тесты | `uv run pytest tests/unit -q` | 458 passed, 83 skipped (Spark без JVM); `ruff check`, `mypy` чистые |
+| Отметка verify | `cat .verify-stamp`; `git rev-parse HEAD^{tree}` | full 23.10 20:41 UTC, дерево `4153eaf` равно дереву HEAD; о стеке сегодня ничего не говорит |
+| Docker Desktop | `wsl.exe -l -v`; `settings-store.json` в `%APPDATA%\Docker` | дистрибутив `docker-desktop` Stopped; `AutoStart = False`; `IntegratedWslDistros = ['Ubuntu']`; данные на `D:\DockerDesktop\DockerDesktopWSL`; `docker` в WSL отвечает «could not be found» |
+| Перезагрузка | `wevtutil.exe qe System` (1074, 6006, загрузка) | выключение 24.10 01:25 UTC, загрузка 27.10 17:23 UTC |
+| Сон | `wevtutil.exe qe System` (506, 507, 42); `powercfg /q SCHEME_CURRENT SUB_SLEEP` | 19.10 и 21.10 современный ждущий режим (506), затем «Hibernate from Sleep - Fixed Timeout» (42). От сети сон и гибернация по таймеру уже 0 (никогда), от батареи 2 ч и 3 ч |
+| Хук | подача команд в `guard.py` | пропускает без вопроса: `maintenance expire`, trigger `iceberg_orphans` с `dry_run: false`, `airflow dags unpause iceberg_maintenance`, `kafka-configs --alter`, `docker image prune -a`, `make start`, `gh workflow run`, `docker compose stop kafka`, правки `AGENTS.md` через shell. В `settings.local.json` разрешено `Bash(docker compose *)`. Правка: `docs/planning/13-harness-guard.patch`, применяет владелец |
+
+### Расхождения со старыми записями
+
+- «Что ждёт владельца» 24.10 называет вторую и третью правки хука неприменёнными: они в `a9c8123`
+  (`SLOT_SKIP`, `code_changes_since` в `guard.py`). Там же п. 34 ревью закрыт.
+- `NEXT_SESSION.md` 24.10: «образ уже содержит maintenance.py (собран 23.10)» и «запуск за 03:30
+  выполнит expire_silver, expire_gold и compact_bronze» устарели: после `a720f90` Spark-шаги идут
+  только с conf `{"expire_and_compact": true}`, образ собран до `a720f90` (шаг 0 W5-T05b).
+- `NEXT_SESSION.md` 24.10 называет push разрешённым, `AGENTS.md` и `10-w5-spec.md` раздел 3 требуют
+  «ок»; все коммиты до `8964292` уже на origin. Решение W6-D3.
+- Карточка W5-T05b (`10-w5-spec.md:359-374`) и W5-D13 нумеруют ступени по-разному; критерий
+  «кандидатов в data/ bronze 0» выполняется всегда; «DAG сам включается снятием паузы» неверно.
+  Поправки в спеке 14.
+- `README.md:8-10`: статус «weeks 1-2 done, week 3 in progress» устарел.
+
+### Действия владельца
+
+Агент обновляет таблицу каждую сессию и сам проверяет результат каждого действия.
+
+| # | Когда | Где | Что сделать | Зачем | Результат | Что продолжится |
+|---|---|---|---|---|---|---|
+| 1 | до старта | Windows | Пуск, Docker Desktop; дождаться «Engine running». Интеграция с Ubuntu уже включена. Желательно: Settings, General, «Start Docker Desktop when you sign in to your computer» (сейчас выключено) | живой стек, сборка образов, коммиты кода (хук требует полный verify) | в WSL `docker version --format '{{.Server.Version}}'` печатает версию | W6-T00 сборка, W5-T05b, verify |
+| 2 | до старта | WSL, корень репо | `git apply docs/planning/13-harness-guard.patch && uv run pytest tests/unit -q`, затем `git add -A && git commit -m "infra: closeout harness, agent roles, guard asks for class C actions"`; по желанию `git push` | хук начинает спрашивать на лестницу, остановку контейнеров, retention; хуки агент не правит | `568 passed, 83 skipped`; `git status` чистый. После этого коммита любой коммит агента ждёт первого полного `make verify` (Docker) | работа под защитой хука |
+| 3 | до старта, одной строкой после промпта | Claude Code | «W6-D3: да; push 23-24.10 подтверждаю. W6-D4: да. W6-D13: да.» (смысл в спеке 14, раздел 2); позже, до W6-T02: «W6-D15: да» или «нет» и, по желанию, «W6-D10: да» | без этого план и diff каждой карточки, каждый push и порция реплея ждут вас (`AGENTS.md`, «Цикл») | агент записывает в статусы и журнал «ок» | коммиты, smoke на GitHub, порция реплея T05b |
+| 4 | до W6-T09 (окно B6) | Windows, PowerShell | `powercfg /setacvalueindex SCHEME_CURRENT SUB_BUTTONS LIDACTION 0`, затем `powercfg /setactive SCHEME_CURRENT` (закрытие крышки от сети ничего не делает); на 24 ч окна питание от сети, «Сон» и кнопку питания не нажимать | окно B6 дважды сорвал сон (506, затем 42) | агент проверяет события 42 и 506 за окно | W6-T09 |
+| 5 | когда удобно | терминал | гейты W1-T08, W2-T08, W3-T07, W4-T07, Spark Operate, мок-собес (`02-learning-gates.md`); наборы готовит агент | без гейтов этап не закрыт | записи в `LEARNING.md` | итоговая приёмка |
+| 6 | по запросу агента | Claude Code | «ок» на пакеты П1-П8 W5-T05b, на W6-D10 (`segment.ms`), на живую смену образа MinIO, на сценарии chaos для живой проверки алертов | действия класса C | агент присылает запрос по шаблону с числами «до» | W5-T05b, W6-T00 часть 5, W6-T06..T08 |
+
+### Журнал «ок»
+
+| Дата UTC | Действие | Кто дал | Где видно |
+|---|---|---|---|
+| 23.10 | push `4d03d05`, `f606670`, `a830b88` | записано пересказом в разделе 23.10 («коммиты и push по необходимости»), без даты и цитаты (ревью п. 28); подтверждение W6-D3 | `gh run list` |
+| 24.10 | push коммитов с `4659a1a` по `8964292` | не записано; подтверждение W6-D3 | `origin/main` |
+
 ## Состояние на 24.10.2026, ревью недель 4 и 5 и правки по нему
 
 Независимое ревью недель 4 и 5 (`docs/planning/12-review-w4-w5.md`, 43 замечания, 8 высоких) и правки по нему: владелец 24.10 делегировал исправления. Код и доки поправлены, кроме решений владельца (MinIO, лестница W5-T05b, покой сверки по источнику, push). Хук `guard.py` переписан (владелец применил сам).
