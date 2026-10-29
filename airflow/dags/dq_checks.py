@@ -1,9 +1,11 @@
 """dq_checks: every 15 minutes, check silver against its own keys and against Postgres.
 
 Fails the run: a primary key twice in a silver table; live row counts that differ from Postgres
-while nothing is in flight (checks.at_rest); a value that differs between the source and silver, or
-silver and gold, at rest (reconcile_values, W5-T04). Every value is logged as a
-`dq <name>=<value>` line and sent to statsd-exporter as a `lakehouse.*` gauge
+while nothing is in flight (checks.at_rest) and CDC is not stalled; a value that differs between
+the source and silver, or silver and gold, at rest (reconcile_values, W5-T04). A CDC that stands
+(the source wrote and the slot moved no further, checks.cdc_state) is "in flight, no verdict" for
+the source-silver comparisons and the gauge `lakehouse.dq.cdc_stalled` (W6-D9). Every value is
+logged as a `dq <name>=<value>` line and sent to statsd-exporter as a `lakehouse.*` gauge
 (lakehouse/metrics.py, observability/statsd/mapping.yml). Not exported: new quarantine rows,
 a Modify gate of the owner (W4-D8).
 """
@@ -19,6 +21,7 @@ from airflow.sdk import Variable, dag, task
 from lakehouse import checks, metrics, reconcile, sql
 from lakehouse.clients import postgres_rows, postgres_value, trino_rows, trino_value
 from lakehouse.settings import (
+    CDC_STATE_SEEN,
     LAST_BRONZE_SNAPSHOT,
     SILVER_KEYS,
     SOURCE_TABLES,
@@ -69,7 +72,22 @@ def dq_checks() -> None:
         return None if query is None else trino_value(settings, query)
 
     @task
-    def silver_matches_postgres() -> None:
+    def cdc_progress() -> bool:
+        """Whether CDC stands: the source wrote since the last run and the slot did not move."""
+        rows = postgres_rows(settings, sql.CDC_PROGRESS)
+        if not rows or rows[0][0] is None:
+            raise RuntimeError("cannot read the write counter of schema shop")
+        writes_now, flush_now = int(rows[0][0]), rows[0][1]
+        before = checks.load_cdc_state(Variable.get(CDC_STATE_SEEN, default=None))
+        stalled, kept = checks.cdc_state(writes_now, flush_now, before)
+        Variable.set(CDC_STATE_SEEN, json.dumps(kept))
+        print(f"dq cdc_stalled={int(stalled)} writes={writes_now} flush={flush_now}")
+        print(f"dq cdc_before={before}")
+        export(("lakehouse.dq.cdc_stalled", int(stalled), {}))
+        return stalled
+
+    @task
+    def silver_matches_postgres(stalled: bool) -> None:
         rows = trino_rows(settings, sql.LATEST_BRONZE_SNAPSHOT)
         latest, committed_at = (int(rows[0][0]), rows[0][1]) if rows else (None, None)
         remembered = Variable.get(LAST_BRONZE_SNAPSHOT, default=None)
@@ -77,6 +95,7 @@ def dq_checks() -> None:
         silver = {t: int(trino_value(settings, sql.silver_live_rows(t))) for t in SOURCE_TABLES}
         differences = checks.count_differences(postgres, silver)
         resting = checks.at_rest(latest, committed_at, remembered, datetime.now(UTC))
+        outcome = checks.count_outcome(bool(differences), resting, stalled)
         print(f"dq reconcile_tables_differing={len(differences)} at_rest={resting}")
         age = _oldest_unmerged_age(latest, remembered)
         lag = checks.silver_lag_seconds(latest, remembered, age)
@@ -88,10 +107,11 @@ def dq_checks() -> None:
         )
         for table, (source, lake) in differences.items():
             print(f"{table}: postgres {source}, silver {lake}")
-        if differences and resting:
+        if outcome == "red":
             raise ValueError(f"silver differs from Postgres at rest: {differences}")
-        if differences:
-            print("in flight: bronze or silver has not caught up yet, no verdict")
+        if outcome == "in_flight":
+            reason = "CDC stands" if stalled else "bronze or silver has not caught up yet"
+            print(f"in flight: {reason}, no verdict")
 
     def _explain(table: str, keys: list[str]) -> dict[str, str]:
         """Why the first keys the source has are not in silver: quarantine, bronze, or neither."""
@@ -106,13 +126,15 @@ def dq_checks() -> None:
         return reconcile.classify(shown, found["quarantine"], found["bronze"])
 
     @task
-    def reconcile_values() -> None:
+    def reconcile_values(stalled: bool) -> None:
         """Source against silver, and silver against gold, by value (W5-T04). Only at rest: with
-        work in flight the layers differ for a reason that is not an error."""
+        work in flight the layers differ for a reason that is not an error. A CDC that stands
+        leaves out the source-silver pairs; silver-gold needs nothing from the source."""
         rows = trino_rows(settings, sql.LATEST_BRONZE_SNAPSHOT)
         latest, committed_at = (int(rows[0][0]), rows[0][1]) if rows else (None, None)
         remembered = Variable.get(LAST_BRONZE_SNAPSHOT, default=None)
-        if not checks.at_rest(latest, committed_at, remembered, datetime.now(UTC)):
+        resting = checks.at_rest(latest, committed_at, remembered, datetime.now(UTC))
+        if not resting:
             print("dq reconcile_in_flight=1")
             print("in flight: bronze or silver has not caught up yet, no verdict")
             export(("lakehouse.dq.reconcile_in_flight", 1, {}))
@@ -120,10 +142,14 @@ def dq_checks() -> None:
 
         started = time.time()
         verdicts: list[reconcile.Verdict] = []
+        skip_source = checks.skip_source_values(resting, stalled)
+        if skip_source:
+            print("dq reconcile_in_flight=1")
+            print("in flight: CDC stands, the source-silver pairs wait, no verdict on them")
         gauges: list[tuple[str, object, dict[str, str]]] = [
-            ("lakehouse.dq.reconcile_in_flight", 0, {})
+            ("lakehouse.dq.reconcile_in_flight", int(skip_source), {})
         ]
-        for table in SOURCE_TABLES:
+        for table in () if skip_source else SOURCE_TABLES:
             verdict = reconcile.compare(
                 "source_silver",
                 table,
@@ -268,10 +294,11 @@ def dq_checks() -> None:
         if failed:
             raise RuntimeError(f"the freshness query failed for {failed}")
 
+    stalled = cdc_progress()
     [
         silver_keys_unique(),
-        silver_matches_postgres(),
-        reconcile_values(),
+        silver_matches_postgres(stalled),
+        reconcile_values(stalled),
         report(),
         dbt_source_freshness(),
     ]

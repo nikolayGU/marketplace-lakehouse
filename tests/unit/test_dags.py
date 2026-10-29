@@ -1,12 +1,17 @@
 import ast
+import importlib.util
 import json
+import sys
+import types
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import jinja2
 import pytest
 import yaml  # type: ignore[import-untyped]
-from lakehouse import checks, sql
+from lakehouse import checks, reconcile, sql
 from lakehouse.maintenance_commands import (
     DRY_RUN_FLAG,
     compact_bronze_command,
@@ -20,10 +25,14 @@ from lakehouse.maintenance_commands import (
     silver_tables,
 )
 from lakehouse.settings import (
+    CDC_STATE_SEEN,
     GOLD_WRITERS_POOL,
+    LAST_BRONZE_SNAPSHOT,
     MAINTENANCE_TABLES,
     RETENTION_DAYS,
+    SHOP_SLOT,
     SILVER_KEYS,
+    SOURCE_TABLES,
     SPARK_SILVER_ENV,
     SPARK_SILVER_SECRETS,
     dbt_command,
@@ -124,6 +133,338 @@ def test_at_rest(
     committed_at = NOW - committed_ago if committed_ago is not None else None
 
     assert checks.at_rest(latest, committed_at, remembered, NOW) is expected
+
+
+def state(writes: int, flush: str | None, stalled: bool = False) -> checks.CdcState:
+    return {"writes": writes, "flush": flush, "stalled": stalled}
+
+
+@pytest.mark.parametrize(
+    ("writes_now", "flush_now", "remembered", "stalled", "kept"),
+    [
+        # First run: nothing to compare with, the base is remembered.
+        (10, "0/10", None, False, state(10, "0/10")),
+        # Writes grew and the slot did not move: CDC stands.
+        (15, "0/10", state(10, "0/10"), True, state(15, "0/10", True)),
+        # Nothing changed after that: the stall holds until the slot moves (chaos 6, no writes
+        # during the hold).
+        (15, "0/10", state(15, "0/10", True), True, state(15, "0/10", True)),
+        # The writes keep coming while it stands.
+        (22, "0/10", state(15, "0/10", True), True, state(22, "0/10", True)),
+        # The slot moved: CDC is alive, the base is the current pair.
+        (15, "0/20", state(15, "0/10", True), False, state(15, "0/20")),
+        (22, "0/20", state(10, "0/10"), False, state(22, "0/20")),
+        # Nothing changed and it was not standing: still not.
+        (10, "0/10", state(10, "0/10"), False, state(10, "0/10")),
+        # Statistics were reset (crash): the counter fell, no verdict on a stall.
+        (3, "0/10", state(10, "0/10", True), False, state(3, "0/10")),
+        # No slot: CDC is dead, the strict verdict stays, the base still moves.
+        (15, None, state(10, "0/10"), False, state(15, None)),
+        (15, None, None, False, state(15, None)),
+        (15, None, state(10, None), False, state(15, None)),
+        # The slot appeared after a run without one: it moved from nothing.
+        (15, "0/10", state(10, None), False, state(15, "0/10")),
+    ],
+)
+def test_cdc_state(
+    writes_now: int,
+    flush_now: str | None,
+    remembered: checks.CdcState | None,
+    stalled: bool,
+    kept: checks.CdcState,
+) -> None:
+    assert checks.cdc_state(writes_now, flush_now, remembered) == (stalled, kept)
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (None, None),
+        ("", None),
+        ("not json", None),
+        ("[1, 2]", None),
+        ('{"writes": "x", "flush": null, "stalled": false}', None),
+        ('{"writes": 5}', None),
+        ('{"writes": 5, "flush": "0/1", "stalled": true}', state(5, "0/1", True)),
+        ('{"writes": 5, "flush": null, "stalled": false}', state(5, None)),
+    ],
+)
+def test_load_cdc_state_ignores_what_it_cannot_read(
+    raw: str | None, expected: checks.CdcState | None
+) -> None:
+    assert checks.load_cdc_state(raw) == expected
+
+
+@pytest.mark.parametrize(
+    ("differences", "resting", "stalled", "expected"),
+    [
+        (True, True, False, "red"),  # silent source, silver differs at rest: the check holds
+        (True, True, True, "in_flight"),  # the source writes, nothing arrives
+        (True, False, False, "in_flight"),  # bronze or silver still moving
+        (True, False, True, "in_flight"),
+        (False, True, False, "ok"),
+        (False, True, True, "ok"),
+        (False, False, False, "ok"),
+        (False, False, True, "ok"),
+    ],
+)
+def test_count_outcome(differences: bool, resting: bool, stalled: bool, expected: str) -> None:
+    assert checks.count_outcome(differences, resting, stalled) == expected
+
+
+@pytest.mark.parametrize(
+    ("resting", "stalled", "expected"),
+    [(True, False, False), (True, True, True), (False, False, True), (False, True, True)],
+)
+def test_skip_source_values(resting: bool, stalled: bool, expected: bool) -> None:
+    assert checks.skip_source_values(resting, stalled) is expected
+
+
+def test_shop_slot_is_the_slot_the_connector_creates() -> None:
+    connector = json.loads((REPO / "connect" / "shop-connector.json").read_text())
+
+    assert connector["config"]["slot.name"] == SHOP_SLOT
+    assert f"'{SHOP_SLOT}'" in sql.CDC_PROGRESS
+
+
+class Ref:
+    """What calling a stubbed task returns: the output of that task, by name."""
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+
+class DqChecks:
+    """dq_checks.py loaded with Airflow's decorators stubbed (Airflow is not installed on the
+    host): the task bodies are plain functions, the wiring is recorded, and every outside call
+    (Postgres, Trino, Variable, statsd) is replaced."""
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self.bodies: dict[str, Callable[..., Any]] = {}
+        self.wiring: dict[str, list[tuple[Any, ...]]] = {}
+        self.variables: dict[str, str] = {}
+        self.sent: list[tuple[str, object, dict[str, str]]] = []
+        self.queries: list[str] = []
+        self.postgres_counts: dict[str, int] = {}
+        self.cdc: tuple[int | None, str | None] | None = (10, "0/10")
+        self.bronze: list[list[Any]] = [[5, datetime(2026, 10, 1, tzinfo=UTC)]]
+        self.gold_differs = False
+        variables = self.variables
+
+        class Variable:
+            @staticmethod
+            def get(key: str, default: Any = None) -> Any:
+                return variables.get(key, default)
+
+            @staticmethod
+            def set(key: str, value: str) -> None:
+                variables[key] = value
+
+        def task(body: Callable[..., Any]) -> Callable[..., Ref]:
+            self.bodies[body.__name__] = body
+
+            def call(*args: Any) -> Ref:
+                self.wiring.setdefault(body.__name__, []).append(args)
+                return Ref(body.__name__)
+
+            return call
+
+        def dag(**_: Any) -> Callable[[Callable[[], None]], Callable[[], None]]:
+            return lambda body: body
+
+        sdk = types.ModuleType("airflow.sdk")
+        sdk.Variable = Variable  # type: ignore[attr-defined]
+        sdk.dag = dag  # type: ignore[attr-defined]
+        sdk.task = task  # type: ignore[attr-defined]
+        package = types.ModuleType("airflow")
+        package.sdk = sdk  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, "airflow", package)
+        monkeypatch.setitem(sys.modules, "airflow.sdk", sdk)
+        spec = importlib.util.spec_from_file_location(
+            "dq_checks_under_test", REPO / "airflow" / "dags" / "dq_checks.py"
+        )
+        assert spec is not None and spec.loader is not None
+        self.module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.module)
+        monkeypatch.setattr(self.module, "postgres_value", self.postgres_value)
+        monkeypatch.setattr(self.module, "postgres_rows", self.postgres_rows)
+        monkeypatch.setattr(self.module, "trino_value", self.trino_value)
+        monkeypatch.setattr(self.module, "trino_rows", self.trino_rows)
+        monkeypatch.setattr(self.module, "export", lambda *gauges: self.sent.extend(gauges))
+
+    def run(self, name: str, *args: Any) -> Any:
+        return self.bodies[name](*args)
+
+    def postgres_value(self, _settings: object, query: str) -> Any:
+        self.queries.append(query)
+        for table in SOURCE_TABLES:
+            if query == sql.postgres_rows(table):
+                return self.postgres_counts.get(table, 10)
+        return "10 fp"
+
+    def postgres_rows(self, _settings: object, query: str) -> list[tuple[Any, ...]]:
+        self.queries.append(query)
+        if query == sql.CDC_PROGRESS:
+            return [] if self.cdc is None else [self.cdc]
+        return []
+
+    def trino_rows(self, _settings: object, query: str) -> list[list[Any]]:
+        self.queries.append(query)
+        if query == sql.LATEST_BRONZE_SNAPSHOT:
+            return self.bronze
+        for gold in reconcile.GOLD_PAIRS:
+            if query == reconcile.gold_pairs_sql_trino(gold, "gold") and self.gold_differs:
+                return [["key", "changed"]]
+            if query == reconcile.gold_pairs_sql_trino(gold, "silver"):
+                return [["key", "original"]]
+        return []
+
+    def trino_value(self, _settings: object, query: str) -> Any:
+        self.queries.append(query)
+        for table in SOURCE_TABLES:
+            if query == sql.silver_live_rows(table):
+                return 10
+        if self.gold_differs and query in {
+            reconcile.gold_sql_trino(g) for g in reconcile.GOLD_PAIRS
+        }:
+            return "10 other"
+        if query in (reconcile.SILVER_CUSTOMERS_WITH_ORDERS, reconcile.GOLD_CUSTOMERS):
+            return 4
+        if query in (reconcile.GOLD_UPDATED, reconcile.SILVER_UPDATED):
+            return "2026-10-01 00:00:00"
+        return "10 fp"
+
+    def at_rest(self) -> None:
+        self.variables[LAST_BRONZE_SNAPSHOT] = "5"
+
+    def queried_source_values(self) -> bool:
+        return any(query == reconcile.fingerprint_sql_postgres("orders") for query in self.queries)
+
+    def queried_gold_values(self) -> bool:
+        gold = next(iter(reconcile.GOLD_PAIRS))
+        return reconcile.gold_sql_trino(gold) in self.queries
+
+    def gauge(self, name: str) -> object:
+        return next(value for sent, value, _ in self.sent if sent == name)
+
+
+@pytest.fixture
+def dq(monkeypatch: pytest.MonkeyPatch) -> DqChecks:
+    return DqChecks(monkeypatch)
+
+
+def test_dq_checks_hands_the_cdc_verdict_to_both_checks_that_use_it(dq: DqChecks) -> None:
+    assert dq.wiring["silver_matches_postgres"][0][0].name == "cdc_progress"
+    assert dq.wiring["reconcile_values"][0][0].name == "cdc_progress"
+    assert dq.wiring["cdc_progress"] == [()]
+
+
+def test_cdc_progress_remembers_the_pair_and_sends_the_gauge_every_run(dq: DqChecks) -> None:
+    assert dq.run("cdc_progress") is False
+    assert dq.gauge("lakehouse.dq.cdc_stalled") == 0
+    assert json.loads(dq.variables[CDC_STATE_SEEN]) == state(10, "0/10")
+
+
+def test_cdc_progress_holds_the_stall_when_nothing_changes(dq: DqChecks) -> None:
+    dq.variables[CDC_STATE_SEEN] = json.dumps(state(10, "0/10"))
+    dq.cdc = (15, "0/10")
+    assert dq.run("cdc_progress") is True
+    dq.sent.clear()
+
+    assert dq.run("cdc_progress") is True  # no writes since: still stalled (chaos 6 hold)
+    assert dq.gauge("lakehouse.dq.cdc_stalled") == 1
+
+    dq.cdc = (15, "0/30")
+    assert dq.run("cdc_progress") is False
+    assert json.loads(dq.variables[CDC_STATE_SEEN]) == state(15, "0/30")
+
+
+def test_cdc_progress_fails_when_the_write_counter_cannot_be_read(dq: DqChecks) -> None:
+    dq.cdc = None
+
+    with pytest.raises(RuntimeError, match="write counter"):
+        dq.run("cdc_progress")
+    assert CDC_STATE_SEEN not in dq.variables
+
+
+def test_cdc_progress_without_a_slot_is_not_a_stall(dq: DqChecks) -> None:
+    dq.variables[CDC_STATE_SEEN] = json.dumps(state(10, "0/10"))
+    dq.cdc = (15, None)
+
+    assert dq.run("cdc_progress") is False
+    assert dq.gauge("lakehouse.dq.cdc_stalled") == 0
+
+
+def test_counts_differ_at_rest_with_a_silent_source_is_red(dq: DqChecks) -> None:
+    dq.at_rest()
+    dq.postgres_counts = {"orders": 12}
+
+    with pytest.raises(ValueError, match="differs from Postgres at rest"):
+        dq.run("silver_matches_postgres", False)
+
+
+def test_counts_differ_at_rest_with_a_stalled_cdc_is_no_verdict(
+    dq: DqChecks, capsys: pytest.CaptureFixture[str]
+) -> None:
+    dq.at_rest()
+    dq.postgres_counts = {"orders": 12}
+
+    dq.run("silver_matches_postgres", True)
+
+    assert "in flight" in capsys.readouterr().out
+
+
+def test_counts_differ_while_bronze_is_moving_is_no_verdict(dq: DqChecks) -> None:
+    dq.variables[LAST_BRONZE_SNAPSHOT] = "4"
+    dq.postgres_counts = {"orders": 12}
+
+    dq.run("silver_matches_postgres", False)
+
+
+def test_source_values_are_compared_at_rest_with_a_live_cdc(dq: DqChecks) -> None:
+    dq.at_rest()
+
+    dq.run("reconcile_values", False)
+
+    assert dq.queried_source_values()
+    assert dq.queried_gold_values()
+    assert dq.gauge("lakehouse.dq.reconcile_in_flight") == 0
+
+
+def test_only_updates_at_a_stalled_cdc_raise_the_gauge_and_skip_only_the_source_pairs(
+    dq: DqChecks,
+) -> None:
+    # An UPDATE moves no row count: silver and Postgres agree on counts, only the values differ.
+    dq.at_rest()
+    dq.variables[CDC_STATE_SEEN] = json.dumps(state(10, "0/10"))
+    dq.cdc = (15, "0/10")
+
+    stalled = dq.run("cdc_progress")
+    dq.run("silver_matches_postgres", stalled)
+    dq.run("reconcile_values", stalled)
+
+    assert dq.gauge("lakehouse.dq.cdc_stalled") == 1
+    assert not dq.queried_source_values()
+    assert dq.queried_gold_values()
+    assert dq.gauge("lakehouse.dq.reconcile_in_flight") == 1
+
+
+def test_a_gold_difference_is_still_red_at_a_stalled_cdc(dq: DqChecks) -> None:
+    dq.at_rest()
+    dq.gold_differs = True
+
+    with pytest.raises(ValueError, match="values differ at rest"):
+        dq.run("reconcile_values", True)
+
+
+def test_nothing_is_compared_while_bronze_is_moving(dq: DqChecks) -> None:
+    dq.variables[LAST_BRONZE_SNAPSHOT] = "4"
+
+    dq.run("reconcile_values", False)
+
+    assert not dq.queried_source_values()
+    assert not dq.queried_gold_values()
+    assert dq.gauge("lakehouse.dq.reconcile_in_flight") == 1
 
 
 def test_count_differences_lists_only_tables_that_differ() -> None:

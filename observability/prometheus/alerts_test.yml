@@ -341,6 +341,82 @@ tests:
               cause: stale
               job: statsd-exporter
 
+  # Scrape 15 s; the gauge comes every 15 minutes and holds its value between runs. Zero for 40
+  # minutes, then 1 on two runs in a row (30 minutes of 1), then 0: quiet before the 20 minutes
+  # are full, firing from then on, out at the first 0.
+  - interval: 15s
+    input_series:
+      - series: 'lakehouse_dq_cdc_stalled{job="statsd-exporter"}'
+        values: '0x159 1x120 0x80'
+    alert_rule_test:
+      - eval_time: 59m
+        alertname: CdcStalledSourceWrites
+        exp_alerts: []
+      - eval_time: 61m
+        alertname: CdcStalledSourceWrites
+        exp_alerts:
+          - exp_labels:
+              severity: warn
+              job: statsd-exporter
+      - eval_time: 69m
+        alertname: CdcStalledSourceWrites
+        exp_alerts:
+          - exp_labels:
+              severity: warn
+              job: statsd-exporter
+      - eval_time: 72m
+        alertname: CdcStalledSourceWrites
+        exp_alerts: []
+
+  # One run says 1, the next one comes 30 to 60 seconds late and says 0: the source wrote once and
+  # CDC caught up. Quiet, also with the second run late by a minute.
+  - interval: 15s
+    input_series:
+      - series: 'lakehouse_dq_cdc_stalled{job="statsd-exporter"}'
+        values: '0x159 1x62 0x180'
+      - series: 'lakehouse_dq_cdc_stalled{job="statsd-exporter", run="late"}'
+        values: '0x159 1x64 0x180'
+    alert_rule_test:
+      - eval_time: 58m
+        alertname: CdcStalledSourceWrites
+        exp_alerts: []
+      - eval_time: 61m
+        alertname: CdcStalledSourceWrites
+        exp_alerts: []
+      - eval_time: 70m
+        alertname: CdcStalledSourceWrites
+        exp_alerts: []
+
+  # A series that is new (the first run after a gap, or after the gauge expired) with 10 minutes of
+  # history says 1: too short to tell, quiet. The same series is long enough after 18 minutes.
+  - interval: 15s
+    input_series:
+      - series: 'lakehouse_dq_cdc_stalled{job="statsd-exporter"}'
+        values: '_x159 1x100'
+    alert_rule_test:
+      - eval_time: 50m
+        alertname: CdcStalledSourceWrites
+        exp_alerts: []
+      - eval_time: 55m
+        alertname: CdcStalledSourceWrites
+        exp_alerts: []
+      - eval_time: 59m
+        alertname: CdcStalledSourceWrites
+        exp_alerts:
+          - exp_labels:
+              severity: warn
+              job: statsd-exporter
+
+  # Always 0: nothing to say.
+  - interval: 15s
+    input_series:
+      - series: 'lakehouse_dq_cdc_stalled{job="statsd-exporter"}'
+        values: '0x240'
+    alert_rule_test:
+      - eval_time: 55m
+        alertname: CdcStalledSourceWrites
+        exp_alerts: []
+
   # No stamp at all: gone after 15 minutes.
   - interval: 1m
     input_series:

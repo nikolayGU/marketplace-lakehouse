@@ -9,6 +9,11 @@ SILVER_ASSET_NAME = "lake.silver"
 # Id of the bronze snapshot that silver_upsert merged last; dq_checks reads it to tell rest from
 # work in flight.
 LAST_BRONZE_SNAPSHOT = "silver_upsert_last_bronze_snapshot"
+# Where the previous dq_checks run left the write counter of schema shop and the position the
+# slot had confirmed (sql.CDC_PROGRESS, JSON); checks.cdc_state tells from them whether CDC stands.
+CDC_STATE_SEEN = "dq_checks_cdc_state"
+# The replication slot Debezium reads (connect/shop-connector.json, slot.name).
+SHOP_SLOT = "shop_slot"
 LAKE_WRITERS_POOL = "lake_writers"
 # Gold writers: dbt_build and the gold maintenance, so a CREATE OR REPLACE and an expire_snapshots
 # of one table never commit at once (W5-D11).

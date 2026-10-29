@@ -410,7 +410,8 @@ against silver (live rows), and `fct_orders`, `fct_order_items` (soft-deleted ro
 their flag), `dim_products`, `dim_sellers` against silver; `dim_customers` only by row count (its
 grain is `customer_unique_id`). Only at rest (`checks.at_rest`; the silver-gold pairs also wait until
 `fct_orders.updated_at` has caught up with silver); otherwise the task is green, prints `in flight, no
-verdict` and sets `lakehouse_dq_reconcile_in_flight` to 1. Red means a value differs at rest: the log
+verdict` and sets `lakehouse_dq_reconcile_in_flight` to 1; with a stalled CDC (W6-D9, see the
+alert table) only the silver-gold pairs run and the gauge is 1. Red means a value differs at rest: the log
 lists the first 20 keys of each kind of difference and, for a key silver lacks, why (`quarantined`,
 `merge_pending`, `unknown`). Measured 2026-10-23: 7 source-silver and 5 silver-gold verdicts in 7 s
 inside the task (25 s through the Trino CLI), 0 differing, 19 `reconcile_rows` series; right after a
@@ -421,8 +422,8 @@ the source, and from there it goes to silver.
 A red `dq_checks` means one of two things. `silver_keys_unique`: silver holds a primary key
 twice, which MERGE must never produce; read the last `silver_upsert` log and the quarantine.
 `silver_matches_postgres`: counts differ although bronze has been quiet for 5 minutes and silver
-merged its latest snapshot, so a change never reached silver; `make verify` (with the scheduler
-stopped) shows the offsets and the counts. Differences with `at_rest=False` are normal during a
+merged its latest snapshot and CDC is not stalled (below), so a change never reached silver;
+`make verify` (with the scheduler stopped) shows the offsets and the counts. Differences with `at_rest=False` are normal during a
 replay burst. A stale `dbt source freshness` (exit code 1) is logged, not failed: no traffic is not
 a broken pipeline.
 
@@ -472,7 +473,8 @@ stops instead of showing its last value for ever.
 | `lakehouse_dq_reconcile_rows` | `layer` (`source`, `silver`, `gold`), `table` | rows compared (19 series: 7 + 7 + 5) |
 | `lakehouse_dq_reconcile_values_differing` | `pair` (`source_silver`, `silver_gold`), `table` | keys on both sides whose row fingerprints differ |
 | `lakehouse_dq_reconcile_keys_missing` | `pair`, `table`, `side` | keys the other side lacks; `side="right"` is a key the source (or silver) has and silver (or gold) lacks |
-| `lakehouse_dq_reconcile_in_flight` | none | 1 while work is in flight and no verdict was made |
+| `lakehouse_dq_reconcile_in_flight` | none | 1 while work is in flight and no verdict was made, or while a stalled CDC keeps the source-silver pairs out (the silver-gold pairs are still compared) |
+| `lakehouse_dq_cdc_stalled` | none | 1 while CDC stands: the source wrote since the previous run (write counter of schema `shop` in `pg_stat_user_tables`) and `confirmed_flush_lsn` of `shop_slot` did not move; it stays 1 until the slot moves. 0 without a slot, and for one run after a reset of the statistics (1 again at the next write while the slot stands). Sent every run, whether or not counts differ |
 | `lakehouse_dq_reconcile_verdict_timestamp_seconds` | none | Unix time of the last verdict |
 
 Values come at the cadence of `dq_checks` (15 minutes), so an alert on them can lag by that long.
@@ -531,6 +533,7 @@ alerts" panel. After editing the file: `docker kill -s HUP lakehouse-prometheus-
 | `ContainerRestarting` | `changes(docker_container_start_time_seconds{...}[15m]) > 0`, one-shot containers excluded | 0 | `docker restart` moves the start time; `RestartCount` follows only the restart policy | scenarios 5 and 8 | 15 s after the restart |
 | `FreshnessAbove15m`, `cause="unknown"` | `absent(lakehouse_silver_lag_seconds)` | 15m | `dq_checks` sends no lag it cannot tell, and statsd-exporter drops a gauge 45 minutes after its last value: without this the lag alert goes quiet | promtool | |
 | `DqChecksStale` | `time() - last_over_time(lakehouse_dq_last_run_timestamp_seconds[1h]) > 1800` (`cause="stale"`), `absent(...)` (`cause="gone"`); no gap at the TTL drop (promtool case) | 0 / 15m | `dq_checks` runs every 15 minutes; a paused DAG, a stopped scheduler or a failing `report` stops every `lakehouse_dq_*` gauge | promtool | |
+| `CdcStalledSourceWrites` | `min_over_time(lakehouse_dq_cdc_stalled[20m]) == 1 and count_over_time(...[20m]) >= 70` | 0 | the source wrote and the slot confirmed nothing (Kafka or the connector down), and still nothing 20 minutes later, so two runs in a row; `dq_checks` stays green with `in flight` instead of a false `AirflowDagFailed`. One run or a late second run that says 0 stays quiet; 70 samples at 15 s keep a series with a short history from firing. A paused DAG leaves the last 1 until the statsd TTL (45 min), then this and `DqChecksStale` fire together | promtool (two runs, one run, short history); live not proven (W6-D9, chaos 6 or 8) | |
 | `ScrapeTargetDown` | `up{job!="spark-orders-per-minute"} == 0` | 2m | an exporter that is down silences its own alerts (ADR-023); the stateful job runs only with `PROFILE=stateful` | promtool | |
 | `SlotWalHeldIdle` | `min_over_time(lakehouse_slot_retained_bytes[1h])` over 64 MiB, slot active, now at most 512 MiB | 0 | an active slot moves only when the source writes (about 24 MB held after a day idle), so a whole hour above 64 MiB (at least 200 samples in the hour) means no traffic reached it; inactive or over 512 MiB is `SlotWalRetainedHigh` | promtool | |
 | `SparkRestartLoop` | `changes(docker_container_start_time_seconds{name="lakehouse-spark-bronze-1"}[10m]) > 2` | 0 | a driver that dies before its first batch keeps both `SparkNoBatch5m` rules inside their window; one planned restart stays under the threshold | chaos 8 data, TSDB replay | 51 s after the first restart (23.10 data, rule not loaded then) |
@@ -546,8 +549,21 @@ restart at 17:10:24 and the last at 17:15:10. So it fires about 51 s after the f
 after the loop ends it keeps firing for up to 10 minutes (the window). `SlotWalHeldIdle` needs a
 full hour above 64 MiB, so it is late by design and silent while traffic keeps moving the slot; on
 the move to over 512 MiB or to an inactive slot it goes out at once while `SlotWalRetainedHigh` waits
-its `for: 5m`, so up to 5 minutes pass with no alert. `dq_checks` itself goes red with "differs at rest" when the
-source writes and nothing arrives (Kafka or connector down), which raises `AirflowDagFailed`. The
+its `for: 5m`, so up to 5 minutes pass with no alert. CDC "stands" (W6-D9) when the write counter
+of schema `shop` (`pg_stat_user_tables`) grew since the previous `dq_checks` run and `confirmed_flush_lsn`
+of `shop_slot` did not move; it keeps standing, whatever the source does next, until the slot moves
+(chaos 6 holds for 30 minutes without writes). Then the source-silver comparisons (counts and values,
+also an UPDATE, which moves no count) are `in flight, no verdict` and the gauge says 1; the silver-gold
+pairs are still compared. Expected in chaos 6 (one burst, then 30 minutes without writes): green
+and `in flight` for the whole stall, `CdcStalledSourceWrites` after about 20 minutes, the verdict
+again after the slot moves and bronze catches up (not proven live). Chaos 8 is shorter than the
+alert window (Kafka down 6 minutes), and if the slot moved earlier in the same 15 minutes (offset
+commit or heartbeat) the first run at rest still sees "the slot moved" and is red as before. The check stays strict where it cannot tell: a difference at rest is
+red when the source is silent, when the slot does not exist (CDC is dead), after a reset of the
+statistics (the counter fell, one run), and on the first run. If the counter cannot be read,
+`cdc_progress` fails with "cannot read the write counter of schema shop" and the two checks that
+need it end `upstream_failed`, so the run is red. A false 1 is possible once: a write just before
+a run, before Debezium confirmed it; it is out at the next run and too short to fire the alert. The
 `lakehouse_*` gauges arrive every 15 minutes, so alerts on them lag by that much.
 
 ### Dashboards
@@ -1154,8 +1170,10 @@ and padding took it from 11 MB to 80.9 MB. The committed script (`f606670`) ran 
 of 60 s (19:14), and did the same with 83.9 MB held; after the resume and a 15 s burst the connector had
 confirmed everything (28 kB unconfirmed) and `restart_lsn` retained 3.9 MB.
 What monitoring shows: `ConnectorNotRunning` 95 s after the stop (75 s in the rerun) and
-`SlotWalRetainedHigh` 326 s after it (`for: 5m` plus the scrape; both runs). `dq_checks` also goes
-red with "differs at rest": bronze is quiet because nothing arrives, while the source writes.
+`SlotWalRetainedHigh` 326 s after it (`for: 5m` plus the scrape; both runs). `dq_checks` also went
+red with "differs at rest": bronze is quiet because nothing arrives, while the source writes. Since W6-T07
+it is expected to say `in flight` for the whole stall and to raise `CdcStalledSourceWrites` after
+about 20 minutes (promtool and unit tests only; live not proven).
 Data at risk: none while the slot lives; Postgres keeps every WAL file it has not confirmed
 (`max_slot_wal_keep_size = -1`), so the disk of the VM is the limit, and nothing but this alert
 watches it (runbook `docs/runbooks/slot-wal-growth.md`). Replay alone writes ~1.1 MB of WAL per
@@ -1175,8 +1193,9 @@ from about 18:52 to 19:00 with no loss; fixed by creating `oltp.message` (max me
 retention 1 hour) and `CONNECT_PRODUCER_MAX_REQUEST_SIZE=8388608` in `docker/compose.yaml`, and the
 connector drained 66 MB in seconds. The recovery also tried `pg_replication_slot_advance`, which would
 have skipped the records; the permission check of the agent session refused it. The setting stays,
-and `connect/register.sh` now creates the topic (with `segment.ms` of an hour, which the topic made
-by hand lacks: its first segment is not dropped until it rolls). The limit is on the encoded record:
+and `connect/register.sh` now creates the topic (with `segment.ms` of an hour; the topic made by
+hand got the same on 2026-10-29 with `kafka-configs.sh --alter --add-config segment.ms=3600000`,
+W6-T08, when it was empty). The limit is on the encoded record:
 JsonConverter writes the bytes as base64, so a message over about 6.3 MB still fails the task
 (`RecordTooLargeException`, see `docs/runbooks/connector-failed.md`). Do not use logical messages.
 
@@ -1228,7 +1247,10 @@ over (`ALERTS` in the TSDB: `gone` pending from about 17:10:49 to 17:15:34, neve
 with `silver differs from Postgres at rest`: bronze had been quiet for more than the 5 minutes that
 count as "at rest", because the source could not deliver, while Postgres kept writing; that red run
 raised `AirflowDagFailed`. It is a true signal (the pipeline is not delivering), through a check
-that was written for another cause.
+that was written for another cause. Since W6-T07 a run stays red here when the slot moved in the
+same 15 minutes before Kafka stopped (offset commit, heartbeat); otherwise it says `in flight`. The
+stall (6 minutes) is shorter than the 20 minutes `CdcStalledSourceWrites` needs, so this scenario
+does not fire it; chaos 6 does (unit tests and promtool only; live not proven).
 Data at risk: none while the outage is shorter than Kafka retention (24 h) and the slot lives.
 Connect holds what it cannot produce, Postgres keeps the WAL. Longer than 24 h: scenario "Bronze
 ingest" (`failOnDataLoss=true`).

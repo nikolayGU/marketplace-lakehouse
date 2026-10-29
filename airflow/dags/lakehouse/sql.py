@@ -1,10 +1,24 @@
 """SQL the DAGs run through Trino (catalog lake) and Postgres (schema shop)."""
 
+from lakehouse.settings import SHOP_SLOT
+
 LATEST_BRONZE_SNAPSHOT = """
 select snapshot_id, committed_at
 from lake.bronze."cdc_events$snapshots"
 order by committed_at desc
 limit 1
+"""
+
+
+# One row: rows written to schema shop since the statistics were last reset (only a write moves
+# it; pg_current_wal_lsn grows without one), and the position the slot has confirmed, as text
+# (NULL when the slot does not exist).
+CDC_PROGRESS = f"""
+select
+  (select coalesce(sum(n_tup_ins + n_tup_upd + n_tup_del), 0)
+   from pg_stat_user_tables where schemaname = 'shop'),
+  (select confirmed_flush_lsn::text
+   from pg_replication_slots where slot_name = '{SHOP_SLOT}')
 """
 
 

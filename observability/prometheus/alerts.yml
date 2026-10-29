@@ -92,6 +92,20 @@ groups:
           severity: warn
           cause: gone
 
+      # dq_checks sends 1 when the source wrote since its last run and the replication slot has
+      # confirmed nothing, and keeps sending 1 until the slot moves (W6-D9). The task stays green
+      # with "in flight"; this is the signal. 20 minutes of 1 mean two runs in a row (the gauge
+      # comes every 15 minutes and holds its value between runs): one run, or a run that was late
+      # and said 0, stays quiet. At least 70 samples (scrape 15 s) keep a series with a short
+      # history from firing. No `for`: the window already is the wait. A paused DAG leaves the
+      # last value until the statsd TTL (45m), then this fires, and DqChecksStale with it.
+      - alert: CdcStalledSourceWrites
+        expr: >-
+          min_over_time(lakehouse_dq_cdc_stalled[20m]) == 1
+          and count_over_time(lakehouse_dq_cdc_stalled[20m]) >= 70
+        labels:
+          severity: warn
+
       # A target Prometheus cannot scrape: its own alerts go quiet with it (ADR-023). The stateful
       # job runs only with PROFILE=stateful, so its target is down by design otherwise.
       - alert: ScrapeTargetDown
