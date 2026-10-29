@@ -443,7 +443,9 @@ def test_expire_leaves_one_snapshot_and_reports_deleted_files(
     args = parse_args(["expire", "--days", "0", sandbox])
     rows_before = spark.table(sandbox).count()
 
-    [result] = execute(spark, args, sandbox, NOW + timedelta(days=1))
+    # The sandbox snapshots are written now: a fixed NOW stops covering them a day after it.
+    later = datetime.now(timezone.utc) + timedelta(days=1)  # noqa: UP017
+    [result] = execute(spark, args, sandbox, later)
 
     assert snapshots(spark, sandbox) == 1
     assert spark.table(sandbox).count() == rows_before
