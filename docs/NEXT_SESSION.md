@@ -80,7 +80,7 @@ implementer (код карточки и исправления по ревью),
 file:line.
 
 Безопасность. Класс C (13-harness.md, раздел 2) только после «ок» владельца на точный текст команды
-($COMPOSE раскрыт) по шаблону. Среди них: каждый пакет П1-П8 W5-T05b; make start, make up и любая
+($COMPOSE раскрыт) по шаблону. Среди них: каждый пакет П1-П9 W5-T05b; make start, make up и любая
 остановка или пересоздание контейнеров, кроме airflow-scheduler в цикле verify; запуск spark-silver;
 реплей сверх W6-D13 и сценарии chaos; kafka-configs --alter; удаление образов; push и gh workflow run
 сверх W6-D3; правки AGENTS.md, CLAUDE.md, .claude/agents. В .claude/hooks и .claude/settings*.json
