@@ -7,10 +7,15 @@
   merge, checks Kafka offsets in bronze, silver against Postgres and all seven tables in bronze;
   prints `verify ok`. Refuses while `airflow-scheduler` runs or a replayer plays. `--no-merge`
   (`make verify-fast`) skips the merge. On success writes `.verify-stamp` (`agent_state.py`).
-- `report.sh` (`make report`): git state, verify stamp, containers and the replay clock for a
-  session report. Reads only.
-- `agent_state.py`: the verify stamp, mode plus the git tree id of the working tree, which the
-  agent hooks in `.claude/hooks/` check.
+- `report.sh` (`make report`): git state, the verify, check and review stamps, containers and the
+  replay clock for a session report. Reads only.
+- `agent_state.py`: the three gate stamps, each a mode plus the git tree id of the working tree,
+  which the agent hooks in `.claude/hooks/` check before a commit. `.verify-stamp`: `make verify`
+  and `make verify-fast`. `.check-stamp`: `make check`. `.review-stamp`: the hook `review_stamp.py`,
+  from the verdict line of the `reviewer` report. `python3 scripts/agent_state.py tree <root>`
+  prints the tree id, `show [verify|check|review] <root>` describes a stamp.
+- `make check`: `make lint` and `make test`, then `agent_state.py stamp check`, so the commit gate
+  sees that both passed on this working tree.
 - `replay-burst.sh` (W3-T00, `make replay-burst SECONDS=<n> [SPEED=720]`): plays `n` real
   seconds of the replay schedule on the host, prints the virtual clock before and after.
 - `reconcile_sql.py`: the Postgres and Trino queries `reconcile` (`chaos/lib.sh`) runs per silver

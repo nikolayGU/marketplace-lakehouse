@@ -67,7 +67,7 @@ verify-fast: ## make verify without the silver merge: reads only, writes nothing
 reconcile: ## Postgres against live silver rows: count, set of primary keys, decimal sums
 	@bash -c '. scripts/chaos/lib.sh && reconcile'
 
-report: ## facts for a session report: git, verify stamp, containers, replay clock; reads only
+report: ## facts for a session report: git, the verify, check and review stamps, containers, replay clock; reads only
 	@bash scripts/report.sh
 
 replay-burst: ## play SECONDS of history on the host, then stop: make replay-burst SECONDS=60 [SPEED=720]
@@ -141,6 +141,9 @@ alerts-test: ## promtool: check the alert rules and run observability/prometheus
 test: ## unit tests (Spark ones skip on a host without Java)
 	uv run pytest tests/unit -q
 
+check: ## make lint and make test, then stamps the tree they passed on for the commit gate (.check-stamp)
+	@python3 scripts/agent_state.py check "$(CURDIR)"
+
 SPARK_TESTS := test_bronze_cdc_ingest.py test_contracts.py test_envelope.py test_iceberg_demo.py \
   test_iceberg_sink.py test_silver_upsert.py test_orders_per_minute.py test_maintenance.py
 
@@ -178,4 +181,4 @@ dbt-build: ## seed, run and test lake.gold through Trino on 127.0.0.1:8080 (need
 dbt-docs: ## dbt docs generate into dbt/target (needs Trino)
 	cd dbt && uv run dbt docs generate --profiles-dir . --target dev
 
-.PHONY: alerts-test dags-check watermark-demo watermark-live help secrets hooks data migrate replay-load replay-start replay-reset start up down status logs nuke bootstrap verify verify-fast reconcile report replay-burst replay-live replay-status silver psql trino kafka-topics kafka-groups cdc-snapshot connector-status iceberg-demo lakekeeper-bootstrap airflow-init lint test test-spark dbt-parse dbt-build dbt-docs
+.PHONY: alerts-test dags-check watermark-demo watermark-live help secrets hooks data migrate replay-load replay-start replay-reset start up down status logs nuke bootstrap verify verify-fast reconcile report replay-burst replay-live replay-status silver psql trino kafka-topics kafka-groups cdc-snapshot connector-status iceberg-demo lakekeeper-bootstrap airflow-init lint test check test-spark dbt-parse dbt-build dbt-docs

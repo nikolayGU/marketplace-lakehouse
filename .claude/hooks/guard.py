@@ -3,14 +3,22 @@
 
 deny (exit 2, stderr is the reason): writes to secret files, force push, DROP, TRUNCATE, DELETE
 without WHERE, advancing or dropping a replication slot, pg_logical_emit_message, shell writes to
-.env, writes to the hooks and settings in this repository's .claude/, and `git commit` unless a
-full `make verify` passed on this working tree (.verify-stamp; Markdown and docs/ edited after it
-do not count) or runs right before it in the same `&&` chain.
+.env, writes to the hooks and settings in this repository's .claude/, a gate stamp written by hand
+(a file tool on .verify-stamp, .check-stamp or .review-stamp; a command that names one of them and
+is not a plain read; `agent_state.py stamp` or `check` run directly; inline Python that names
+agent_state; `agent_state.py tree` and `show` are reads), `make check` with a flag, a variable or
+a make or pytest option variable that could stamp failing checks, and `git commit` unless the gate
+holds on this working tree. The gate: a full `make verify` always (passed on this
+tree, or run right before the commit in the same `&&` chain); and when code changed (not Markdown
+and docs/), also `make check` (.check-stamp) and a reviewer verdict other than "return"
+(.review-stamp, written by review_stamp.py). A stamp counts when it is fresh for the tree or only
+Markdown and docs/ changed since it.
 ask (a permission prompt, so the owner's ok is a click): replay and scenarios, source, silver and
 other lake writes, Iceberg maintenance and its DAGs, push, rebase, history rewrites, discarded work,
 volume, image and recursive deletes, stopped, removed or recreated containers (not the scheduler
 stop of the verify cycle), Kafka topic settings, connector, catalog and Postgres settings, DDL,
-actions on GitHub, Windows and WSL settings, edits of the agent roles and rules.
+actions on GitHub, Windows and WSL settings, edits of the agent roles, skills and rules and of
+scripts/agent_state.py, which decides what a stamp means.
 The match is on the command text. A command made only of searches and reads (grep, rg, git log,
 cat and the like, no substitution or redirect) runs none of these words and passes. If the guard
 itself fails, it asks instead of letting the call through.
@@ -20,6 +28,7 @@ import json
 import os
 import re
 import shlex
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -53,13 +62,17 @@ SHELL_WRITE_ENV = re.compile(
 )
 # Pg_logical_emit_message lands in topic oltp.message and stopped CDC once (ADR-023).
 LOGICAL_MESSAGE = re.compile(r"\bpg_logical_emit_message\b")
-# The guard and its settings (the owner applies changes from a copy, AGENTS.md "Хуки") and the
-# agent rules. Only inside this repository: a copy in the scratchpad is free to edit.
+# The guard and its settings (the owner applies changes from a copy, AGENTS.md "Хуки"), the agent
+# roles, skills and rules, and the code that says what a stamp means. Only inside this repository:
+# a copy in the scratchpad is free to edit.
 HARNESS_FILE = re.compile(r"^\.claude/(hooks/|settings(\.local)?\.json$)")
 HARNESS_DOC = re.compile(
-    r"^(\.claude/agents/[^/]+|AGENTS\.md|CLAUDE\.md|docs/agent-rules\.md"
-    r"|docs/planning/13-harness\.md)$"
+    r"^(\.claude/(agents/[^/]+|skills/.+)|AGENTS\.md|CLAUDE\.md|docs/agent-rules\.md"
+    r"|docs/planning/13-harness\.md|scripts/agent_state\.py)$"
 )
+# The gate stamps are written by make verify, make check and review_stamp.py, never by the agent.
+STAMP_FILE = re.compile(r"^\.(verify|check|review)-stamp$")
+STAMP_FIX = "the stamps come from make verify, make check and the reviewer's report"
 # A relative path at the start of a word, or an absolute one under the repository root.
 IN_REPO = r"(?:^|(?<=[\s\"'=>])|" + re.escape(str(ROOT)) + r"/)(?:\./)?"
 
@@ -76,7 +89,7 @@ def shell_write(target: str) -> re.Pattern[str]:
         + path
         + r"|\b(cp|mv|install|ln|rsync)\b[^\n;|&]*\s[\"']?"
         + path
-        + r"[^\s;|&\"']*[\"']?\s*($|[;&|\n])"
+        + r"[^\s;|&\"']*[\"']?(\s+[12]?>>?\s*\S+)*\s*($|[;&|\n])"
         + r"|\bopen\([^)]*"
         + path
     )
@@ -84,8 +97,36 @@ def shell_write(target: str) -> re.Pattern[str]:
 
 SHELL_WRITE_HARNESS = shell_write(r"\.claude/(hooks|settings)")
 SHELL_WRITE_RULES = shell_write(
-    r"(\.claude/agents/|AGENTS\.md|CLAUDE\.md|docs/agent-rules\.md|docs/planning/13-harness\.md)"
+    r"(\.claude/(agents|skills)/|AGENTS\.md|CLAUDE\.md|docs/agent-rules\.md"
+    r"|docs/planning/13-harness\.md|scripts/agent_state\.py)"
 )
+# A gate stamp named by a command that is not a plain read, the stamp code run directly, or inline
+# Python that names the module: every form of writing a stamp that the command text shows.
+STAMP_NAME = re.compile(r"\.(verify|check|review)-stamp\b")
+STAMP_CLI = re.compile(r"\bagent_state(\.py)?[\"']?\s+[\"']?(stamp|check)\b")
+INLINE_PYTHON = re.compile(r"\bpython[\d.]*\b[^\n;|&]*\s-[a-zA-Z]*c\b|<<|\bpython[\d.]*\s+-(\s|$)")
+# make check stamps the tree it checked: a flag such as -i or -o, a variable, or a make or pytest
+# option variable anywhere in the command could make it stamp failing checks.
+MAKE_CHECK_ENV = re.compile(r"\b(PYTEST_ADDOPTS|MAKEFLAGS|MFLAGS|GNUMAKEFLAGS)\b")
+REDIRECT = re.compile(r"[012]?(>>?|<)&?\S*|&>>?\S*")
+
+
+def bends_make_check(command: str) -> bool:
+    for segment in re.split(r"&&|\|\||[;|&\n]", command):
+        words = segment.split()
+        if "make" not in words:
+            continue
+        at = words.index("make")
+        args = [word for word in words[at + 1 :] if not REDIRECT.fullmatch(word)]
+        if "check" in args and (
+            args != ["check"]
+            or any("=" in word for word in words[:at])
+            or MAKE_CHECK_ENV.search(command)
+        ):
+            return True
+    return False
+
+
 # The Debezium connector (8083) and the Lakekeeper catalog (8181) change by any HTTP write.
 HTTP_WRITE = r"(?=[^\n]*:(8083|8181)/)[^\n]*"
 COMMIT = re.compile(GIT + r"commit\b")
@@ -231,7 +272,15 @@ ASK = [
 ]
 
 READERS = {"cd", "ls", "cat", "head", "tail", "wc", "cut", "nl", "grep", "egrep", "fgrep", "rg"}
-GIT_READERS = {"git log", "git show", "git diff", "git grep", "git blame", "git status"}
+GIT_READERS = {
+    "git log",
+    "git show",
+    "git diff",
+    "git grep",
+    "git blame",
+    "git status",
+    "git check-ignore",
+}
 SEPARATORS = {"&&", "||", ";", "|"}
 NULL_REDIRECT = re.compile(r"[ \t]([12]?>[ \t]*/dev/null|2>&1)(?=[ \t]|$)")
 # Substitution, ANSI-C quoting shlex reads differently, a newline that hides a second command.
@@ -282,16 +331,49 @@ def reads_only(command: str) -> bool:
     )
 
 
-def commit_allowed(low: str) -> bool:
-    from scripts.agent_state import code_changes_since, read_stamp
+def commit_gap(low: str) -> list[str]:
+    """What a `git commit` still lacks on this working tree, empty when it may go ahead: a full
+    verify always, and for changed code also a check and a reviewer verdict that is not `return`."""
+    from scripts.agent_state import (
+        ACCEPTED,
+        Stamp,
+        code_changes,
+        code_changes_since,
+        read_stamp,
+        tree_hash,
+    )
 
-    if VERIFY_THEN_COMMIT.search(low):
-        return True
-    stamp = read_stamp(ROOT)
-    if stamp is None or stamp.mode != "full":
-        return False
-    # Markdown and docs/ edited after the verify need no new one, as in stop_gate.py.
-    return stamp.fresh or not code_changes_since(ROOT, stamp)
+    current = tree_hash(ROOT)
+
+    def covers(stamp: Stamp | None) -> bool:
+        # Markdown and docs/ edited after the stamp need no new one, as in stop_gate.py.
+        if stamp is None:
+            return False
+        try:
+            return stamp.fresh or not code_changes_since(ROOT, stamp, current)
+        except subprocess.CalledProcessError:  # the stamped tree is gone from the object store
+            return False
+
+    missing = []
+    verify = read_stamp(ROOT, "verify", current)
+    if not VERIFY_THEN_COMMIT.search(low) and not (
+        verify is not None and verify.mode == "full" and covers(verify)
+    ):
+        missing.append("a full make verify")
+    if not code_changes(ROOT):
+        return missing
+    if not covers(read_stamp(ROOT, "check", current)):
+        missing.append("make check")
+    review = read_stamp(ROOT, "review", current)
+    if review is None or not covers(review):
+        missing.append("a reviewer verdict")
+    elif review.mode not in ACCEPTED:
+        missing.append("a reviewer verdict other than 'return'")
+    return missing
+
+
+def listed(items: list[str]) -> str:
+    return items[0] if len(items) == 1 else f"{', '.join(items[:-1])} and {items[-1]}"
 
 
 def repo_path(path: str) -> str | None:
@@ -310,6 +392,8 @@ def check(event: dict[str, Any]) -> None:
         if SECRET_FILE.search(path) and not path.endswith(".env.example"):
             deny(f"write to a secret file: {path}")
         inside = repo_path(path)
+        if inside is not None and STAMP_FILE.search(inside):
+            deny(f"writes a gate stamp by hand: {path}", STAMP_FIX)
         if inside is not None and HARNESS_FILE.search(inside):
             deny(
                 f"write to the agent hooks or settings: {path}",
@@ -344,8 +428,21 @@ def check(event: dict[str, Any]) -> None:
             "shell write to the agent hooks or settings",
             "prepare a copy in the scratchpad, the owner applies it with cp",
         )
-    if COMMIT.search(low) and not commit_allowed(low):
-        deny("git commit without a full make verify on this working tree", "run make verify first")
+    if (
+        STAMP_NAME.search(command)
+        or STAMP_CLI.search(command)
+        or ("agent_state" in command and INLINE_PYTHON.search(command))
+    ):
+        deny("writes a gate stamp by hand", STAMP_FIX)
+    if bends_make_check(command):
+        deny("runs make check in a form that can stamp failing checks", "run plain make check")
+    if COMMIT.search(low):
+        missing = commit_gap(low)
+        if missing:
+            deny(
+                f"git commit without {listed(missing)} on this working tree",
+                "see docs/planning/13-harness.md, section 5",
+            )
     if SHELL_WRITE_RULES.search(command):
         ask("edits the agent roles or rules")
     for pattern, reason in ASK:

@@ -1,6 +1,6 @@
 # 03. Плагины агента: ТЗ
 
-Версия 1.0, 22.09.2026. Какие плагины Claude Code из `claude-plugins-official` стоят в проекте, зачем, и когда агент их вызывает. `CLAUDE.md` имеет приоритет над любым плагином.
+Версия 1.1, 29.10.2026 (1.0 от 22.09.2026). Какие плагины Claude Code из `claude-plugins-official` стоят в проекте, зачем, и когда агент их вызывает. `CLAUDE.md` имеет приоритет над любым плагином.
 
 ## Задача
 
@@ -8,7 +8,7 @@
 
 1. Ревью диффа до коммита: баги, проглоченные исключения (критично для streaming jobs), качество тестов, типы.
 2. Брейншторм и планирование задачи `W<n>-T<nn>` до кода: варианты с trade-offs, план, который владелец утверждает.
-3. Проверка актуальности: версии и поведение Spark, Iceberg, Kafka, Debezium, Trino, dbt, Airflow 3 сверяются с документацией нужной версии, а не с памятью модели (правило «факты проверяются» из `CLAUDE.md`).
+3. Проверка актуальности: версии и поведение Spark, Iceberg, Kafka, Debezium, Trino, dbt, Airflow 3 сверяются с документацией нужной версии, а не с памятью модели (правило «факты проверяются» из `docs/agent-rules.md`).
 4. Картина архитектуры: разбор существующего кода и проектирование изменения в его рамках.
 5. Актуальность самих инструкций: `CLAUDE.md` и `HANDOFF.md` не расходятся с реальностью.
 
@@ -24,12 +24,14 @@
 | Плагин | Способность | Что даёт | Always-on, токенов |
 |---|---|---|---|
 | `context7` | 3 | MCP с документацией конкретной версии библиотеки. Без ключа, remote | 0 |
-| `superpowers` | 2, 1 | `brainstorming`, `writing-plans`, `systematic-debugging`, `test-driven-development`, `verification-before-completion`, `requesting-code-review` | ~700 |
+| `superpowers` | 2, 1 | `brainstorming`, `writing-plans`, `systematic-debugging`, `test-driven-development`, `verification-before-completion` | ~700 |
 | `feature-dev` | 4 | Агенты `code-explorer` и `code-architect`, команда `/feature-dev` | ~250 |
 | `pr-review-toolkit` | 1 | `/review-pr`, агенты `silent-failure-hunter`, `pr-test-analyzer`, `type-design-analyzer`, `code-reviewer` | ~2000 |
 | `claude-md-management` | 5 | `/revise-claude-md`, skill аудита `CLAUDE.md` | ~180 |
 
 Встроенное, ставить не нужно: `/code-review` (ревью диффа), `/security-review` (перед коммитом), агенты `Plan` и `Explore`.
+
+С 29.10 (`13-harness.md` v0.3) `feature-dev` и `pr-review-toolkit` выключены (`false` в `enabledPlugins`): их агенты дублируют роли `Explore`, `scout` и `reviewer`, а описания агентов `pr-review-toolkit` занимают около 2000 токенов в каждом запросе. Встроенный `Explore` переопределён файлом `.claude/agents/explore.md` на Haiku: без этого он идёт на модели основной сессии. Включить плагины обратно: `true` в `.claude/settings.json`.
 
 ## Что не ставим и почему
 
@@ -52,31 +54,32 @@
 |---|---|
 | Новая задача из роадмапа, есть выбор реализации | `superpowers:brainstorming`, варианты владельцу, ждать выбора. Спеки и планы кладутся в `docs/planning/`, на русском, не в `docs/superpowers/` |
 | Задача больше одного файла | `superpowers:writing-plans`, план показать до кода |
-| Нужна картина существующего кода | агент `feature-dev:code-explorer`, для проектирования `feature-dev:code-architect` |
+| Найти места в коде, конфигах, логах | агент `Explore` (Haiku); разобраться и сравнить варианты: `scout`; спроектировать: встроенный `Plan` |
 | Упоминается версия, флаг, конфиг, API Spark/Iceberg/Kafka/Debezium/Trino/dbt/Airflow/MinIO | `context7`: `resolve-library-id`, потом документация нужной версии. Не нашлось, тогда WebFetch официальной доки |
 | Баг, падение job, странное поведение пайплайна | `superpowers:systematic-debugging` до любых правок |
 | Пишется код с тестами | `superpowers:test-driven-development`: тест на отказ (дубль, late, невалидный JSON) первым |
-| Перед словами «готово» | `superpowers:verification-before-completion` плюс проверки из раздела «После каждого изменения» `CLAUDE.md` |
-| Дифф готов, до просьбы об «ок» на коммит | `/code-review`; для Spark/streaming/Python кода ещё `pr-review-toolkit:silent-failure-hunter` и `pr-test-analyzer`; перед коммитом `/security-review` |
+| Перед словами «готово» | `superpowers:verification-before-completion` плюс проверки из раздела «После каждого изменения» `docs/agent-rules.md` |
+| Дифф готов, до просьбы об «ок» на коммит | `make check`, затем агент `reviewer` (`13-harness.md`, раздел 4); перед коммитом `/security-review` |
 | Конец недели, обновление `HANDOFF.md`, правила разошлись с практикой | `/revise-claude-md` (правки `CLAUDE.md` только с «ок» владельца) |
 
 ## Конфликты с `CLAUDE.md` и как они решены
 
 - `superpowers` предлагает коммитить после каждого шага, worktrees и завершение ветки с merge/push. В проекте: коммит только после «ок», без push, без worktrees, работа в `main` маленькими коммитами.
 - `superpowers:brainstorming` пишет спеки в `docs/superpowers/specs/`. В проекте: `docs/planning/`, на русском.
+- `superpowers:subagent-driven-development`, `executing-plans` и `requesting-code-review` ведут свой цикл со своими исполнителем и ревьюером. В проекте цикл задают роли `13-harness.md` и skill `/task`, эти skills не применяются.
 - Ни один skill не делает Modify-гейт за владельца.
 
 ## Где зашито
 
 - `.claude/settings.json`: `enabledPlugins` и маркетплейс, ставится командой `claude plugin install <name>@claude-plugins-official --scope project`.
-- `CLAUDE.md`, раздел «Плагины агента»: короткая таблица триггеров со ссылкой сюда.
+- `docs/agent-rules.md`, раздел «Плагины агента»: короткая таблица триггеров со ссылкой сюда; `CLAUDE.md` ссылается на него.
 - Память агента: ссылка на этот файл.
 
 ## Проверка
 
 ```bash
-claude plugin list          # пять плагинов, enabled, scope project
+claude plugin list          # пять плагинов, scope project; feature-dev и pr-review-toolkit disabled
 cat .claude/settings.json   # enabledPlugins содержит все пять
 ```
 
-В новой сессии: `/review-pr`, `/feature-dev`, `/revise-claude-md` видны в меню, в `/mcp` есть `context7` в статусе connected.
+В новой сессии: `/revise-claude-md` виден в меню, `/review-pr` и `/feature-dev` нет, в `/mcp` есть `context7` в статусе connected.

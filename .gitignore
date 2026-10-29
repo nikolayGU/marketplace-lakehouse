@@ -1,5 +1,7 @@
 .env
 .verify-stamp
+.check-stamp
+.review-stamp
 data/raw/
 data/checkpoints/
 *.zip

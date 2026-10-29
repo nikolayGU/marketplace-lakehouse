@@ -1,6 +1,6 @@
 # Правила агентов
 
-Версия 1.1, 17.10.2026 (1.0 от 19.09.2026 жила в `CLAUDE.md`). Полный свод правил для любого агента (Claude Code, Codex, Cursor). Карта и правила, которые действуют всегда, в `AGENTS.md` в корне; при расхождении главнее `AGENTS.md`.
+Версия 1.2, 29.10.2026 (1.1 от 17.10.2026; 1.0 от 19.09.2026 жила в `CLAUDE.md`). Полный свод правил для любого агента (Claude Code, Codex, Cursor). Карта и правила, которые действуют всегда, в `AGENTS.md` в корне; при расхождении главнее `AGENTS.md`.
 
 ## Что за проект
 
@@ -10,7 +10,7 @@ Marketplace Lakehouse (mini): учебная, но production-like Data Platform
 
 1. `docs/HANDOFF.md`: текущее состояние и следующий шаг; `docs/NEXT_SESSION.md`: стартовый промпт текущего блока.
 2. `docs/planning/00-mini-architecture-review.md`: архитектура и обоснования, приоритет над любыми другими описаниями.
-3. `docs/planning/01-roadmap.md`: задачи `W<n>-T<nn>` с DoD.
+3. Спека и план текущего блока: по ссылкам из `docs/NEXT_SESSION.md`, как в `AGENTS.md` («Читать первым»). `docs/planning/01-roadmap.md` хранит историю задач `W<n>-T<nn>` с DoD.
 4. `DECISIONS.md`: принятые ADR. Код, противоречащий ADR, не пишется, сначала новый ADR.
 5. `OPERATIONS.md`: профили, порты, что можно запускать одновременно.
 
@@ -27,7 +27,7 @@ Marketplace Lakehouse (mini): учебная, но production-like Data Platform
 
 ## После каждого изменения
 
-- Запустить соответствующие тесты: `make lint`, `make test` для Python; `dbt parse` и `dbt build --select <model>` для dbt; `docker compose config` для compose; `sqlfluff lint` для SQL.
+- Запустить соответствующие проверки: `make check` (`make lint` и `make test`) для Python; `dbt parse` и `dbt build --select <model>` для dbt; `docker compose config` для compose; `sqlfluff lint` для SQL.
 - Если изменение касается compose, Dockerfile, SQL, конфигов: показать, как проверить вручную (команда и ожидаемый вывод).
 - Проверить влияние на пайплайн: что будет с checkpoint, с существующими таблицами Iceberg, с offsets, с DAG. Если ответ «нужно удалить checkpoint или таблицу», написать это явно и ждать «ок».
 - Обновить документацию, если изменилось поведение: `OPERATIONS.md`, `DECISIONS.md`, docstring контракта.
@@ -55,7 +55,7 @@ Marketplace Lakehouse (mini): учебная, но production-like Data Platform
 ## Правила коммитов
 
 - Формат: `<область>: <что сделано>`. Области: `oltp`, `cdc`, `stream`, `lake`, `dbt`, `orchestrate`, `obs`, `ci`, `docs`, `infra`.
-- Коммит только после явного «ок» владельца на diff. Никогда `git push`, `git commit --amend` чужого коммита, `git reset --hard`.
+- Коммит только после явного «ок» владельца на diff и гейта `guard.py`: полный `make verify`, при изменённом коде ещё `make check` и вердикт `reviewer` (`docs/planning/13-harness.md`, раздел 5). Никогда `git push`, `git commit --amend` чужого коммита, `git reset --hard`.
 
 ## Understanding-гейты
 
@@ -70,15 +70,15 @@ Marketplace Lakehouse (mini): учебная, но production-like Data Platform
 
 ## Плагины агента
 
-Стоят на уровне проекта (`.claude/settings.json`), обоснование и полный список триггеров в `docs/planning/03-agent-tooling.md`. Правила этого свода и `AGENTS.md` выше любого skill.
+Стоят на уровне проекта (`.claude/settings.json`), обоснование и полный список триггеров в `docs/planning/03-agent-tooling.md`; роли агентов и цикл задачи в `docs/planning/13-harness.md`. Правила этого свода и `AGENTS.md` выше любого skill.
 
 - Версия, флаг, конфиг или API Spark, Iceberg, Kafka, Debezium, Trino, dbt, Airflow, MinIO: сначала `context7` (документация нужной версии), не память.
 - Задача с выбором реализации: `superpowers:brainstorming`, затем `superpowers:writing-plans`. Спеки и планы в `docs/planning/` на русском, не в `docs/superpowers/`, и без коммита до «ок».
-- Разобраться в существующем коде или спроектировать изменение: агенты `feature-dev:code-explorer`, `feature-dev:code-architect`.
+- Найти места в коде, конфигах, логах: агент `Explore` (Haiku). Разобраться, сравнить варианты, сверить документ с кодом: `scout`. Спроектировать изменение: встроенный агент `Plan`.
 - Баг или падение job: `superpowers:systematic-debugging` до правок. Код с тестами: `superpowers:test-driven-development`, первым тест на отказ.
-- Дифф готов: `/code-review`, для Python и Spark ещё `pr-review-toolkit:silent-failure-hunter` и `pr-test-analyzer`, перед коммитом `/security-review`. Перед «готово»: `superpowers:verification-before-completion`.
+- Дифф готов: `make check`, затем агент `reviewer` (`docs/planning/13-harness.md`, раздел 4), перед коммитом `/security-review`. Перед «готово»: `superpowers:verification-before-completion`.
 - Конец недели или правила разошлись с практикой: `/revise-claude-md`, правки только с «ок».
-- Из `superpowers` не применяются: коммит после каждого шага, worktrees, `finishing-a-development-branch` (merge, push, PR).
+- Из `superpowers` не применяются: коммит после каждого шага, worktrees, `finishing-a-development-branch` (merge, push, PR), `subagent-driven-development`, `executing-plans`, `requesting-code-review` (цикл задают роли и `/task`).
 
 ## Когда не уверен
 

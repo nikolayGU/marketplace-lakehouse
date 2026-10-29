@@ -9,8 +9,10 @@ echo "== git"
 git log --oneline -5
 git status --short
 git diff --stat HEAD
-echo "== verify stamp"
-python3 scripts/agent_state.py show "$root"
+echo "== stamps"
+for kind in verify check review; do
+  echo "$kind: $(python3 scripts/agent_state.py show "$kind" "$root" 2>/dev/null || echo unreadable)"
+done
 echo "== containers"
 docker ps --format '{{.Names}} {{.Status}}' 2>/dev/null || echo "docker unavailable"
 echo "== replay"

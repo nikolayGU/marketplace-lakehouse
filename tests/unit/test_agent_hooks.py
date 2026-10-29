@@ -7,10 +7,12 @@ from typing import Any
 
 import pytest
 
-from scripts.agent_state import write_stamp
+from scripts.agent_state import VERDICTS, read_stamp, record_review, tree_hash, write_stamp
 
 REPO = Path(__file__).resolve().parents[2]
 HOOKS = REPO / ".claude" / "hooks"
+PHRASE = {mode: phrase for phrase, mode in VERDICTS.items()}
+COMMIT = "git add -A && git commit -m change"
 
 
 def hook(
@@ -48,11 +50,28 @@ def repo(tmp_path: Path) -> Path:
     git(tmp_path, "init", "-q")
     git(tmp_path, "config", "user.email", "t@example.invalid")
     git(tmp_path, "config", "user.name", "t")
-    (tmp_path / ".gitignore").write_text(".verify-stamp\n")
+    (tmp_path / ".gitignore").write_text(".verify-stamp\n.check-stamp\n.review-stamp\n")
     (tmp_path / "job.py").write_text("x = 1\n")
     git(tmp_path, "add", ".")
     git(tmp_path, "commit", "-q", "-m", "init")
     return tmp_path
+
+
+def lines(*parts: str) -> str:
+    return "".join(f"{part}\n" for part in parts)
+
+
+def review(root: Path, mode: str = "accept") -> None:
+    """The reviewer's verdict on the working tree as it is now, recorded the way the hook does."""
+    tree = tree_hash(root)
+    record_review(root, lines(f"Вердикт: {PHRASE[mode]}", "Предмет: код", f"Дерево: {tree}"))
+
+
+def gate_stamps(root: Path, review_mode: str = "accept") -> None:
+    """Every step of the gate passed on the working tree as it is now."""
+    write_stamp(root, "full")
+    write_stamp(root, "check")
+    review(root, review_mode)
 
 
 @pytest.mark.parametrize(
@@ -104,6 +123,77 @@ def test_guard_denies(command: str) -> None:
 
     assert decision(result) == "deny"
     assert "blocked by .claude/hooks/guard.py" in result.stderr
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "echo 'full 2026-10-29T10:00:00Z abc' > .verify-stamp",
+        "echo x >> .check-stamp",
+        "cp /tmp/x .review-stamp",
+        "tee .review-stamp < /tmp/x",
+        "touch .check-stamp",
+        "rm .review-stamp",
+        "sed -i s/a/b/ .verify-stamp",
+        "mv /tmp/x .check-stamp 2>/dev/null",
+        f"echo x > {REPO}/.review-stamp",
+        "python3 scripts/agent_state.py stamp full .",
+        "uv run python scripts/agent_state.py stamp check .",
+        "python3 -m scripts.agent_state stamp check .",
+        "python3 'scripts/agent_state.py' 'stamp' full .",
+        'python3 -c "from scripts.agent_state import record_review"',
+        "python3 -c \"from scripts.agent_state import write_stamp; write_stamp(None, 'full')\"",
+        "python3 - <<'EOF'\nfrom scripts import agent_state as s\ns.write_stamp(None, 'full')\nEOF",
+        "python3 -c \"open('.review-stamp', 'w').write('accept x y')\"",
+        # Review 29.10, finding 3: forms the first patch let through.
+        "python3 -c \"from pathlib import Path; Path('.review-stamp').write_text('x')\"",
+        "python3 -c \"import shutil; shutil.copy('/tmp/x', '.review-stamp')\"",
+        "python3 -c \"import os; os.replace('/tmp/x', '.check-stamp')\"",
+        "dd if=/tmp/x of=.review-stamp",
+        "python3 -c \"import scripts.agent_state as s; s._store(s.Path(), s.REVIEW_STAMP, 'a')\"",
+        # make check is the only way to the check stamp.
+        "python3 scripts/agent_state.py check .",
+    ],
+)
+def test_guard_denies_a_gate_stamp_written_by_hand(command: str) -> None:
+    result = bash(command)
+
+    assert decision(result) == "deny"
+    assert "writes a gate stamp by hand" in result.stderr
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "make -i check",
+        "make check -i",
+        "make -k check",
+        "make --ignore-errors check",
+        "make check -o lint -o test",
+        "make -o test check",
+        "make -C . check",
+        "PYTEST_ADDOPTS=--collect-only make check",
+        "MAKEFLAGS=-i make check",
+        "make check MAKEFLAGS=-i",
+        "env PYTEST_ADDOPTS=-x make check",
+        "export MAKEFLAGS=i; make check",
+    ],
+)
+def test_guard_denies_make_check_bent_to_stamp_failing_checks(command: str) -> None:
+    result = bash(command)
+
+    assert decision(result) == "deny"
+    assert "runs make check in a form that can stamp failing checks" in result.stderr
+
+
+@pytest.mark.parametrize("tool", ["Write", "Edit", "NotebookEdit"])
+@pytest.mark.parametrize("name", [".verify-stamp", ".check-stamp", ".review-stamp"])
+def test_guard_denies_every_file_tool_on_a_gate_stamp(tool: str, name: str) -> None:
+    key = "notebook_path" if tool == "NotebookEdit" else "file_path"
+    result = hook("guard.py", {"tool_name": tool, "tool_input": {key: str(REPO / name)}})
+
+    assert decision(result) == "deny"
+    assert "writes a gate stamp by hand" in result.stderr
 
 
 @pytest.mark.parametrize(
@@ -211,6 +301,12 @@ def test_guard_denies(command: str) -> None:
         "cp /tmp/x .claude/agents/scout.md",
         "tee docs/agent-rules.md < /tmp/x",
         "python3 -c \"open('AGENTS.md', 'w').write('')\"",
+        # The skills, and the code that says what a stamp means.
+        "cp /tmp/x .claude/skills/task/SKILL.md",
+        "tee .claude/skills/task/SKILL.md < /tmp/x",
+        "sed -i s/a/b/ scripts/agent_state.py",
+        "cp /tmp/x scripts/agent_state.py",
+        f"cat /tmp/x > {REPO}/scripts/agent_state.py",
     ],
 )
 def test_guard_asks_the_owner(command: str) -> None:
@@ -263,6 +359,22 @@ def test_guard_asks_the_owner(command: str) -> None:
         "docker run --rm --entrypoint sh lakehouse/spark:dev -c 'sha256sum spark_jobs/*.py'",
         "docker compose logs --tail=200 airflow-scheduler",
         "curl -s 127.0.0.1:8083/connectors/shop-connector/status",
+        # The gate is run through make and the hooks; its stamps and tree id are read freely.
+        "make check",
+        "python3 scripts/agent_state.py tree .",
+        "python3 scripts/agent_state.py show review .",
+        "git check-ignore .review-stamp",
+        "cat .verify-stamp .check-stamp .review-stamp",
+        'grep -rn "agent_state.py stamp" scripts Makefile',
+        "uv run pytest tests/unit/test_agent_state.py -k record_review -q",
+        "uv run pytest tests/unit/test_agent_state.py::test_record_review_ignores_a_line -q",
+        "cp scripts/agent_state.py /tmp/scratchpad/agent_state.py",
+        # Review 29.10, finding 7: reads and tests of the stamp code are no stamp writes.
+        "uv run mypy scripts/agent_state.py && uv run pytest tests/unit -q -k record_review",
+        "make check 2>&1 | tail -5",
+        "cd /home/gusev/marketplace-lakehouse && make check",
+        "make lint",
+        "make test",
     ],
 )
 def test_guard_allows(command: str) -> None:
@@ -289,6 +401,14 @@ def test_guard_allows(command: str) -> None:
         ("docs/HANDOFF.md", "allow"),
         ("/tmp/scratchpad/copy/.claude/hooks/guard.py", "allow"),
         ("/tmp/scratchpad/copy/AGENTS.md", "allow"),
+        # The skills and the code that says what a stamp means: a click from the owner.
+        (".claude/skills/task/SKILL.md", "ask"),
+        ("scripts/agent_state.py", "ask"),
+        ("tests/unit/test_agent_state.py", "allow"),
+        ("/tmp/scratchpad/copy/.claude/skills/task/SKILL.md", "allow"),
+        ("/tmp/scratchpad/copy/scripts/agent_state.py", "allow"),
+        # A stamp outside this repository is no gate stamp.
+        ("/tmp/scratchpad/copy/.review-stamp", "allow"),
     ],
 )
 def test_guard_on_file_writes(path: str, expected: str) -> None:
@@ -303,6 +423,8 @@ def test_commit_needs_a_full_verify_of_this_tree(repo: Path) -> None:
     assert decision(bash(commit, repo)) == "deny"
 
     write_stamp(repo, "fast")
+    write_stamp(repo, "check")
+    review(repo)
     assert decision(bash(commit, repo)) == "deny"
 
     write_stamp(repo, "full")
@@ -403,3 +525,326 @@ def test_session_context_survives_missing_docs(repo: Path) -> None:
     context = json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]
 
     assert "docs/HANDOFF.md is missing" in context
+
+
+def test_commit_of_code_lists_every_step_of_the_gate_it_lacks(repo: Path) -> None:
+    (repo / "job.py").write_text("x = 2\n")
+
+    result = bash(COMMIT, repo)
+    assert decision(result) == "deny"
+    assert "git commit without a full make verify, make check and a reviewer verdict" in (
+        result.stderr
+    )
+    assert "see docs/planning/13-harness.md, section 5" in result.stderr
+
+    write_stamp(repo, "full")
+    result = bash(COMMIT, repo)
+    assert decision(result) == "deny"
+    assert "git commit without make check and a reviewer verdict on" in result.stderr
+
+    write_stamp(repo, "check")
+    result = bash(COMMIT, repo)
+    assert decision(result) == "deny"
+    assert "git commit without a reviewer verdict on" in result.stderr
+
+    review(repo)
+    assert decision(bash(COMMIT, repo)) == "allow"
+
+
+def test_commit_of_code_needs_the_check_and_the_review_even_with_a_full_verify(
+    repo: Path,
+) -> None:
+    (repo / "job.py").write_text("x = 2\n")
+    write_stamp(repo, "full")
+    review(repo)
+    result = bash(COMMIT, repo)
+    assert decision(result) == "deny" and "git commit without make check on" in result.stderr
+
+    (repo / ".review-stamp").unlink()
+    write_stamp(repo, "check")
+    result = bash(COMMIT, repo)
+    assert decision(result) == "deny" and "git commit without a reviewer verdict on" in (
+        result.stderr
+    )
+
+
+@pytest.mark.parametrize("mode", ["accept", "accept-with-notes"])
+def test_commit_of_code_goes_with_an_accepting_verdict(repo: Path, mode: str) -> None:
+    (repo / "job.py").write_text("x = 2\n")
+    gate_stamps(repo, mode)
+
+    assert decision(bash(COMMIT, repo)) == "allow"
+
+
+def test_commit_of_code_is_refused_after_a_return_verdict(repo: Path) -> None:
+    (repo / "job.py").write_text("x = 2\n")
+    gate_stamps(repo, "return")
+
+    result = bash(COMMIT, repo)
+
+    assert decision(result) == "deny"
+    assert "a reviewer verdict other than 'return'" in result.stderr
+
+
+def test_code_edited_after_the_stamps_needs_all_of_them_again(repo: Path) -> None:
+    (repo / "job.py").write_text("x = 2\n")
+    gate_stamps(repo)
+    (repo / "job.py").write_text("x = 3\n")
+
+    result = bash(COMMIT, repo)
+    assert decision(result) == "deny"
+    assert "a full make verify, make check and a reviewer verdict" in result.stderr
+
+    gate_stamps(repo)
+    assert decision(bash(COMMIT, repo)) == "allow"
+
+
+def test_a_review_of_older_code_does_not_cover_newer_code(repo: Path) -> None:
+    (repo / "job.py").write_text("x = 2\n")
+    review(repo)
+    (repo / "job.py").write_text("x = 3\n")
+    write_stamp(repo, "full")
+    write_stamp(repo, "check")
+
+    result = bash(COMMIT, repo)
+
+    assert decision(result) == "deny"
+    assert "git commit without a reviewer verdict on" in result.stderr
+
+
+def test_a_new_file_after_the_stamps_needs_all_of_them_again(repo: Path) -> None:
+    gate_stamps(repo)
+    (repo / "extra.py").write_text("y = 1\n")
+
+    assert decision(bash(COMMIT, repo)) == "deny"
+
+
+def test_docs_changed_after_every_stamp_keep_the_commit_open(repo: Path) -> None:
+    (repo / "job.py").write_text("x = 2\n")
+    gate_stamps(repo)
+    (repo / "docs").mkdir()
+    (repo / "docs" / "plan.txt").write_text("x")
+    (repo / "NOTES.md").write_text("x")
+
+    assert decision(bash(COMMIT, repo)) == "allow"
+
+
+def test_only_docs_changed_needs_a_full_verify_and_nothing_else(repo: Path) -> None:
+    (repo / "NOTES.md").write_text("x")
+    assert decision(bash("git commit -m notes", repo)) == "deny"
+
+    write_stamp(repo, "full")
+    assert not (repo / ".check-stamp").exists() and not (repo / ".review-stamp").exists()
+    assert decision(bash("git commit -m notes", repo)) == "allow"
+
+
+def test_a_verify_before_the_commit_in_one_chain_does_not_replace_check_and_review(
+    repo: Path,
+) -> None:
+    chain = "make verify && git add -A && git commit -m x"
+    (repo / "job.py").write_text("x = 2\n")
+    result = bash(chain, repo)
+    assert decision(result) == "deny"
+    assert "git commit without make check and a reviewer verdict on" in result.stderr
+
+    write_stamp(repo, "check")
+    review(repo)
+    assert decision(bash(chain, repo)) == "allow"
+    assert decision(bash("make verify-fast && git commit -m x", repo)) == "deny"
+
+
+def test_a_stamp_of_a_tree_that_is_gone_counts_as_missing(repo: Path) -> None:
+    (repo / "job.py").write_text("x = 2\n")
+    write_stamp(repo, "full")
+    review(repo)
+    (repo / ".check-stamp").write_text(f"check 2026-10-29T10:00:00Z {'0' * 40}\n")
+
+    result = bash(COMMIT, repo)
+
+    assert decision(result) == "deny"
+    assert "git commit without make check on" in result.stderr
+
+
+def reviewer_report(root: Path, mode: str = "accept") -> str:
+    tree = tree_hash(root)
+    return lines(
+        f"Вердикт: {PHRASE[mode]}",
+        "Предмет: код",
+        "Проверено и чисто: make test",
+        f"Дерево: {tree}",
+    )
+
+
+def test_a_late_return_without_a_tree_closes_the_gate_an_accept_opened(repo: Path) -> None:
+    (repo / "job.py").write_text("x = 2\n")
+    gate_stamps(repo)
+    assert decision(bash(COMMIT, repo)) == "allow"
+
+    late = lines("Вердикт: вернуть", "Предмет: код", "Проверено и чисто: ничего")
+    assert hook("review_stamp.py", handback(late), repo).returncode == 0
+
+    result = bash(COMMIT, repo)
+    assert decision(result) == "deny" and "other than 'return'" in result.stderr
+
+
+def test_a_plan_review_neither_opens_nor_closes_the_gate(repo: Path) -> None:
+    (repo / "job.py").write_text("x = 2\n")
+    write_stamp(repo, "full")
+    write_stamp(repo, "check")
+    plan = reviewer_report(repo).replace("Предмет: код", "Предмет: план")
+
+    assert hook("review_stamp.py", handback(plan), repo).returncode == 0
+    assert decision(bash(COMMIT, repo)) == "deny"
+
+    review(repo)
+    assert (
+        hook("review_stamp.py", handback(plan.replace("принять", "вернуть")), repo).returncode == 0
+    )
+    assert decision(bash(COMMIT, repo)) == "allow"
+
+
+def handback(report: str, agent: str = "reviewer") -> dict[str, Any]:
+    return {
+        "hook_event_name": "PostToolUse",
+        "tool_name": "SubagentHandback",
+        "agent_type": agent,
+        "agent_id": "a1",
+        "tool_input": {"message": report},
+        "tool_response": "delivered",
+    }
+
+
+def stopped(report: str | None, agent: str = "reviewer") -> dict[str, Any]:
+    event: dict[str, Any] = {
+        "hook_event_name": "SubagentStop",
+        "agent_type": agent,
+        "agent_id": "a1",
+        "stop_hook_active": False,
+    }
+    if report is not None:
+        event["last_assistant_message"] = report
+    return event
+
+
+def test_a_handback_of_the_reviewer_records_its_verdict(repo: Path) -> None:
+    result = hook("review_stamp.py", handback(reviewer_report(repo)), repo)
+
+    stamp = read_stamp(repo, "review")
+    assert result.returncode == 0 and result.stdout == ""
+    assert stamp is not None and stamp.mode == "accept" and stamp.fresh
+    assert "accept" in result.stderr
+
+
+def test_the_report_of_another_agent_is_not_recorded(repo: Path) -> None:
+    report = reviewer_report(repo)
+
+    for agent in ("scout", "implementer", "Explore", "pr-review-toolkit:code-reviewer", ""):
+        assert hook("review_stamp.py", handback(report, agent), repo).returncode == 0
+        assert hook("review_stamp.py", stopped(report, agent), repo).returncode == 0
+    no_agent = {"hook_event_name": "PostToolUse", "tool_input": {"message": report}}
+    assert hook("review_stamp.py", no_agent, repo).returncode == 0
+
+    assert read_stamp(repo, "review") is None
+
+
+def test_subagent_stop_of_the_reviewer_records_its_verdict(repo: Path) -> None:
+    result = hook("review_stamp.py", stopped(reviewer_report(repo, "accept-with-notes")), repo)
+
+    stamp = read_stamp(repo, "review")
+    assert result.returncode == 0
+    assert stamp is not None and stamp.mode == "accept-with-notes" and stamp.fresh
+
+
+@pytest.mark.parametrize("closing", [None, "", "Report delivered."])
+def test_subagent_stop_after_a_handback_leaves_the_stamp_as_it_is(
+    repo: Path, closing: str | None
+) -> None:
+    hook("review_stamp.py", handback(reviewer_report(repo)), repo)
+    before = (repo / ".review-stamp").read_text()
+
+    result = hook("review_stamp.py", stopped(closing), repo)
+
+    assert result.returncode == 0
+    assert (repo / ".review-stamp").read_text() == before
+
+
+def test_a_closing_text_with_a_return_verdict_revokes_the_stamp(repo: Path) -> None:
+    hook("review_stamp.py", handback(reviewer_report(repo)), repo)
+
+    result = hook("review_stamp.py", stopped("Вердикт: вернуть"), repo)
+
+    stamp = read_stamp(repo, "review")
+    assert result.returncode == 0 and "revoked" in result.stderr
+    assert stamp is not None and stamp.mode == "return"
+
+
+def test_each_event_is_read_from_its_own_field(repo: Path) -> None:
+    report = reviewer_report(repo)
+    stop_with_a_message = {**stopped(None), "tool_input": {"message": report}}
+    handback_with_a_closing_text = {**handback(""), "last_assistant_message": report}
+
+    assert hook("review_stamp.py", stop_with_a_message, repo).returncode == 0
+    assert hook("review_stamp.py", handback_with_a_closing_text, repo).returncode == 0
+
+    assert read_stamp(repo, "review") is None
+
+
+def test_a_verdict_for_code_that_changed_since_is_not_recorded(repo: Path) -> None:
+    report = reviewer_report(repo)
+    (repo / "job.py").write_text("x = 2\n")
+
+    result = hook("review_stamp.py", handback(report), repo)
+
+    assert result.returncode == 0 and "nothing recorded" in result.stderr
+    assert read_stamp(repo, "review") is None
+
+
+def test_the_review_hook_never_fails_the_session(
+    repo: Path, tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    env = {**os.environ, "CLAUDE_PROJECT_DIR": str(repo)}
+    for garbage in ("not json", "", "[]", '"x"', "null", '{"agent_type": "reviewer"}'):
+        result = subprocess.run(
+            [sys.executable, str(HOOKS / "review_stamp.py")],
+            input=garbage,
+            capture_output=True,
+            text=True,
+            env=env,
+            check=False,
+        )
+        assert result.returncode == 0, garbage
+    assert read_stamp(repo, "review") is None
+
+    # The repo fixture made tmp_path a repository; this directory is outside any.
+    outside = tmp_path_factory.mktemp("not-a-repo")
+    result = hook(
+        "review_stamp.py", handback(lines("Вердикт: принять", f"Дерево: {'a' * 40}")), outside
+    )
+    assert result.returncode == 0 and "could not record" in result.stderr
+    assert list(outside.iterdir()) == []
+
+
+def test_settings_wire_the_review_hook_and_make_the_guard_fail_closed() -> None:
+    settings = json.loads((REPO / ".claude" / "settings.json").read_text())
+    hooks = settings["hooks"]
+
+    def commands(event: str, matcher: str) -> list[str]:
+        return [
+            handler["command"]
+            for group in hooks[event]
+            if group.get("matcher") == matcher
+            for handler in group["hooks"]
+        ]
+
+    assert any("review_stamp.py" in c for c in commands("PostToolUse", "SubagentHandback"))
+    assert any("review_stamp.py" in c for c in commands("SubagentStop", "reviewer"))
+    guards = [
+        h for group in hooks["PreToolUse"] for h in group["hooks"] if "guard.py" in h["command"]
+    ]
+    assert guards and all(handler.get("onFailure") == "block" for handler in guards)
+    for plugin in (
+        "feature-dev@claude-plugins-official",
+        "pr-review-toolkit@claude-plugins-official",
+    ):
+        assert settings["enabledPlugins"][plugin] is False
+    assert (HOOKS / "review_stamp.py").exists()

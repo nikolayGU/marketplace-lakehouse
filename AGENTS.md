@@ -23,7 +23,8 @@ Olist), Debezium, Kafka, Spark bronze и silver (`MERGE`), Iceberg в Lakekeeper
 | `make verify-fast` | то же без `make silver`: только чтение, в lake ничего не пишет |
 | `make reconcile` | Postgres против живых строк silver по 7 таблицам: количество, md5 набора PK, суммы decimal |
 | `make dbt-build` | seed, run, test в `lake.gold` |
-| `make report` | факты для отчёта: git, отметка verify, контейнеры, часы реплея; только чтение |
+| `make report` | факты для отчёта: git, отметки verify, check и ревью, контейнеры, часы реплея; только чтение |
+| `make check` | `make lint` и `make test`, при успехе пишет `.check-stamp` для гейта коммита |
 | `make lint`, `make test`, `make test-spark`, `make dbt-parse` | линтеры; unit-тесты; Spark-тесты в образе; dbt без хранилища |
 
 `make verify` пишет в silver, если в bronze есть снапшоты, которых silver ещё не видел (после
@@ -32,13 +33,18 @@ Olist), Debezium, Kafka, Spark bronze и silver (`MERGE`), Iceberg в Lakekeeper
 ## Хуки (`.claude/hooks/`, тесты в `tests/unit/test_agent_hooks.py`)
 
 - `guard.py`: deny для секретов, force-push, DROP, TRUNCATE, DELETE без WHERE, сдвига и удаления
-  слота репликации и коммита без полного `make verify` этого дерева (Markdown и `docs/` после verify
-  не в счёт); окно подтверждения («ок» кнопкой) для остальных запретов ниже. Команды только из
-  чтения и поиска (grep, rg, cat, git log/show/diff) проходят, даже если в тексте есть эти слова.
+  слота репликации, записи отметок руками и коммита без полного `make verify` этого дерева, а при
+  изменённом коде ещё без `make check` и вердикта `reviewer` «принять» или «принять с замечаниями»
+  по этому дереву (Markdown и `docs/` после отметок не в счёт); окно подтверждения («ок» кнопкой)
+  для остальных запретов ниже. Команды только из чтения и поиска (grep, rg, cat, git log/show/diff)
+  проходят, даже если в тексте есть эти слова.
+- `review_stamp.py`: по отчёту `reviewer` (строки `Вердикт:`, `Предмет:`, `Дерево:`) пишет или
+  отзывает `.review-stamp`.
 - `stop_gate.py`: ход с изменённым кодом не закончится без свежего `verify-fast` или `verify`.
 - `session_context.py`: на старте сессии подгружает git, отметку verify, HANDOFF, NEXT_SESSION.
 - `guard.py` читает текст команды: правку, в тексте которой есть такие слова, делать через Edit.
-- Правки `.claude/hooks/` агент готовит в копии в scratchpad, владелец применяет их командой `cp`.
+- Правки `.claude/hooks/` и `.claude/settings.json` агент готовит в копии в scratchpad, владелец
+  применяет их командой `cp` или `git apply`.
 - Полный список того, что спрашивает хук: docstring `guard.py`. Классы действий агента и правка
   хука, ждущая владельца: `docs/planning/13-harness.md`, разделы 2 и 10.
 
@@ -47,8 +53,10 @@ Olist), Debezium, Kafka, Spark bronze и silver (`MERGE`), Iceberg в Lakekeeper
 1. Аудит: прочитать задачу, код, ADR; выполнить блок «Вход» плана. Только чтение.
 2. План: шаги, файлы, проверки, риски, что требует «ок».
 3. «ок» владельца. Без него правок нет.
-4. Правки: одна задача, один diff. Первым тест на отказ.
-5. Проверки: `make lint`, `make test`, dbt если задет, затем `make verify`.
+4. Правки: одна задача, один diff, первым тест на отказ. Код пишет `implementer`, оркестратор сам
+   только мелкие правки (`docs/planning/13-harness.md`, раздел 1). Запуск цикла: `/task <ID | фраза>`.
+5. Проверки и ревью: `make check`, затронутые проверки и dbt, `reviewer`; замечания исправляет
+   `implementer`, не больше двух кругов; затем `make verify`.
 6. Отчёт. Коммит только после «ок» на diff, `<область>: <что сделано>`, без строк атрибуции.
 
 ## Жёсткие запреты: только с отдельным «ок» владельца
@@ -93,9 +101,10 @@ Olist), Debezium, Kafka, Spark bronze и silver (`MERGE`), Iceberg в Lakekeeper
 
 ## Подагенты
 
-- Роли `scout`, `implementer`, `reviewer`, `docs-writer`: `.claude/agents/`; брифы, ревью и
-  доказательства: `docs/planning/13-harness.md`.
-- Сканеры только читают, модель Sonnet, effort medium.
+- Основная сессия (оркестратор) на Opus. Роли в `.claude/agents/`: `Explore` (Haiku, поиск),
+  `scout` (Sonnet, анализ и пробы), `implementer` (Sonnet, код), `reviewer` (Opus, ревью),
+  `docs-writer` (Sonnet); брифы, ревью и доказательства: `docs/planning/13-harness.md`.
+- Сканеры (`Explore`, `scout`) только читают; `model` при вызове не переопределять.
 - Параллельная запись только в разные файлы; сведение и коммит в основной сессии.
 - Итог проверяет независимый агент в свежем контексте.
 
