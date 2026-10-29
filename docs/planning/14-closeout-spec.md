@@ -58,14 +58,15 @@ S3FileIO, `expire_snapshots` bronze (ADR-021), замена S3-слоя.
 | W6-D6 | 7 лишних parquet bronze | A | не трогать, записать в ADR-025 | удаление данных, которых нет в Kafka | да | ничего | принято исполнителем 27.10, A; записано в ADR-025 29.10 (W5-T05b) |
 | W6-D7 | WAL слота на простое | B | только правило алерта | слот держит WAL без сигнала | да | W6-T05 | принято, B, 29.10: `reviewer` «принять с замечаниями» по коду W6-T05 (два прохода), коммит 610694d |
 | W6-D8 | Цикл рестартов Spark | B | правило по рестартам `spark-bronze` | 15 рестартов за 5 мин без алерта на Spark | да | W6-T06 | принято, B, 29.10: `reviewer` «принять с замечаниями» по коду W6-T06 (два прохода), коммит 610694d |
-| W6-D9 | `dq_checks` при стоящем CDC | C | покой с учётом источника и алерт; код и доказательства готовит агент | ложный `AirflowDagFailed` при каждом простое CDC | да | коммит W6-T07 | ждёт владельца после готового diff |
-| W6-D10 | `segment.ms` живого `oltp.message` | C | применить | «retention 1 h» неверен для живой системы | нет: retention удалит записи старше часа (топик пуст) | W6-T08 | ждёт владельца, не блокирует старт |
-| W6-D11 | Дашборд по gold | B | Grafana и плагин Trino datasource | нет дашборда по gold (DoD W6-T01) | да | W6-T01 | принимается вердиктом `reviewer` в W6-T01 |
+| W6-D9 | `dq_checks` при стоящем CDC | C | покой с учётом источника и алерт; код и доказательства готовит агент | ложный `AirflowDagFailed` при каждом простое CDC | да | коммит W6-T07 | принято владельцем 29.10 ~17:40 UTC: «да» на diff (детектор по слоту после ревью круга 1); коммит 649cb68 |
+| W6-D10 | `segment.ms` живого `oltp.message` | C | применить | «retention 1 h» неверен для живой системы | нет: retention удалит записи старше часа (топик пуст) | W6-T08 | принято владельцем 29.10 17:00 UTC: «да»; применено (W6-T08) |
+| W6-D11 | Дашборд по gold | B | Grafana и плагин Trino datasource | нет дашборда по gold (DoD W6-T01) | да | W6-T01 | принято, B, 29.10: `reviewer` «принять с замечаниями» (второй проход) и живой шаг: плагин 1.4.1 на Grafana 13.2.2, 4 панели с данными, 276.7 MiB при 384M; коммит ab37157 |
 | W6-D12 | Окно B6 | A, питание владельца | 24 ч во время доковой работы | «сутки зелёные» W3-T05 и покой W4-T05 не доказаны | да | W6-T09 | принято исполнителем 27.10, A; ждёт питания |
 | W6-D13 | Бюджет реплея W6 | C | делегировать до 2 виртуальных дней порциями по 60 с | «ок» на каждую порцию | нет, виртуальное время тратится | W5-T05b шаг 12, живые проверки алертов | принято владельцем 29.10 15:35 UTC: «да» |
 | W6-D14 | Диаграмма | A | Mermaid и экспорт SVG | SVG без исходника устаревает молча | да | ничего | принято исполнителем 27.10, A |
 | W6-D15 | Говорят ли публичные документы, что проект построен агентами | C | да, отдельным разделом «How it was built» | процесс с агентами не виден читателю | да | раздел W6-T02 | принято владельцем 29.10 15:35 UTC: «да»; строку `AGENTS.md` «Язык и стиль» правит владелец |
 | W6-D16 | Точка отката JDBC (`iceberg_catalog`) при обслуживании | C | отпустить, копия префикса `warehouse/` до первого удаления | W5-T05b не выполнить, обслуживание живьём не доказано | нет: файлы старых снапшотов удаляются; откат только из копии | W5-T05b шаги 4-11 | принято владельцем 29.10 15:49 UTC: «да, с копией бакета первым шагом» |
+| W6-D17 | Права пользователя `grafana` в Trino (нет аутентификации и access control; плагин выполняет любой SQL) | C | агент рекомендовал принять риск и записать; владелец выбрал ограничить | дашборд даёт путь к DDL/DML в lake из браузера | да | W6-T11 | принято владельцем 29.10 ~18:25 UTC: «ограничить права сейчас» (file-based access control, `grafana` только select на `lake.gold`) |
 
 **W6-D1. Источник образов MinIO и mc.** B.
 - Зачем: образы удалены из реестров, smoke падает на `make bootstrap`; ADR-004 закрепил quay.
@@ -454,6 +455,17 @@ $COMPOSE exec -T airflow-scheduler airflow dags unpause iceberg_maintenance
 `dq_checks` зелёный; при «ок» на chaos 6 или 8 запуск даёт `in flight`, алерт горит.
 **Ловушки.** Не ослабить проверку: расхождение в покое обязано оставаться красным.
 
+**Итог 29.10.**
+
+```text
+Критерий: «Оба теста зелёные; мутация условия покоя убивается тестом; в покое живой dq_checks зелёный; при «ок» на chaos 6 или 8 запуск даёт in flight, алерт горит» (14-closeout-spec.md, W6-T07)
+Изменение: 649cb68 (checks.py: cdc_state, count_outcome, skip_source_values; sql.py CDC_PROGRESS; settings.py SHOP_SLOT, CDC_STATE_SEEN; dq_checks.py задача cdc_progress; alerts.yml CdcStalledSourceWrites; тесты; OPERATIONS); исполнитель implementer (две версии), дизайн детектора оркестратор после ревью, вход scout
+Проверка: make check 806 passed, 83 skipped; 25 мутаций убиты (implementer), мутации-ослабления ревьюера убиты; make alerts-test SUCCESS; make dags-check 5 dags; make verify -> verify ok (цикл), 29.10 ~17:40 UTC, HEAD 649cb68; живой dq_checks 17:45 в покое зелёный, cdc_stalled 0; chaos 6 (make chaos-connect-pause, 17:43-18:22): коннектор стоял 17:47:02-18:17:06, dq_checks 18:00 и 18:15 success с «in flight: CDC stands, no verdict», cdc_stalled 1 с 18:01, CdcStalledSourceWrites firing 18:20:04, после возобновления «ok: nothing lost ... silver equals Postgres», rc 0, verify-fast ok
+Независимо: reviewer: круг 0 «вернуть» (2 высоких: сверка значений отключалась при любой записи, связка DAG не покрыта тестами), круг 1 «принять с замечаниями» (1 средняя про chaos 8 в OPERATIONS исправлена оркестратором, 2 низкие); W6-D9 «да» владельца на diff
+Не проверено: chaos 8 вживую (короче окна алерта 20 мин; первый запуск может быть красным, если слот сдвинулся до остановки Kafka, записано в OPERATIONS)
+Риски: ложная остановка на один запуск при записи прямо перед запуском (Debezium подтверждает LSN по offset flush), алерт от неё не горит (окно 20 мин)
+```
+
 ### W6-T08 `segment.ms` живого `oltp.message`
 
 **Зависит от:** W6-D10. **Оценка** 0.5 ч. Без коммита кода; запись в OPERATIONS и HANDOFF.
@@ -466,6 +478,17 @@ $COMPOSE exec -T airflow-scheduler airflow dags unpause iceberg_maintenance
 **Сделать.** Четыре панели по `01-roadmap.md:109`: продажи по дням, топ категорий, SLA доставки по
 штатам, отмены; запросы только к `lake.gold`; `check_dashboards.py` проверяет и их.
 **Готово, когда.** Все панели с данными на живом стеке; скриншот в `docs/img/`; память `obs` в пределах лимита.
+
+**Итог 29.10.**
+
+```text
+Критерий: «Все панели с данными на живом стеке; скриншот в docs/img/; память obs в пределах лимита» (14-closeout-spec.md, W6-T01)
+Изменение: ab37157 (marketplace.json 4 панели только по lake.gold; provisioning trino.yml; compose grafana: GF_PLUGINS_PREINSTALL_SYNC=trino-datasource@1.4.1, лимит 384M; check_dashboards.py ветка Trino с дедлайном; тесты; OPERATIONS Dashboards и риск Trino; docs/img/marketplace-dashboard.png); исполнитель implementer (две версии), вход scout, живой шаг и скриншот оркестратор
+Проверка: make check 825 passed, 83 skipped; check_dashboards.py marketplace.json -> queries ok: 4; сверки (select): заказы панели 96 163 = count(*) fct_orders (сумма по штатам mart 96 650 была бы задвоением), GMV по категориям 13 086 460.39 = sum(gmv) mart; живой шаг 18:27 UTC по «ок»: плагин trino-datasource 1.4.1 установлен за 13 с, grafana healthy, пересоздан только он, datasource trino «Data source is working», /api/ds/query: Daily sales 600 строк, GMV by category 10, Delivery SLA 27, Cancellations 600; docker stats 276.7 MiB / 384 MiB (при старом лимите 256M не помещалась бы); скриншот 18:44 (Playwright в разовом контейнере в сети lake); make verify -> verify ok (цикл), HEAD ab37157
+Независимо: reviewer: круг 0 «вернуть» (1 высокое: задвоение заказов по штатам; 3 средних), круг 1 «принять с замечаниями» (3 низких, раздел 7 и OPERATIONS); W6-D11 принято, B
+Не проверено: офлайн-старт Grafana с новым томом (синхронная установка без сети останавливает Grafana целиком, записано в OPERATIONS)
+Риски: Trino без access control, пользователь grafana может писать в lake через Explore: W6-D17, карточка W6-T11; средняя доставка в таблице показана в неделях (автоформат единицы d)
+```
 
 ### W6-T02 README как карта, ARCHITECTURE с диаграммой, страница доказательств
 
@@ -498,6 +521,19 @@ W6-D14. `docs/evidence.md`: числа chaos 1-9, сверка, обслужив
 **Готово, когда.** По нулю failed у четырёх DAG за окно, 0 строк `Heartbeat recovered`, 0 событий
 42 и 506 внутри окна, `docker stats` записан.
 
+### W6-T11 Trino: пользователь `grafana` только читает `lake.gold`
+
+**Зачем.** W6-D17: ревью W6-T01 (замечание 4) нашло, что Trino без аутентификации и access control,
+а плагин Grafana выполняет любой SQL; на Lakekeeper drop таблицы стирает файлы.
+**Оценка** 2-3 ч. **Зависит от:** W6-T01 (коммит кода дашборда). **Область:** `infra`.
+**Сделать.** Тест первым (правила разбираются unit-тестом: `grafana` только SELECT на `lake.gold`,
+остальные клиенты с прежними правами); `docker/trino/etc/access-control.properties` и правила
+(`access-control.name=file`); монтирование в compose; OPERATIONS «Dashboards» и риск в разделе
+Trino. Живой шаг по «ок»: пересоздание `trino`.
+**Готово, когда.** От `grafana` select по `lake.gold` проходит, create, insert и drop получают
+отказ; `make dbt-build`, `make reconcile`, `make verify` и дашборды проходят как раньше; `make
+check` зелёный; вердикт `reviewer`.
+
 ### W6-T10 Закрытие
 
 **Оценка** 1 ч. **Область:** `docs`. HANDOFF итоговый, статусы в `01-roadmap.md`, `NEXT_SESSION.md`
@@ -528,6 +564,7 @@ W6-D14. `docs/evidence.md`: числа chaos 1-9, сверка, обслужив
 | 6 | W6-T00, часть 5 (копия tar, push, smoke, живой MinIO) | | 2, 5, W6-D3 |
 | 7 | W6-T08 | | W6-D10 |
 | 8 | W6-T01 | `obs` | 5, W6-D11 (B) |
+| 8a | W6-T11 | `infra` | 8, W6-D17 |
 | 9 | W6-T02, итог W6-T03; параллельно W6-T09 | `docs` | 2, 3, 4, 5; питание для B6 |
 | 10 | W6-T10 | `docs` | все |
 
@@ -601,6 +638,12 @@ W6-D14. `docs/evidence.md`: числа chaos 1-9, сверка, обслужив
 - Ревью расписания smoke (29.10), низкая: `test_smoke_runs_on_demand_and_weekly_and_checks_verify_ok`
   проверяет `permissions` только на верхнем уровне; `contents: write` на уровне job тест не ловит
   (пробел был и раньше). Кандидат: ни у одного job нет `permissions` шире `contents: read`.
+- Ревью W6-T01 (29.10, второй проход «принять с замечаниями»), не исправлено, низкие:
+  `test_trino_query_stops_at_the_deadline_when_the_query_never_finishes` при снятой проверке
+  дедлайна не падает, а виснет (заглушка всегда отдаёт nextUri, у pytest нет таймаута);
+  размножение строк join в панели (CROSS JOIN) тестами не ловится, сверка сумм только ручная.
+- Ревью W6-T07 (29.10, круг 1), низкая: ветка `rows[0][0] is None` в `cdc_progress` недостижима
+  (`coalesce(..., 0)`), мутация её удаления эквивалентна.
 - Харнесс, 29.10: `guard.py` отказывает («writes a gate stamp by hand») на составной команде,
   где чтение файла отметки или встроенный Python идут в одной строке с
   `scripts/agent_state.py show`, и на heredoc с текстом об отметках; по отдельности проходят.

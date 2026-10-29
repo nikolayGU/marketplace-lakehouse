@@ -115,6 +115,15 @@ unit), smoke красный (образы MinIO), W5-T05b не начата, г�
 
 | Дата UTC | Действие | Кто дал | Где видно |
 |---|---|---|---|
+| 29.10 18:50 | Цикл verify, коммит `ab37157` (W6-T01), коммит docs, push и smoke по W6-D3 | W6-D4, постоянное «ок» W6-D3 | `git log`, `gh run list` |
+| 29.10 18:27 | W6-T01 живой шаг: `docker compose ... --profile obs up -d --no-deps grafana`; плагин trino-datasource 1.4.1 установлен (13 с), healthy, 276.7 MiB / 384M, datasource trino OK, 4 панели с данными через `/api/ds/query`; пересоздан только grafana | владелец в Claude Code, вопрос с вариантами | спека 14, W6-T01 |
+| 29.10 18:25 | W6-D17: «ограничить права сейчас» (Trino, пользователь grafana только select на lake.gold), новая карточка W6-T11 | владелец в Claude Code, вопрос с вариантами (рекомендация агента была «принять риск») | спека 14, W6-D17 |
+| 29.10 18:22 | Chaos 6 итог: rc 0; коннектор стоял 17:47:02-18:17:06; `dq_checks` 18:00 и 18:15 зелёные с «in flight: CDC stands»; `CdcStalledSourceWrites` firing 18:20:04; после возобновления ничего не потеряно, silver = Postgres 7 из 7; verify-fast ok; `virtual_now` 2026-07-17 09:29 -> 18:13 | сценарий по «ок» 17:43 | спека 14, итог W6-T07 |
+| 29.10 17:43 | Chaos 6 `make chaos-connect-pause` (живое доказательство W6-T07; порция реплея 30 с в бюджет W6-D13) | владелец в Claude Code, вопрос с вариантами | спека 14, итог W6-T07 |
+| 29.10 17:41 | `docker kill -s HUP lakehouse-prometheus-1`: 14 правил, `CdcStalledSourceWrites` загружен; push `f71eab2..649cb68` (W6-D3) | владелец в Claude Code, вопрос с вариантами; постоянное «ок» W6-D3 | `curl /api/v1/rules`, `git log` |
+| 29.10 17:40 | W6-D9 «да» на diff W6-T07; цикл verify, коммит `649cb68`, снятие пауз; первый `dq_checks` 17:45 на новом коде зелёный, `cdc_stalled` 0 | владелец в Claude Code, вопрос с вариантами | спека 14, W6-D9 |
+| 29.10 17:00 | W6-D10 «да» и W6-T08: `kafka-configs.sh --alter --entity-name oltp.message --add-config segment.ms=3600000`; до: segment.ms не задан, топик пуст (earliest = latest = 17); после: `--describe` segment.ms=3600000, остальные ключи прежние, коннектор RUNNING | владелец в Claude Code, вопрос с вариантами | этот журнал |
+| 29.10 16:57 | push `664a7e6..f71eab2` (`537fd5a` ci, `f71eab2` docs), `gh workflow run smoke.yml --ref main` (run 40916528470) | постоянное «ок» W6-D3 | `gh run list` |
 | 29.10 16:53 | W6-T00 часть 5: живая смена образа `minio` и `minio-init` (`up -d --no-deps minio`, затем `up --no-deps minio-init`) в процедуре ручной записи; бакет 4045 объектов и 482 441 040 байт до и после, verify-fast ok | владелец в Claude Code, вопрос с вариантами | спека 14, итог W6-T00 часть 5 |
 | 29.10 16:46 | Шаг 13 W5-T05b: `airflow dags unpause iceberg_maintenance`; первый запуск: `expire_and_compact=False`, Spark-задачи skipped, optimize x8 success, `make reconcile` 7 из 7; `iceberg_orphans` на паузе | владелец в Claude Code, вопрос с вариантами | спека 14, итог W5-T05b |
 | 29.10 16:35 | Шаг 12 W5-T05b: `make replay-burst SECONDS=60`, `virtual_now` 2026-07-16 21:33:42 -> 2026-07-17 09:29:04 (233 события) | постоянное «ок» W6-D13 | `make replay-status` |
