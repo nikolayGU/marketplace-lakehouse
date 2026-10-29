@@ -2,23 +2,35 @@
 
 Обновляется в конце каждой недели или смыслового блока. Читать первым в каждой сессии.
 
-## Состояние на 29.10.2026, вторая сессия: решения владельца, алерты W6-T05/06, процедура W5-T05b
+## Состояние на 29.10.2026, вторая сессия: конец (W6-T00, T01, T02, T05-T08, T11, W5-T05b закрыты)
 
-Владелец ответил «да» на W6-D3, W6-D4, W6-D13, W6-D15 и W6-D16 (журнал «ок»). Работа по разделу 5
-спеки 14, правила `13-harness.md`.
+Владелец ответил на все решения группы C: W6-D3, D4, D9, D10, D13, D15, D16, D17 (журнал «ок»).
+Работа по разделу 5 спеки 14. Закрыты с «Итогом» в спеке: W6-T00 (часть 5), W5-T05b, W6-T05,
+W6-T06, W6-T07, W6-T08, W6-T01, W6-T11, W6-T02. Итог W6-T03, W6-T09, W6-T10 открыты (ниже). Живые свойства
+доказаны живыми прогонами 29.10 (UTC).
 
 | Что | Команда | Результат |
 |---|---|---|
-| Старт | `git log -1`; `gh run list --limit 5`; `make verify-fast` | HEAD `eebb639`, CI зелёный (40901323188), smoke последний красный 26.10 (до сборки MinIO); `verify ok`, сверка 7 из 7; горит только `ContainerRestarting` scheduler после цикла verify |
-| Реплей | `make replay-status` | `virtual_now` 2026-07-16 21:33:42, `events_pending` 22 293; не тратился |
-| W6-T05, W6-T06 | `make alerts-test`; `make check`; цикл verify | «SUCCESS: 13 rules found», «SUCCESS»; 761 passed, 83 skipped; `verify ok`; коммит `610694d`; `reviewer` дважды «принять с замечаниями»; итог в спеке |
-| Ретро chaos 8 | `query_range` по TSDB 23.10 | `SparkRestartLoop` истинно 17:11:15-17:24:15 UTC; `SparkNoBatch5m` gone только pending |
-| W5-T05b, процедура | `reviewer`, предмет «план» | круг 0 «вернуть» (точка отката JDBC: решение W6-D16), круг 1 «принять с замечаниями»; W6-D5 принято, B; шаги 0-13, пакеты П1-П9 |
-| W6-T07, вход | `scout` | условие покоя по дельте `n_tup_*` схемы `shop` между запусками; заметки оркестратора в scratchpad сессии; правка ждёт паузы `dq_checks` |
-| W6-T03 | `docs-writer` | черновик 30 вопросов в `docs/interview-notes.md`, один `TODO(verify)` (Q13, числа W5-T05b) |
-| Правила в живом Prometheus | `docker kill -s HUP lakehouse-prometheus-1` («ок»); `curl /api/v1/rules` | 13 правил, `SlotWalHeldIdle` и `SparkRestartLoop` загружены |
-| W5-T05b | шаги 0-13 по пакетам П1-П9 («ок» на каждый) | выполнена: bronze 595 -> 30 файлов прошлых суток, expire 18 таблиц с равным `count`, orphans 21 `metadata.json` bronze, конвейер после реплея зелёный, `iceberg_maintenance` без паузы; итог в спеке 14, числа в OPERATIONS «Maintenance» и ADR-025 |
-| Реплей | `make replay-status` | `virtual_now` 2026-07-17 09:29:04, `events_pending` 22 060; потрачено в W6: 1 порция (~12 виртуальных часов) из 2 дней W6-D13 |
+| Старт | `git log -1`; `gh run list`; `make verify-fast` | HEAD `eebb639`, CI зелёный, smoke последний красный 26.10; `verify ok` |
+| W6-T05, W6-T06 | `make alerts-test`; ретро TSDB chaos 8 | `610694d`; `SlotWalHeldIdle`, `SparkRestartLoop` загружены HUP |
+| W6-T00 часть 5 | smoke; живая смена MinIO | smoke 40907438614, 40916528470, 40934001854 зелёные; расписание вернулось `537fd5a`; бакет 4045 объектов до и после |
+| W5-T05b | шаги 0-13, пакеты П1-П9 | копия `warehouse/` на `/mnt/d/lakehouse-backup/warehouse-20261029`; bronze 595 -> 30 файлов прошлых суток; expire 18 таблиц, `count` равен; orphans 21 `metadata.json`; `iceberg_maintenance` снят с паузы (только optimize); `iceberg_orphans` на паузе |
+| W6-T07 | `649cb68`; chaos 6 | `dq_checks` в покое зелёный; во время остановки CDC «in flight», `CdcStalledSourceWrites` 18:20:04; потерь нет |
+| W6-T08 | `kafka-configs --alter` | `segment.ms=3600000` на `oltp.message` |
+| W6-T01 | `ab37157`; пересоздание grafana | плагин trino-datasource 1.4.1, 4 панели, 276.7 MiB / 384M, скриншот `docs/img/marketplace-dashboard.png` |
+| W6-T11 | `46f5282`; `docker restart lakehouse-trino-1` | `grafana` только select на `lake_ro.gold` (каталог read_only); `dbt-build` PASS=68 ERROR=0; `check_dashboards` 39 ok; `verify ok` |
+| Реплей | `make replay-status` | `virtual_now` 2026-07-16 21:33:42 -> 2026-07-17 18:13:25 (~20 ч 40 мин из 48 ч W6-D13), `events_pending` 21 886 |
+
+Открыто на конец сессии:
+- W6-T02 закрыта этим коммитом docs (итог в спеке); после push открыть одну ссылку `actions/runs`
+  из README и одну из `docs/evidence.md` на GitHub; повторного ревью исправлений не было.
+- W6-T03: сверка фактов `docs/interview-notes.md` после W6-T02 (Q13 `TODO(verify)` теперь закрывается
+  числами W5-T05b; Q25-Q26 про алерты и права Trino).
+- W6-T09: окно B6 24 ч ждёт действия владельца 4 (питание); не начато.
+- W6-T10: закрытие по разделу 6 спеки; гигиена п. 9 требует правки `tests/unit/test_agent_hooks.py:375`
+  (раздел 7).
+- Проверить: первый smoke по расписанию 2026-11-02 03:00 UTC; dry run orphans `silver.orders` после
+  2026-10-30 17:45 UTC без путей `orders_per_minute-` (OPERATIONS «Not proven yet»).
 
 ## Состояние на 29.10.2026, харнесс v0.3
 
@@ -115,6 +127,9 @@ unit), smoke красный (образы MinIO), W5-T05b не начата, г�
 
 | Дата UTC | Действие | Кто дал | Где видно |
 |---|---|---|---|
+| 29.10 ~19:25 | Вторая редакция строки `AGENTS.md` «Язык и стиль» (публичные документы против файлов правил агентов) по ревью W6-T02 | владелец в Claude Code, вопрос с вариантами: «ок, правь этой строкой» | `git diff AGENTS.md` |
+| 29.10 19:14 | W6-T11: процедура ручной записи, `docker restart lakehouse-trino-1`, живые пробы прав, `make dbt-build`, `check_dashboards`, `make verify`, коммит `46f5282` | владелец в Claude Code, вопрос с вариантами: «ок, перезапускай и закрывай» | спека 14, итог W6-T11 |
+| 29.10 ~19:20 | Правка `AGENTS.md` «Язык и стиль» строкой из вопроса (W6-D15: упоминания агентов только в «How it was built» и одной строке README) | владелец в Claude Code, вопрос с вариантами: «ок, правь этой строкой» | `git diff AGENTS.md` |
 | 29.10 18:50 | Цикл verify, коммит `ab37157` (W6-T01), коммит docs, push и smoke по W6-D3 | W6-D4, постоянное «ок» W6-D3 | `git log`, `gh run list` |
 | 29.10 18:27 | W6-T01 живой шаг: `docker compose ... --profile obs up -d --no-deps grafana`; плагин trino-datasource 1.4.1 установлен (13 с), healthy, 276.7 MiB / 384M, datasource trino OK, 4 панели с данными через `/api/ds/query`; пересоздан только grafana | владелец в Claude Code, вопрос с вариантами | спека 14, W6-T01 |
 | 29.10 18:25 | W6-D17: «ограничить права сейчас» (Trino, пользователь grafana только select на lake.gold), новая карточка W6-T11 | владелец в Claude Code, вопрос с вариантами (рекомендация агента была «принять риск») | спека 14, W6-D17 |

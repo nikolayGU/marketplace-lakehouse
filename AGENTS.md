@@ -113,4 +113,9 @@ Olist), Debezium, Kafka, Spark bronze и silver (`MERGE`), Iceberg в Lakekeeper
 - С владельцем и в `docs/planning/` по-русски; код, README, `OPERATIONS.md`, `DECISIONS.md`,
   docstring и имена на английском.
 - Без длинного тире; коротко, без канцелярита.
-- В репо нет имён владельца и работодателей, упоминаний, что текст писал AI; секреты только в `.env`.
+- Публичные документы (README, ARCHITECTURE, OPERATIONS, DECISIONS, LEARNING, runbooks,
+  interview-notes, `docs/evidence.md`) без имён владельца и работодателей; что проект строили
+  агенты, там говорят только раздел «How it was built» в `docs/evidence.md` и одна строка README
+  (W6-D15). Файлы правил и планов агентов (`AGENTS.md`, `CLAUDE.md`, `.claude/`,
+  `docs/agent-rules.md`, `docs/planning/`, HANDOFF, NEXT_SESSION) говорят об агентах по делу. В новых
+  сообщениях коммитов строк атрибуции нет. Секреты только в `.env`.
