@@ -652,6 +652,10 @@ services:
     environment:
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
       GF_USERS_ALLOW_SIGN_UP: "false"
+      # Installed from the Grafana catalog on start into the grafana volume (W6-D11), synchronously:
+      # provisioning reads the datasource file before an async install is done. Pinned: an unpinned
+      # id moves to the newest release on every start.
+      GF_PLUGINS_PREINSTALL_SYNC: trino-datasource@1.4.1
     volumes:
       - ../observability/grafana/provisioning:/etc/grafana/provisioning:ro
       - ../observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
@@ -669,7 +673,8 @@ services:
     deploy:
       resources:
         limits:
-          memory: 256M
+          # 256M before the Trino plugin; it runs as its own Go process beside Grafana (W6-D11).
+          memory: 384M
     networks: [lake]
 
   kafka-exporter:

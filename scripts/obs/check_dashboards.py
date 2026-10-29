@@ -1,9 +1,11 @@
-"""Runs every panel query of the Grafana dashboards against Prometheus (W4-T04).
+"""Runs every panel query of the Grafana dashboards against Prometheus and Trino (W4-T04, W6-T01).
 
 A panel with a typo in a metric name shows "No data" exactly like a metric with no data yet, so
 this prints each panel whose query returns nothing and exits 1. A query ending in `or vector(0)`
 always returns a row, so for it each metric name must have had a series within the 7 days of
-retention instead. Usage:
+retention instead. A Trino panel (`rawSQL`, datasource trino) runs its SQL on the published Trino
+port: over plain HTTP like Prometheus, with no `docker compose exec` and no client in the image.
+Usage:
     uv run python scripts/obs/check_dashboards.py [dashboard.json ...]
 """
 
@@ -14,9 +16,12 @@ import urllib.parse
 import urllib.request
 from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
+from time import monotonic
 from typing import Any
 
 PROMETHEUS = "http://127.0.0.1:9090"
+TRINO_DEADLINE = 120.0  # seconds for one statement, all pages together
+TRINO = "http://127.0.0.1:8080"  # compose publishes it on ${BIND_IP}, 127.0.0.1 in .env.example
 DASHBOARDS = Path(__file__).parents[2] / "observability" / "grafana" / "dashboards"
 
 Query = Callable[[str], list[dict[str, Any]]]
@@ -42,6 +47,34 @@ def prometheus_query(expr: str) -> list[dict[str, Any]]:
         return result
 
 
+def trino_query(sql: str) -> list[dict[str, Any]]:
+    """Rows of a statement, read page by page along nextUri.
+
+    A Trino error or a statement still running after TRINO_DEADLINE seconds raises OSError.
+    """
+    deadline = monotonic() + TRINO_DEADLINE
+    request = urllib.request.Request(
+        f"{TRINO}/v1/statement",
+        data=sql.encode(),
+        headers={"X-Trino-User": "dashboard-check", "X-Trino-Catalog": "lake"},
+        method="POST",
+    )
+    rows: list[dict[str, Any]] = []
+    while True:
+        if monotonic() > deadline:
+            raise OSError(f"Trino statement not finished in {TRINO_DEADLINE:.0f} s")
+        with urllib.request.urlopen(request, timeout=30) as response:
+            page = json.loads(response.read())
+        if "error" in page:
+            raise OSError(page["error"].get("message", "Trino query failed"))
+        rows.extend({"row": row} for row in page.get("data", []))
+        if "nextUri" not in page:
+            return rows
+        request = urllib.request.Request(
+            page["nextUri"], headers={"X-Trino-User": "dashboard-check"}
+        )
+
+
 def panels(dashboard: dict[str, Any]) -> Iterator[dict[str, Any]]:
     """Panels of a dashboard, including those inside collapsed rows."""
     for panel in dashboard.get("panels", []):
@@ -49,24 +82,28 @@ def panels(dashboard: dict[str, Any]) -> Iterator[dict[str, Any]]:
         yield from panels(panel)
 
 
-def check(paths: Sequence[Path], query: Query) -> int:
+def check(paths: Sequence[Path], query: Query, trino: Query = trino_query) -> int:
     ok, empty = 0, []
     for path in paths:
         for panel in panels(json.loads(path.read_text())):
             for target in panel.get("targets", []):
-                expr = target.get("expr")
+                expr = target.get("expr") or target.get("rawSQL")
                 if not expr:
                     continue
                 try:
-                    rows = query(expr)
+                    rows = trino(expr) if "rawSQL" in target else query(expr)
                     # A counter of failures appears with the first failure: a name had a series
                     # within the retention (7d) or it is a typo.
-                    if "or vector(" in expr and any(
-                        not query(f"group(last_over_time({name}[7d]))")
-                        for name in sorted(metric_names(expr))
+                    if (
+                        "expr" in target
+                        and "or vector(" in expr
+                        and any(
+                            not query(f"group(last_over_time({name}[7d]))")
+                            for name in sorted(metric_names(expr))
+                        )
                     ):
                         rows = []
-                except OSError as error:
+                except (OSError, ValueError) as error:
                     print(f"query failed for {expr}: {error}")
                     rows = []
                 if rows:

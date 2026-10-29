@@ -1,0 +1,13 @@
+apiVersion: 1
+
+datasources:
+  # Plugin trino-datasource (pinned in compose). It has no catalog setting: panel queries name
+  # lake.gold.<table>. A basic auth user without a password only names the Trino session user.
+  - name: Trino
+    uid: trino
+    type: trino-datasource
+    access: proxy
+    url: http://trino:8080
+    basicAuth: true
+    basicAuthUser: grafana
+    editable: false

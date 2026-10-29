@@ -6,7 +6,7 @@
 |---|---|---|
 | Daily work on ingestion | `make start` | ~11 GB limits, ~7 GB real |
 | Working on dbt / Airflow | `make start && make up PROFILE=orchestrate` (Trino `Xmx` drops to 2g via `TRINO_XMX`); stop `orchestrate` when not working on batch | ~13 GB limits, ~9 GB real |
-| Full pipeline with monitoring | `TRINO_XMX=2g make start && make up PROFILE=orchestrate,obs` | 13.6 GB limits, 5.2 GB real at rest (2026-10-19) |
+| Full pipeline with monitoring | `TRINO_XMX=2g make start && make up PROFILE=orchestrate,obs` | 13.7 GB limits (sum of `deploy` limits, grafana 384M since 2026-10-29), 5.2 GB real at rest (2026-10-19, before the Trino plugin) |
 | Demo dashboard (optional Superset) | `make down PROFILE=orchestrate && make up PROFILE=bi` | swap orchestrate for bi |
 | Stateful job (`orders_per_minute`) | `make up PROFILE=stateful` on top of `core` | +1.75 GB limit; 495 MiB at rest, 842 MiB while reading 24 h of the topic (2026-10-23) |
 | Debugging Kafka visually | `make up PROFILE=tools` for 15 minutes, then `make down PROFILE=tools` | +0.4 GB |
@@ -570,7 +570,8 @@ a run, before Debezium confirmed it; it is out at the next run and too short to 
 
 Grafana provisions `observability/grafana/dashboards/*.json` (classic JSON, edits in the UI are
 not saved: change the file). `uv run python scripts/obs/check_dashboards.py` runs every panel query
-against Prometheus and lists the empty ones, since a typo and a missing metric both read "No data".
+against Prometheus (or, for a Trino panel, its SQL against Trino on `127.0.0.1:8080`, which needs the
+`query` profile) and lists the empty ones, since a typo and a missing metric both read "No data".
 
 | Dashboard / panel | Query (metric) | Source |
 |---|---|---|
@@ -584,6 +585,32 @@ against Prometheus and lists the empty ones, since a typo and a missing metric b
 | task durations, failed tasks and runs | `airflow_task_duration_seconds`, `airflow_ti_finish_total`, `airflow_dagrun_failed_seconds_count` | Airflow StatsD; alert `AirflowDagFailed` |
 | firing alerts | `ALERTS{alertstate="firing"}` | Prometheus |
 | Infra: memory, CPU, start time, restarts, OOM, health | `docker_container_*` | container-exporter (ADR-023); alert `ContainerRestarting` |
+| Marketplace: daily sales, GMV by category, delivery SLA by state, cancellations | SQL on `lake.gold.fct_orders`, `mart_daily_sales` (GMV only), `fct_order_items` | Trino datasource plugin `trino-datasource@1.4.1` (W6-D11) |
+
+The Marketplace dashboard needs the plugin: `GF_PLUGINS_PREINSTALL_SYNC=trino-datasource@1.4.1` in
+the `grafana` service installs it from the Grafana catalog into the `grafana` volume before Grafana
+starts (synchronously, so provisioning finds the datasource type), so the first start after the
+change needs internet and a recreated container (limit 384M). A synchronous install that fails
+halts Grafana as a whole: with a new or empty `grafana` volume and no network, Grafana does not
+start at all, the Prometheus dashboards included. Once the pinned version is in the volume, a
+restart does not ask the catalog and works offline. Datasource
+`trino` is provisioned from `provisioning/datasources/trino.yml`; the plugin has no catalog
+setting, so panels name `lake.gold.<table>`. Trino returns decimal as a string: the panels convert
+the field to a number with a transformation and the SQL keeps the decimal. Check:
+`uv run python scripts/obs/check_dashboards.py observability/grafana/dashboards/marketplace.json`
+prints `queries ok: 4`.
+
+Order counts and cancellations come from `fct_orders`: `mart_daily_sales` has a row per date and
+seller state and counts an order in each of its states, so `sum(orders_count)` overstates (96650
+against 96163 orders on 2026-10-29). GMV and canceled GMV are summed from the mart (they add up);
+the category panel applies the gmv definition (live items, status neither `canceled` nor
+`unavailable`), so its categories add up to `sum(gmv)`.
+
+Risk: Trino has no authentication and no access control, and the plugin runs any SQL the panel or
+Explore sends. A Grafana admin can run DDL and DML in Explore as Trino user `grafana`; on
+Lakekeeper a table drop deletes the table files. Mitigation today: Grafana login only with the
+admin password and the port bound to `BIND_IP`. Limiting the Trino rights of `grafana` is a
+separate decision of the owner and is not done.
 
 Freshness panels step every 15 minutes (the cadence of `dq_checks`); that is not a bug.
 

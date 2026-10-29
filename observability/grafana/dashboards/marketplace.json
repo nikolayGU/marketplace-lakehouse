@@ -1,0 +1,290 @@
+{
+  "uid": "marketplace",
+  "title": "Marketplace",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": false,
+  "refresh": "",
+  "time": {
+    "from": "2024-08-01T00:00:00.000Z",
+    "to": "now"
+  },
+  "tags": [
+    "lakehouse",
+    "gold"
+  ],
+  "templating": {
+    "list": []
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Daily sales",
+      "type": "timeseries",
+      "datasource": {
+        "type": "trino-datasource",
+        "uid": "trino"
+      },
+      "description": "GMV from lake.gold.mart_daily_sales (summed over seller states) and orders counted in lake.gold.fct_orders by purchase date.",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 9
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "gmv"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "currencyBRL"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "orders"
+            },
+            "properties": [
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "unit",
+                "value": "short"
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "trino-datasource",
+            "uid": "trino"
+          },
+          "format": 1,
+          "rawSQL": "SELECT o.purchase_date AS time, g.gmv AS gmv, o.orders AS orders\nFROM (SELECT purchase_date, count(*) AS orders FROM lake.gold.fct_orders GROUP BY purchase_date) o\nLEFT JOIN (SELECT purchase_date, sum(gmv) AS gmv FROM lake.gold.mart_daily_sales GROUP BY purchase_date) g\n  ON o.purchase_date = g.purchase_date\nORDER BY o.purchase_date",
+          "refId": "A"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "convertFieldType",
+          "options": {
+            "conversions": [
+              {
+                "targetField": "gmv",
+                "destinationType": "number"
+              }
+            ],
+            "fields": {}
+          }
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "GMV by category, top 10",
+      "type": "barchart",
+      "datasource": {
+        "type": "trino-datasource",
+        "uid": "trino"
+      },
+      "description": "GMV by product category, top 10, lake.gold.fct_order_items: live items of orders that are neither canceled nor unavailable (the gmv definition of the marts).",
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 12,
+        "h": 9
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "gmv"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "currencyBRL"
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "trino-datasource",
+            "uid": "trino"
+          },
+          "format": 1,
+          "rawSQL": "SELECT product_category AS category, sum(price) AS gmv\nFROM lake.gold.fct_order_items\nWHERE NOT is_deleted AND order_status NOT IN ('canceled', 'unavailable')\nGROUP BY product_category\nORDER BY sum(price) DESC\nLIMIT 10",
+          "refId": "A"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "convertFieldType",
+          "options": {
+            "conversions": [
+              {
+                "targetField": "gmv",
+                "destinationType": "number"
+              }
+            ],
+            "fields": {}
+          }
+        }
+      ],
+      "options": {
+        "orientation": "horizontal",
+        "xField": "category",
+        "legend": {
+          "showLegend": false
+        }
+      }
+    },
+    {
+      "id": 3,
+      "title": "Delivery SLA by state",
+      "type": "table",
+      "datasource": {
+        "type": "trino-datasource",
+        "uid": "trino"
+      },
+      "description": "On-time rate and average delivery days of delivered orders by customer state, lake.gold.fct_orders, defined as in mart_delivery_sla (a delivered order without a delivery date is not on time).",
+      "gridPos": {
+        "x": 0,
+        "y": 9,
+        "w": 12,
+        "h": 9
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "on_time_rate"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percentunit"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "avg_delivery_days"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "d"
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "trino-datasource",
+            "uid": "trino"
+          },
+          "format": 1,
+          "rawSQL": "SELECT customer_state AS state,\n  CAST(count_if(is_delivered AND NOT is_late) AS double) / count_if(is_delivered) AS on_time_rate,\n  avg(delivery_days) FILTER (WHERE is_delivered) AS avg_delivery_days\nFROM lake.gold.fct_orders\nGROUP BY customer_state\nHAVING count_if(is_delivered) > 0\nORDER BY on_time_rate",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Cancellations",
+      "type": "timeseries",
+      "datasource": {
+        "type": "trino-datasource",
+        "uid": "trino"
+      },
+      "description": "Canceled orders (lake.gold.fct_orders) and their GMV (lake.gold.mart_daily_sales, summed over seller states) by purchase date.",
+      "gridPos": {
+        "x": 12,
+        "y": 9,
+        "w": 12,
+        "h": 9
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "canceled_gmv"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "currencyBRL"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "canceled_orders"
+            },
+            "properties": [
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "unit",
+                "value": "short"
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "trino-datasource",
+            "uid": "trino"
+          },
+          "format": 1,
+          "rawSQL": "SELECT o.purchase_date AS time, o.canceled_orders AS canceled_orders, g.canceled_gmv AS canceled_gmv\nFROM (SELECT purchase_date, count_if(is_canceled) AS canceled_orders FROM lake.gold.fct_orders GROUP BY purchase_date) o\nLEFT JOIN (SELECT purchase_date, sum(canceled_gmv) AS canceled_gmv FROM lake.gold.mart_daily_sales GROUP BY purchase_date) g\n  ON o.purchase_date = g.purchase_date\nORDER BY o.purchase_date",
+          "refId": "A"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "convertFieldType",
+          "options": {
+            "conversions": [
+              {
+                "targetField": "canceled_gmv",
+                "destinationType": "number"
+              }
+            ],
+            "fields": {}
+          }
+        }
+      ]
+    }
+  ]
+}
