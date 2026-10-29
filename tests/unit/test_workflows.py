@@ -36,13 +36,14 @@ def test_workflows_use_no_secret_but_the_github_token() -> None:
             assert name == "GITHUB_TOKEN", f"{workflow.name}: secrets.{name}"
 
 
-def test_smoke_runs_on_demand_only_and_checks_verify_ok() -> None:
-    # W6-D2: no schedule until the first green run after the MinIO images were rebuilt (ADR-026).
+def test_smoke_runs_on_demand_and_weekly_and_checks_verify_ok() -> None:
+    # W6-D2: the schedule came back after the first green run (2026-10-29, ADR-026).
     text = (WORKFLOWS / "smoke.yml").read_text()
     smoke = yaml.safe_load(text)
     triggers = smoke[True]  # PyYAML reads the key `on` as True
 
-    assert set(triggers) == {"workflow_dispatch"}
+    assert set(triggers) == {"workflow_dispatch", "schedule"}
+    assert triggers["schedule"] == [{"cron": "0 3 * * 1"}]
     assert "REPLAY_DATA=sample" in text
     assert "make verify" in text
     assert "grep -qx 'verify ok'" in text

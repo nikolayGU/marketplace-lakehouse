@@ -2,11 +2,12 @@ name: smoke
 
 # The path from a clean clone on the committed sample (Kaggle is not reachable from CI): boot
 # `core` and `trino`, replay a minute, verify, boot again. Cold by definition: it builds the Spark
-# and Connect images from scratch (MinIO and mc too, ADR-026), hence the long timeout. By hand only
-# (W6-D2): the weekly schedule (`cron: "0 3 * * 1"`) comes back with the first green run after the
-# MinIO images moved to a build from source.
+# and Connect images from scratch (MinIO and mc too, ADR-026), hence the long timeout. The weekly
+# schedule came back (W6-D2) after the first green run on 2026-10-29 (run 40907438614, ADR-026).
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "0 3 * * 1"
 
 permissions:
   contents: read
