@@ -162,13 +162,43 @@ def test_trino_query_follows_next_uri_and_collects_rows(monkeypatch) -> None:  #
 
     monkeypatch.setattr(urllib.request, "urlopen", urlopen)
 
-    rows = check_dashboards.trino_query("select x from lake.gold.t")
+    rows = check_dashboards.trino_query("select x from lake_ro.gold.t")
 
     assert rows == [{"row": [1]}, {"row": [2]}]
     assert [method for method, _, _ in seen] == ["POST", "GET", "GET"]
-    headers = {k.lower(): v for k, v in seen[0][2].items()}
-    assert headers["x-trino-catalog"] == "lake"
-    assert headers["x-trino-user"]
+    for _, _, raw in seen:
+        headers = {k.lower(): v for k, v in raw.items()}
+        # The panels name lake_ro.gold.<table>; the plugin sends no catalog, so neither does this.
+        assert "x-trino-catalog" not in headers
+        assert headers["x-trino-user"] == "grafana"
+
+
+def test_trino_query_runs_as_the_given_user(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    users: list[str] = []
+
+    def urlopen(request, timeout):  # type: ignore[no-untyped-def]
+        users.append(dict(request.header_items())["X-trino-user"])
+        return _Response({"data": [[1]]})
+
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+
+    check_dashboards.trino_query("select 1", user="someone")
+
+    assert users == ["someone"]
+
+
+def test_main_runs_trino_panels_as_the_datasource_user(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    path = _trino_dashboard(tmp_path / "a.json")
+    users: list[str] = []
+
+    def urlopen(request, timeout):  # type: ignore[no-untyped-def]
+        users.append(dict(request.header_items())["X-trino-user"])
+        return _Response({"data": [[1]]})
+
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+
+    assert check_dashboards.main([str(path)]) == 0
+    assert users == ["grafana"]
 
 
 def test_trino_query_raises_on_a_query_error(monkeypatch) -> None:  # type: ignore[no-untyped-def]

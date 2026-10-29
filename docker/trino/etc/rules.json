@@ -1,0 +1,32 @@
+{
+  "catalogs": [
+    {"user": "grafana", "catalog": "lake_ro", "allow": "read-only"},
+    {"user": "grafana", "catalog": ".*", "allow": "none"},
+    {"catalog": ".*", "allow": "all"}
+  ],
+  "schemas": [
+    {"user": "grafana", "owner": false},
+    {"owner": true}
+  ],
+  "tables": [
+    {"user": "grafana", "catalog": "lake_ro", "schema": "gold", "privileges": ["SELECT"]},
+    {"user": "grafana", "privileges": []},
+    {"privileges": ["SELECT", "INSERT", "DELETE", "UPDATE", "OWNERSHIP", "GRANT_SELECT"]}
+  ],
+  "procedures": [
+    {"user": "grafana", "privileges": []},
+    {"privileges": ["EXECUTE"]}
+  ],
+  "functions": [
+    {"user": "grafana", "privileges": []},
+    {"privileges": ["EXECUTE"]}
+  ],
+  "queries": [
+    {"user": "grafana", "allow": ["execute"]},
+    {"allow": ["execute", "view", "kill"]}
+  ],
+  "system_information": [
+    {"user": "grafana", "allow": []},
+    {"allow": ["read", "write"]}
+  ]
+}

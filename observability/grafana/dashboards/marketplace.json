@@ -25,7 +25,7 @@
         "type": "trino-datasource",
         "uid": "trino"
       },
-      "description": "GMV from lake.gold.mart_daily_sales (summed over seller states) and orders counted in lake.gold.fct_orders by purchase date.",
+      "description": "GMV from lake_ro.gold.mart_daily_sales (summed over seller states) and orders counted in lake_ro.gold.fct_orders by purchase date.",
       "gridPos": {
         "x": 0,
         "y": 0,
@@ -72,7 +72,7 @@
             "uid": "trino"
           },
           "format": 1,
-          "rawSQL": "SELECT o.purchase_date AS time, g.gmv AS gmv, o.orders AS orders\nFROM (SELECT purchase_date, count(*) AS orders FROM lake.gold.fct_orders GROUP BY purchase_date) o\nLEFT JOIN (SELECT purchase_date, sum(gmv) AS gmv FROM lake.gold.mart_daily_sales GROUP BY purchase_date) g\n  ON o.purchase_date = g.purchase_date\nORDER BY o.purchase_date",
+          "rawSQL": "SELECT o.purchase_date AS time, g.gmv AS gmv, o.orders AS orders\nFROM (SELECT purchase_date, count(*) AS orders FROM lake_ro.gold.fct_orders GROUP BY purchase_date) o\nLEFT JOIN (SELECT purchase_date, sum(gmv) AS gmv FROM lake_ro.gold.mart_daily_sales GROUP BY purchase_date) g\n  ON o.purchase_date = g.purchase_date\nORDER BY o.purchase_date",
           "refId": "A"
         }
       ],
@@ -99,7 +99,7 @@
         "type": "trino-datasource",
         "uid": "trino"
       },
-      "description": "GMV by product category, top 10, lake.gold.fct_order_items: live items of orders that are neither canceled nor unavailable (the gmv definition of the marts).",
+      "description": "GMV by product category, top 10, lake_ro.gold.fct_order_items: live items of orders that are neither canceled nor unavailable (the gmv definition of the marts).",
       "gridPos": {
         "x": 12,
         "y": 0,
@@ -130,7 +130,7 @@
             "uid": "trino"
           },
           "format": 1,
-          "rawSQL": "SELECT product_category AS category, sum(price) AS gmv\nFROM lake.gold.fct_order_items\nWHERE NOT is_deleted AND order_status NOT IN ('canceled', 'unavailable')\nGROUP BY product_category\nORDER BY sum(price) DESC\nLIMIT 10",
+          "rawSQL": "SELECT product_category AS category, sum(price) AS gmv\nFROM lake_ro.gold.fct_order_items\nWHERE NOT is_deleted AND order_status NOT IN ('canceled', 'unavailable')\nGROUP BY product_category\nORDER BY sum(price) DESC\nLIMIT 10",
           "refId": "A"
         }
       ],
@@ -164,7 +164,7 @@
         "type": "trino-datasource",
         "uid": "trino"
       },
-      "description": "On-time rate and average delivery days of delivered orders by customer state, lake.gold.fct_orders, defined as in mart_delivery_sla (a delivered order without a delivery date is not on time).",
+      "description": "On-time rate and average delivery days of delivered orders by customer state, lake_ro.gold.fct_orders, defined as in mart_delivery_sla (a delivered order without a delivery date is not on time).",
       "gridPos": {
         "x": 0,
         "y": 9,
@@ -207,7 +207,7 @@
             "uid": "trino"
           },
           "format": 1,
-          "rawSQL": "SELECT customer_state AS state,\n  CAST(count_if(is_delivered AND NOT is_late) AS double) / count_if(is_delivered) AS on_time_rate,\n  avg(delivery_days) FILTER (WHERE is_delivered) AS avg_delivery_days\nFROM lake.gold.fct_orders\nGROUP BY customer_state\nHAVING count_if(is_delivered) > 0\nORDER BY on_time_rate",
+          "rawSQL": "SELECT customer_state AS state,\n  CAST(count_if(is_delivered AND NOT is_late) AS double) / count_if(is_delivered) AS on_time_rate,\n  avg(delivery_days) FILTER (WHERE is_delivered) AS avg_delivery_days\nFROM lake_ro.gold.fct_orders\nGROUP BY customer_state\nHAVING count_if(is_delivered) > 0\nORDER BY on_time_rate",
           "refId": "A"
         }
       ]
@@ -220,7 +220,7 @@
         "type": "trino-datasource",
         "uid": "trino"
       },
-      "description": "Canceled orders (lake.gold.fct_orders) and their GMV (lake.gold.mart_daily_sales, summed over seller states) by purchase date.",
+      "description": "Canceled orders (lake_ro.gold.fct_orders) and their GMV (lake_ro.gold.mart_daily_sales, summed over seller states) by purchase date.",
       "gridPos": {
         "x": 12,
         "y": 9,
@@ -267,7 +267,7 @@
             "uid": "trino"
           },
           "format": 1,
-          "rawSQL": "SELECT o.purchase_date AS time, o.canceled_orders AS canceled_orders, g.canceled_gmv AS canceled_gmv\nFROM (SELECT purchase_date, count_if(is_canceled) AS canceled_orders FROM lake.gold.fct_orders GROUP BY purchase_date) o\nLEFT JOIN (SELECT purchase_date, sum(canceled_gmv) AS canceled_gmv FROM lake.gold.mart_daily_sales GROUP BY purchase_date) g\n  ON o.purchase_date = g.purchase_date\nORDER BY o.purchase_date",
+          "rawSQL": "SELECT o.purchase_date AS time, o.canceled_orders AS canceled_orders, g.canceled_gmv AS canceled_gmv\nFROM (SELECT purchase_date, count_if(is_canceled) AS canceled_orders FROM lake_ro.gold.fct_orders GROUP BY purchase_date) o\nLEFT JOIN (SELECT purchase_date, sum(canceled_gmv) AS canceled_gmv FROM lake_ro.gold.mart_daily_sales GROUP BY purchase_date) g\n  ON o.purchase_date = g.purchase_date\nORDER BY o.purchase_date",
           "refId": "A"
         }
       ],

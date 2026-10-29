@@ -1,4 +1,7 @@
-"""The Marketplace dashboard reads lake.gold through the Trino datasource plugin (W6-D11)."""
+"""The Marketplace dashboard reads lake_ro.gold through the Trino datasource plugin (W6-D11, D17).
+
+`lake_ro` is the read-only twin of the catalog `lake` that the Grafana user may read (W6-D17).
+"""
 
 import json
 import re
@@ -46,13 +49,20 @@ def test_every_panel_and_target_uses_the_trino_datasource() -> None:
             assert target["rawSQL"].strip(), panel["title"]
 
 
-def test_the_queries_read_only_lake_gold() -> None:
+def test_the_queries_read_only_lake_ro_gold() -> None:
     for target in _targets():
         sql = target["rawSQL"].lower()
         tables = re.findall(r"\b(?:from|join)\s+([\w.]+)", sql)
         assert tables, sql
-        assert all(t.startswith("lake.gold.") for t in tables), tables
+        assert all(t.startswith("lake_ro.gold.") for t in tables), tables
         assert not re.search(r"\b(silver|bronze)\b", sql), sql
+
+
+def test_no_query_or_description_names_the_writable_catalog() -> None:
+    text = DASHBOARD.read_text()
+
+    assert not re.search(r"\blake\.", text)
+    assert "lake_ro.gold." in text
 
 
 def test_money_is_not_cast_to_double_in_the_queries() -> None:
@@ -83,16 +93,16 @@ def test_order_counts_come_from_fct_orders_not_from_the_per_state_mart() -> None
         assert not re.search(
             r"sum\(\s*(orders_count|canceled_orders)\s*\)", target["rawSQL"].lower()
         )
-    assert "from lake.gold.fct_orders" in _sql("Daily sales")
+    assert "from lake_ro.gold.fct_orders" in _sql("Daily sales")
     assert "count(*)" in _sql("Daily sales")
-    assert "from lake.gold.fct_orders" in _sql("Cancellations")
+    assert "from lake_ro.gold.fct_orders" in _sql("Cancellations")
     assert "count_if(is_canceled)" in _sql("Cancellations")
 
 
 def test_gmv_by_category_counts_live_items_of_orders_that_count_as_gmv() -> None:
     sql = _sql("GMV by category, top 10")
 
-    assert "from lake.gold.fct_order_items" in sql
+    assert "from lake_ro.gold.fct_order_items" in sql
     assert "not is_deleted" in sql
     assert "order_status not in ('canceled', 'unavailable')" in sql
 
@@ -100,7 +110,7 @@ def test_gmv_by_category_counts_live_items_of_orders_that_count_as_gmv() -> None
 def test_delivery_sla_is_computed_from_orders_with_the_model_definition() -> None:
     sql = _sql("Delivery SLA by state")
 
-    assert "from lake.gold.fct_orders" in sql
+    assert "from lake_ro.gold.fct_orders" in sql
     assert "group by customer_state" in sql
     assert "count_if(is_delivered and not is_late)" in sql
     assert "count_if(is_delivered)" in sql
@@ -123,6 +133,7 @@ def test_the_trino_datasource_is_provisioned_by_a_file() -> None:
     assert trino[0]["type"] == PLUGIN
     assert trino[0]["url"] == "http://trino:8080"
     assert trino[0]["editable"] is False
+    assert trino[0]["basicAuthUser"] == check_dashboards.TRINO_USER == "grafana"
     assert not trino[0].get("password")
     assert not trino[0].get("basicAuthPassword")
 

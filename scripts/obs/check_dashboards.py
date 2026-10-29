@@ -4,7 +4,8 @@ A panel with a typo in a metric name shows "No data" exactly like a metric with 
 this prints each panel whose query returns nothing and exits 1. A query ending in `or vector(0)`
 always returns a row, so for it each metric name must have had a series within the 7 days of
 retention instead. A Trino panel (`rawSQL`, datasource trino) runs its SQL on the published Trino
-port: over plain HTTP like Prometheus, with no `docker compose exec` and no client in the image.
+port as the datasource user `grafana`, so the access rules are part of the check: over plain HTTP
+like Prometheus, with no `docker compose exec` and no client in the image.
 Usage:
     uv run python scripts/obs/check_dashboards.py [dashboard.json ...]
 """
@@ -22,6 +23,9 @@ from typing import Any
 PROMETHEUS = "http://127.0.0.1:9090"
 TRINO_DEADLINE = 120.0  # seconds for one statement, all pages together
 TRINO = "http://127.0.0.1:8080"  # compose publishes it on ${BIND_IP}, 127.0.0.1 in .env.example
+# The Trino session user of the Grafana datasource (basicAuthUser in provisioning/datasources/
+# trino.yml; a unit test keeps them equal): a panel that works as another user may fail in Grafana.
+TRINO_USER = "grafana"
 DASHBOARDS = Path(__file__).parents[2] / "observability" / "grafana" / "dashboards"
 
 Query = Callable[[str], list[dict[str, Any]]]
@@ -47,8 +51,8 @@ def prometheus_query(expr: str) -> list[dict[str, Any]]:
         return result
 
 
-def trino_query(sql: str) -> list[dict[str, Any]]:
-    """Rows of a statement, read page by page along nextUri.
+def trino_query(sql: str, user: str = TRINO_USER) -> list[dict[str, Any]]:
+    """Rows of a statement run as `user` (as the plugin does), read page by page along nextUri.
 
     A Trino error or a statement still running after TRINO_DEADLINE seconds raises OSError.
     """
@@ -56,7 +60,7 @@ def trino_query(sql: str) -> list[dict[str, Any]]:
     request = urllib.request.Request(
         f"{TRINO}/v1/statement",
         data=sql.encode(),
-        headers={"X-Trino-User": "dashboard-check", "X-Trino-Catalog": "lake"},
+        headers={"X-Trino-User": user},
         method="POST",
     )
     rows: list[dict[str, Any]] = []
@@ -70,9 +74,7 @@ def trino_query(sql: str) -> list[dict[str, Any]]:
         rows.extend({"row": row} for row in page.get("data", []))
         if "nextUri" not in page:
             return rows
-        request = urllib.request.Request(
-            page["nextUri"], headers={"X-Trino-User": "dashboard-check"}
-        )
+        request = urllib.request.Request(page["nextUri"], headers={"X-Trino-User": user})
 
 
 def panels(dashboard: dict[str, Any]) -> Iterator[dict[str, Any]]:

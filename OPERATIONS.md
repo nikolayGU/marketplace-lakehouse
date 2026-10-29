@@ -214,11 +214,67 @@ make trino           # trino> select source_table, count(*) from bronze.cdc_even
 
 Healthy means the image's `health-check` saw `"starting": false` on `/v1/info`, about 40 s
 after start. It does not prove the catalog works: run one query. The config is bind-mounted, so
-after editing `docker/trino/etc` restart the container (`docker compose ... restart trino`);
-`up -d` does not notice file changes.
+after editing `docker/trino/etc` (catalogs, `access-control.properties`, `rules.json`) restart the
+container (`docker compose ... restart trino`); `up -d` does not notice file changes.
 
 Trino only reads what Spark committed: a bronze micro-batch shows up after its Iceberg commit,
 not when Kafka receives the event.
+
+### Access control
+
+Trino has file-based access control (W6-D17, 483): `docker/trino/etc/access-control.properties`
+(`access-control.name=file`) points at `docker/trino/etc/rules.json`. Rules go top down, the first
+match applies, no match is a deny
+(https://trino.io/docs/483/security/file-system-access-control.html).
+
+File-based rules do not cover table procedures: the documentation says "File-based access control
+does not support privileges for table procedures and therefore all are effectively allowed", so
+`ALTER TABLE ... EXECUTE expire_snapshots | remove_orphan_files | optimize` passes whatever the
+rules say, and the first two delete files. `grafana` therefore does not read `lake` at all. It reads
+`lake_ro` (`docker/trino/etc/catalog/lake_ro.properties`): the same Lakekeeper, warehouse and S3
+keys as `lake`, plus `iceberg.security=read_only`, which denies DDL, DML, table procedures and CALL
+procedures for every user on that catalog
+(https://trino.io/docs/483/connector/iceberg.html#security; the connector's read-only access
+control implements only read checks and denies the rest by default). `lake_ro` and `lake` are two
+names for the same tables: nothing is copied.
+
+| User | Can |
+|---|---|
+| `grafana` (Grafana datasource) | `select` on `lake_ro.gold` only; `lake_ro` is read-only twice (rules and connector); catalogs `lake` and `system` and every other: none; no schema ownership, no procedures, no other users' queries, no system information |
+| everyone else (`dbt`, `airflow`, `trino` of the CLI and `make` targets, any new name) | `lake` as before access control: all table privileges, schema ownership, procedures, query management, system information; `lake_ro` is read-only for them too, they have no use for it |
+
+Both files are read when `trino` starts, so a rule or catalog change needs a restart of the
+container (`docker compose ... restart trino`, which interrupts running queries and needs an "ok").
+There is no `security.refresh-period` on purpose: an edit of the bind-mounted file must not apply
+silently. A malformed `rules.json` is expected to stop Trino at startup (see `docker logs`; by the documentation, not tried). The unit test
+`tests/unit/test_trino_access.py` checks the files against the model of the documentation (first
+match, no match is a deny) and that `lake_ro.properties` equals `lake.properties` plus
+`iceberg.security=read_only`. It does not run Trino: the checks below do.
+
+Check it after a restart (Trino up):
+
+```
+T="docker compose --env-file .env -f docker/compose.yaml exec -T trino trino"
+$T --user grafana --execute "select count(*) from lake_ro.gold.fct_orders"   # passes
+$T --user grafana --execute "select count(*) from lake_ro.silver.orders"     # Access Denied
+$T --user grafana --execute "select count(*) from lake.gold.fct_orders"      # Access Denied (catalog)
+$T --user grafana --execute "create table lake_ro.gold.t_acl (a int)"        # Access Denied
+$T --user grafana --execute "alter table lake.gold.category_translation execute optimize"    # Access Denied (catalog)
+$T --user grafana --execute "alter table lake_ro.gold.category_translation execute optimize" # Access Denied
+$T --user dbt --execute "alter table lake_ro.gold.category_translation execute optimize"     # Access Denied (read_only)
+# A gold table dbt rebuilds: if a denial did not hold, the harm is one compaction, not a second silver writer.
+$T --user trino --execute "select count(*) from lake.silver.orders"          # passes
+```
+
+Residual risk. Trino has no authentication, the user name is only a label. Two ways around the
+rules remain: (1) a Grafana admin creates a new Trino datasource in the UI with user `dbt`
+(`editable: false` protects only the provisioned datasource, not Grafana from new ones);
+(2) any client that reaches port 8080 (the host, bound to `BIND_IP`, or any container in the
+`lake` network) can pass `--user dbt` and get all rights on `lake`. What stands in the way: the
+Grafana admin password and the ports bound to `BIND_IP`. The rules protect against a panel or
+Explore run through the provisioned datasource; they do not protect against a person with an admin
+login, a shell or network access. Real protection needs authentication (TLS plus password or JWT)
+and a separate decision.
 
 ## Lakekeeper (REST catalog)
 
@@ -585,7 +641,7 @@ against Prometheus (or, for a Trino panel, its SQL against Trino on `127.0.0.1:8
 | task durations, failed tasks and runs | `airflow_task_duration_seconds`, `airflow_ti_finish_total`, `airflow_dagrun_failed_seconds_count` | Airflow StatsD; alert `AirflowDagFailed` |
 | firing alerts | `ALERTS{alertstate="firing"}` | Prometheus |
 | Infra: memory, CPU, start time, restarts, OOM, health | `docker_container_*` | container-exporter (ADR-023); alert `ContainerRestarting` |
-| Marketplace: daily sales, GMV by category, delivery SLA by state, cancellations | SQL on `lake.gold.fct_orders`, `mart_daily_sales` (GMV only), `fct_order_items` | Trino datasource plugin `trino-datasource@1.4.1` (W6-D11) |
+| Marketplace: daily sales, GMV by category, delivery SLA by state, cancellations | SQL on `lake_ro.gold.fct_orders`, `mart_daily_sales` (GMV only), `fct_order_items` | Trino datasource plugin `trino-datasource@1.4.1` (W6-D11) |
 
 The Marketplace dashboard needs the plugin: `GF_PLUGINS_PREINSTALL_SYNC=trino-datasource@1.4.1` in
 the `grafana` service installs it from the Grafana catalog into the `grafana` volume before Grafana
@@ -595,10 +651,12 @@ halts Grafana as a whole: with a new or empty `grafana` volume and no network, G
 start at all, the Prometheus dashboards included. Once the pinned version is in the volume, a
 restart does not ask the catalog and works offline. Datasource
 `trino` is provisioned from `provisioning/datasources/trino.yml`; the plugin has no catalog
-setting, so panels name `lake.gold.<table>`. Trino returns decimal as a string: the panels convert
-the field to a number with a transformation and the SQL keeps the decimal. Check:
+setting, so panels name `lake_ro.gold.<table>`, the read-only twin of `lake` that the user
+`grafana` may read ("Access control" under "Query"). Trino returns decimal as a string: the panels
+convert the field to a number with a transformation and the SQL keeps the decimal. Check:
 `uv run python scripts/obs/check_dashboards.py observability/grafana/dashboards/marketplace.json`
-prints `queries ok: 4`.
+prints `queries ok: 4`; it runs the Trino panels as the user `grafana`, so it also fails on a panel
+the access rules deny (`lake_ro` exists only after `trino` restarted with the new catalog files).
 
 Order counts and cancellations come from `fct_orders`: `mart_daily_sales` has a row per date and
 seller state and counts an order in each of its states, so `sum(orders_count)` overstates (96650
@@ -606,11 +664,13 @@ against 96163 orders on 2026-10-29). GMV and canceled GMV are summed from the ma
 the category panel applies the gmv definition (live items, status neither `canceled` nor
 `unavailable`), so its categories add up to `sum(gmv)`.
 
-Risk: Trino has no authentication and no access control, and the plugin runs any SQL the panel or
-Explore sends. A Grafana admin can run DDL and DML in Explore as Trino user `grafana`; on
-Lakekeeper a table drop deletes the table files. Mitigation today: Grafana login only with the
-admin password and the port bound to `BIND_IP`. Limiting the Trino rights of `grafana` is a
-separate decision of the owner and is not done.
+Risk: the plugin runs any SQL the panel or Explore sends, as Trino user `grafana`. That user reads
+`lake_ro.gold` only, and `lake_ro` is read-only at the connector (W6-D17, "Access control" under
+"Query"), so DDL, DML and table procedures from Explore get `Access Denied` and no table files can
+be deleted on Lakekeeper. Residual risk: Trino has no authentication. A Grafana admin can create a
+new Trino datasource in the UI with user `dbt` and get all rights on `lake` (`editable: false`
+protects only the provisioned datasource), and a client that reaches the Trino port can name
+itself any user. Mitigation: the Grafana admin password and the ports bound to `BIND_IP`.
 
 Freshness panels step every 15 minutes (the cadence of `dq_checks`); that is not a bug.
 
