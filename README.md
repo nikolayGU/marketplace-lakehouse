@@ -121,8 +121,8 @@ CI (`.github/workflows/ci.yml`) has five jobs: `lint-and-test` (`uv sync --locke
 `gitleaks`), `hadolint` on the six Dockerfiles, `spark-tests` (builds `lakehouse/spark:ci` and runs
 `make test-spark` in it, where the Iceberg jar exists and a skipped test is a failure),
 `airflow-image` (builds the Airflow image and imports what the DAGs need) and `minio-images`
-(builds MinIO and `mc` from source and runs them, ADR-026). `smoke.yml` (on demand only until its
-first green run) walks the clean-clone path on the sample.
+(builds MinIO and `mc` from source and runs them, ADR-026). `smoke.yml` (on demand and every Monday
+03:00 UTC; green on 2026-10-29, run 40907438614) walks the clean-clone path on the sample.
 
 ## What I learned
 

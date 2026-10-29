@@ -268,7 +268,10 @@ is untested.
 After the cutover. Never start a Spark job with `CATALOG_TYPE=jdbc` (in `.env`, as
 `-e CATALOG_TYPE=jdbc` or exported in a shell), and never give Trino the JDBC `lake.properties`
 back, except through the runbook's rollback. The JDBC rows in `iceberg_catalog` still point at
-the pre-cutover snapshots, kept as the rollback point until the end of week 3: a job on them would
+the pre-cutover snapshots. They were the rollback point until the first maintenance run of
+2026-10-29, which deleted files those snapshots read (owner decision W6-D16; a copy of `warehouse/`
+taken before it is on `/mnt/d/lakehouse-backup/warehouse-20261029`), so a rollback now starts from
+that copy. A job on them would
 commit on top of an old snapshot, the two catalogs would fork, and `expire_snapshots` or
 `remove_orphan_files` on one side would delete files the other still reads. Compose takes
 `CATALOG_TYPE` from the shell over `.env`, so never source `.env` in a shell that runs compose.
@@ -610,15 +613,17 @@ Freshness panels step every 15 minutes (the cadence of `dq_checks`); that is not
 
 Policy and reasons: ADR-025. `iceberg_maintenance` (daily 03:30) and `iceberg_orphans` (weekly,
 Sunday 04:00) are created paused and unpaused one rung at a time (the ladder in ADR-025); do not
-unpause them to "see what happens": `expire_snapshots` and `remove_orphan_files` delete files, and the
-lake has no backup. `iceberg_maintenance` existed before its Spark steps, so "created paused" does
-not hold them back: they run only in a run with `{"expire_and_compact": true}` (a scheduled run does
+unpause them to "see what happens": `expire_snapshots` and `remove_orphan_files` delete files, and
+the lake has no regular backup (the one-off copy of `warehouse/` taken before the first deletion is
+described below). Since 2026-10-29 `iceberg_maintenance` is unpaused and `iceberg_orphans` is still
+paused. `iceberg_maintenance` existed before its Spark steps, so "created paused" does not hold
+them back: they run only in a run with `{"expire_and_compact": true}` (a scheduled run does
 `optimize` only), and turning them on daily is a change of the param's default with its own "ok".
 `iceberg_orphans` resolves the dry-run flag of its mapped gold tasks in `gold_orphan_commands`
 (Airflow does not render templates in values a mapped task gets from XCom). After unpausing,
-`iceberg_orphans` starts a run at once: its last due date is in the past. Rebuild the Spark image first (`docker compose ... --profile core build
-spark-bronze`): the DAG files are live as soon as they are saved, the job `maintenance.py` only after
-the image.
+`iceberg_orphans` starts a run at once: its last due date is in the past. Rebuild the Spark image
+first (`docker compose ... --profile core build spark-bronze`): the DAG files are live as soon as
+they are saved, the job `maintenance.py` only after the image.
 
 By hand, from the repo root (nothing runs by itself; `--entrypoint` skips `run-job.sh` only for
 probes, the job form is):
@@ -627,7 +632,7 @@ probes, the job form is):
 C="docker compose --env-file .env -f docker/compose.yaml --profile core run --rm --no-deps spark-silver"
 $C maintenance orphans silver.sellers                       # dry run: counts, does not delete
 $C maintenance expire --days 7 silver.sellers               # deletes snapshots older than a week
-$C maintenance rewrite-position-deletes silver.orders
+$C maintenance rewrite-position-deletes silver.orders       # not proven live, see "Not proven yet"
 $C maintenance rewrite-data --before-today lake.bronze.cdc_events
 ```
 
@@ -638,6 +643,120 @@ under 1) exits 1 before a Spark session starts. To read a result: for
 `expire`, compare `select count(*) from silver.<t>."$snapshots"` before and after, and that
 `select count(*)` of the table did not move; for `orphans`, the dry run lists what the real run
 would remove.
+
+### First live run, 2026-10-29
+
+Everything below is UTC and comes from the command output of that day. The image
+`lakehouse/spark:dev` (72e423bd) was built at 16:05 from a clean HEAD (3a213c6); its code is the
+same as `streaming/spark_jobs` (sha256 diff). Steps 5 to 10 ran as manual writes: `silver_upsert`
+and `dbt_build` paused and finished, scheduler stopped, one command, scheduler started (windows
+16:21-16:26, 16:28-16:30 and 16:33). Order of the steps:
+
+1. Baseline (16:07): `bronze_caught_up` and `bronze_offsets_ok` exit 0; 4821 objects,
+   877 765 423 bytes under `warehouse/`.
+2. Copy (16:12): `mc mirror` of `warehouse/` to `/mnt/d/lakehouse-backup/warehouse-20261029`
+   (outside the repo). The host holds 4821 files and 877 765 423 bytes (`find`, `du -sb
+   --apparent-size`), equal to `mc du --json` and `mc ls --json`. This is a one-off copy before the
+   first deletion, not a regular backup.
+3. Demo (16:13-16:15): `iceberg_demo` compacted `lake.demo.orders` from 21 files to 1
+   (156 027 to 77 927 bytes); its expire deleted 22 data files, 43 manifests and 22 manifest lists
+   and left 1 snapshot. Then `maintenance expire --days 7 demo.orders` exited 0 with all counts 0.
+4. `spark-bronze` recreated alone (16:17): the 20 other containers kept their `Created` time;
+   healthy after 26 s, 0 restarts, log `Resuming at batch 171`, and `bronze."cdc_events$properties"`
+   has `write.metadata.delete-after-commit.enabled = true`. Rows (558 629) and `max(kafka_offset)`
+   (77 659) did not move.
+5. Bronze compaction (`rewrite-data --before-today`).
+6. `silver.sellers` expire.
+7. Expire of the other eight silver tables, one run.
+8. Expire of the nine gold tables, one run.
+9. Orphans dry runs, four runs: `demo`, silver, gold, bronze with `--location-suffix metadata`.
+10. Review of the candidates (below), then the real orphans run on bronze `metadata/` only.
+11. `make replay-burst SECONDS=60` (virtual time 2026-07-16 21:33:42 to 2026-07-17 09:29:04, 233
+    events, 76 858 to 77 091 emitted, 22 060 pending), then the normal pipeline: `silver_upsert`
+    (16:40 and 16:45) and `dbt_build` (16:40) success, `dq_checks` (16:45) success with
+    `reconcile_in_flight` 0, every `reconcile_*_differing` 0 and `tables_differing{at_rest=true}` 0.
+12. `iceberg_maintenance` unpaused (16:46). First scheduled run `scheduled__2026-10-29T03:30`
+    success: `expire_and_compact=False`, so `expire_silver`, `gold_expire_commands`, `expire_gold`,
+    `compact_bronze` and `rewrite_position_deletes` were skipped and `optimize` ran for 8 tables.
+    `make reconcile` 7/7 afterwards. `iceberg_orphans` stays paused.
+
+Before and after. The row count of every table was equal before and after, and `make reconcile`
+passed 7/7 after the silver expire.
+
+| Table | Snapshots | Data files deleted | Manifests deleted | Manifest lists deleted |
+|---|---|---|---|---|
+| `bronze.cdc_events` (compaction) | 171 to 172 (one `replace`) | 589 rewritten (46 048 268 bytes) into 24 | not run | not run |
+| `silver.sellers` | 2 to 1 | 4 | 1 | 1 |
+| `silver.customers` | 4 to 1 | 12 | 3 | 3 |
+| `silver.order_items` | 31 to 13 | 68 | 40 | 18 |
+| `silver.orders` | 38 to 15 | 51 (and 111 position-delete files) | 69 | 23 |
+| `silver.payments` | 31 to 13 | 68 | 34 | 18 |
+| `silver.products` | 4 to 1 | 12 | 3 | 3 |
+| `silver.reviews` | 23 to 7 | 54 | 38 | 16 |
+| `silver.quarantine` | 5 to 1 | 3 | 6 | 4 |
+| `silver.orders_per_minute` | 15 to 15 | 0 | 0 | 0 |
+| `gold.category_translation` | 82 to 32 | 25 | 49 | 50 |
+| `gold.dim_customers` | 41 to 16 | 25 | 25 | 25 |
+| `gold.dim_products` | 41 to 16 | 25 | 25 | 25 |
+| `gold.dim_sellers` | 41 to 16 | 25 | 25 | 25 |
+| `gold.fct_order_items` | 38 to 15 | 23 | 23 | 23 |
+| `gold.fct_orders` | 41 to 16 | 25 | 25 | 25 |
+| `gold.mart_daily_sales` | 33 to 24 | 0 | 0 | 9 |
+| `gold.mart_delivery_sla` | 36 to 15 | 21 | 21 | 21 |
+| `gold.mart_seller_performance` | 36 to 15 | 21 | 21 | 21 |
+
+Only `silver.orders` had position-delete files to delete; every other silver table reported 0.
+After the expire, no table has more than 1 snapshot older than 7 days in silver (`customers`,
+`products` and `sellers`: their only snapshot), and none in gold. `silver.orders_per_minute` kept all
+15 snapshots; its last commit was 2026-10-23 19:23:02 before and after.
+
+Bronze, before and after the compaction and the real orphans run:
+
+| Measure | Before | After |
+|---|---|---|
+| Data files in partitions before today (`$files`) | 595 in 27 partitions | 30 |
+| Rows, `max(kafka_offset)` | 558 629, 77 659 | equal |
+| Kafka end offsets (md5) | | equal, `bronze_offsets_ok` 0 |
+| Objects in `bronze/data/` | 619 | 619 |
+| Objects in `bronze/metadata/` | 465 | 444 |
+| `metadata.json` objects | 122 | 101 |
+
+Orphans. Dry runs found 0 candidates for `demo`, 0 for the 9 silver tables, 0 for the 9 gold tables,
+and 21 for bronze `metadata/` (`files_truncated` false). The review before the real run: all 21 are
+`metadata/00000` to `00020` `*.metadata.json` files written 2026-09-22 19:22-19:43; none appears in
+`$metadata_log_entries` (101 rows), `$snapshots.manifest_list` (172) or `$all_manifests` (171); the
+JDBC pointer of bronze is `00121`, which is not a candidate. The real run removed 21 files, the same
+set as the dry run, and left `bronze/data/` at 619 objects.
+
+Time of each procedure, read from the first Spark log line to the end of the command, so the
+figures are approximate. No separate time was recorded for `mc mirror` and the demo; their windows
+are in the list above.
+
+| Procedure | Time |
+|---|---|
+| `spark-bronze` recreate to healthy | 26 s |
+| Bronze compaction (`rewrite-data --before-today`) | about 16 s from the first Spark log line |
+| `silver.sellers` expire | about 10 s from the first Spark log line |
+| Expire of the other eight silver tables, one run | about 34 s from the first Spark log line |
+| Expire of the nine gold tables, one run | about 40 s from the first Spark log line |
+| Orphans dry run (each of four runs) | 9 to 23 s |
+| Real orphans run, bronze `metadata/` | about 13 s from the first Spark log line |
+
+Rollback point. The owner released the JDBC rollback point on 2026-10-29 (W6-D16 in
+`docs/planning/14-closeout-spec.md`); the rows of `iceberg_catalog` were not deleted.
+
+### Not proven yet
+
+- `rewrite-position-deletes silver.orders` (ADR-025, failed on 2026-10-23) did not run live: the
+  scheduled run of 2026-10-29 skipped `rewrite_position_deletes`.
+- Whether `remove_orphan_files` on `silver.orders` lists the prefix `silver/orders` and so also sees
+  the files of `silver/orders_per_minute-*` is not checked. Every file of `orders_per_minute` is
+  younger than 7 days today (its first snapshot is 2026-10-23 17:45), so the dry run could not show
+  it. Check after 2026-10-30 17:45 UTC: `$C maintenance orphans silver.orders` (dry run) must list
+  no path containing `orders_per_minute-`.
+- `iceberg_orphans` stays paused. Whether it runs weekly is the owner's decision.
+- 13 directories `gold/mart_daily_sales__dbt_tmp-*` are left outside every table location. The
+  orphans procedure does not touch them.
 
 ## CI
 
@@ -652,7 +771,7 @@ branch cancels the older pull request run.
 | `airflow-image` | builds `lakehouse/airflow:ci` (scope `airflow`), imports Airflow, trino, psycopg and pydantic-settings, runs `dbt --version` in its venv, and `make dags-check`: every DAG file imports in the image, offline, with `docker/airflow/airflow.env` |
 | `minio-images` | builds `lakehouse/minio:ci` and `lakehouse/mc:ci` from `docker/minio/Dockerfile` (scopes `minio`, `mc`) and runs `bash scripts/check-minio-images.sh`: the release and commit each binary prints, `sh` and `wget` in both images, a throwaway MinIO healthy on the compose healthcheck, `create-bucket.sh` (minio-init) twice |
 
-`.github/workflows/smoke.yml` (on demand only until its first green run, W6-D2; 45 minutes at most) walks the path
+`.github/workflows/smoke.yml` (on demand and weekly, Monday 03:00 UTC, W6-D2; 45 minutes at most) walks the path
 from a clean clone on the committed sample: `make secrets` with `REPLAY_DATA=sample`, `make
 bootstrap`, a 60 s `make replay-burst`, `make verify`, a second `make bootstrap` (must say
 `replay state exists, load skipped` and end `verify ok`). It builds the Spark, Connect, MinIO and mc
@@ -660,7 +779,8 @@ images from scratch, so it is cold every time. Run it: `gh workflow run smoke.ym
 `gh run watch <id> --exit-status`. On failure it uploads `smoke-logs` (container state and the last
 200 log lines of every service). Runs 2026-10-23 (40003292011) and 2026-10-26 (40290595866, the
 Monday schedule): red at `make start`, the MinIO images are gone from quay.io and Docker Hub; they
-are built from source since ADR-026. The schedule (`0 3 * * 1`) returns after the first green run.
+are built from source since ADR-026. First green run 2026-10-29 (40907438614, `workflow_dispatch`
+on `664a7e6`); the schedule (`0 3 * * 1`) is back since then.
 
 ### MinIO and mc images (ADR-026)
 
@@ -1160,4 +1280,5 @@ order by committed_at desc limit 3;
 
 Local laptop, nothing irreplaceable: the dataset is re-downloadable, the platform is
 re-creatable from the repo. `make nuke && make bootstrap` is the restore procedure and is itself
-a test that the repo is complete.
+a test that the repo is complete. There is no regular backup; the one-off copy of `warehouse/`
+taken before the first maintenance run is described in "Maintenance".

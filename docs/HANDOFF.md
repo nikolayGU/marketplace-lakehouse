@@ -16,9 +16,9 @@
 | W5-T05b, процедура | `reviewer`, предмет «план» | круг 0 «вернуть» (точка отката JDBC: решение W6-D16), круг 1 «принять с замечаниями»; W6-D5 принято, B; шаги 0-13, пакеты П1-П9 |
 | W6-T07, вход | `scout` | условие покоя по дельте `n_tup_*` схемы `shop` между запусками; заметки оркестратора в scratchpad сессии; правка ждёт паузы `dq_checks` |
 | W6-T03 | `docs-writer` | черновик 30 вопросов в `docs/interview-notes.md`, один `TODO(verify)` (Q13, числа W5-T05b) |
-
-Не проверено: новые правила в живом Prometheus (нужен «ок» на `docker kill -s HUP
-lakehouse-prometheus-1`, затем `curl -s 127.0.0.1:9090/api/v1/rules`).
+| Правила в живом Prometheus | `docker kill -s HUP lakehouse-prometheus-1` («ок»); `curl /api/v1/rules` | 13 правил, `SlotWalHeldIdle` и `SparkRestartLoop` загружены |
+| W5-T05b | шаги 0-13 по пакетам П1-П9 («ок» на каждый) | выполнена: bronze 595 -> 30 файлов прошлых суток, expire 18 таблиц с равным `count`, orphans 21 `metadata.json` bronze, конвейер после реплея зелёный, `iceberg_maintenance` без паузы; итог в спеке 14, числа в OPERATIONS «Maintenance» и ADR-025 |
+| Реплей | `make replay-status` | `virtual_now` 2026-07-17 09:29:04, `events_pending` 22 060; потрачено в W6: 1 порция (~12 виртуальных часов) из 2 дней W6-D13 |
 
 ## Состояние на 29.10.2026, харнесс v0.3
 
@@ -115,6 +115,14 @@ unit), smoke красный (образы MinIO), W5-T05b не начата, г�
 
 | Дата UTC | Действие | Кто дал | Где видно |
 |---|---|---|---|
+| 29.10 16:53 | W6-T00 часть 5: живая смена образа `minio` и `minio-init` (`up -d --no-deps minio`, затем `up --no-deps minio-init`) в процедуре ручной записи; бакет 4045 объектов и 482 441 040 байт до и после, verify-fast ok | владелец в Claude Code, вопрос с вариантами | спека 14, итог W6-T00 часть 5 |
+| 29.10 16:46 | Шаг 13 W5-T05b: `airflow dags unpause iceberg_maintenance`; первый запуск: `expire_and_compact=False`, Spark-задачи skipped, optimize x8 success, `make reconcile` 7 из 7; `iceberg_orphans` на паузе | владелец в Claude Code, вопрос с вариантами | спека 14, итог W5-T05b |
+| 29.10 16:35 | Шаг 12 W5-T05b: `make replay-burst SECONDS=60`, `virtual_now` 2026-07-16 21:33:42 -> 2026-07-17 09:29:04 (233 события) | постоянное «ок» W6-D13 | `make replay-status` |
+| 29.10 16:33 | П8 W5-T05b: `maintenance orphans --no-dry-run --location-suffix metadata bronze.cdc_events`; removed 21 = набор dry run; bronze `data/` 619 до и после | владелец в Claude Code, вопрос с вариантами после разбора 21 кандидата | спека 14, итог W5-T05b |
+| 29.10 16:28 | П7 W5-T05b: четыре dry run orphans (demo, silver, gold, bronze metadata); кандидаты только bronze, 21 | владелец в Claude Code, вопрос с вариантами | спека 14, итог W5-T05b |
+| 29.10 16:20 | П4, П5, П6 W5-T05b по шаблону, одной процедурой ручной записи (паузы, scheduler остановлен 16:21-16:26): компактация bronze 595 файлов прошлых суток в 30, строки 558 629 и max offset 77659 равны; expire silver (sellers первым: 4 файла 23.09) и gold, `count(*)` всех таблиц равен, старше 7 дней не больше 1; `make reconcile` 7 из 7; `verify-fast` ok | владелец в Claude Code, три вопроса с вариантами | спека 14, W5-T05b |
+| 29.10 16:17 | П3 W5-T05b: `docker compose ... up -d --no-deps spark-bronze`; пересоздан только он, healthy за 26 с, `Resuming at batch 171`, свойство `delete-after-commit` true, строки и offset равны | владелец в Claude Code, вопрос с вариантами | спека 14, W5-T05b |
+| 29.10 16:12 | «ок» на три действия по шаблону: `docker kill -s HUP lakehouse-prometheus-1` (13 правил, новые два загружены); П2 W5-T05b, копия `warehouse/` в `/mnt/d/lakehouse-backup/warehouse-20261029` (4821 объект, 877 765 423 байт, равно источнику); П1, `iceberg_demo` (21 файл в 1, expire 22 файла) и `maintenance expire --days 7 demo.orders` (код 0); `make verify-fast` verify ok | владелец в Claude Code, вопрос с вариантами | `docs/planning/14-closeout-spec.md`, W5-T05b |
 | 29.10 16:01 | push `eebb639..664a7e6` (`610694d` obs, `664a7e6` docs), `gh workflow run smoke.yml --ref main` (run 40907438614) | постоянное «ок» W6-D3 | `gh run list` |
 | 29.10 15:49 | W6-D16 «да, с копией бакета первым шагом»: точка отката JDBC (`iceberg_catalog`) отпускается при W5-T05b, копия префикса `warehouse/` до первого удаления | владелец в Claude Code, вопрос с вариантами после ревью плана W5-T05b («вернуть», замечание 1) | спека 14, W6-D16 и карточка W5-T05b |
 | 29.10 15:35 | W6-D4 «да» (делегация блока: решения A и B, планы и коммиты карточек без отдельного «ок», цикл verify); W6-D3 «да», push 23-24.10 подтверждён (push `origin main` без force и `gh workflow run smoke.yml --ref main` после закрытой карточки); W6-D13 «да» (до 2 виртуальных дней порциями `make replay-burst SECONDS=60`); W6-D15 «да» | владелец в Claude Code, вопрос с вариантами, все четыре по рекомендации | спека 14, раздел 2, статусы |

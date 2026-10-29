@@ -55,7 +55,7 @@ S3FileIO, `expire_snapshots` bronze (ADR-021), замена S3-слоя.
 | W6-D3 | Push и запуск smoke агентом | C | постоянное разрешение без force, строка в журнал | каждая карточка ждёт владельца на последнем шаге | нет, история публичная | W6-T00 часть 5, карточки на GitHub | принято владельцем 29.10 15:35 UTC: «да», push 23-24.10 подтверждён |
 | W6-D4 | Делегация на блок | C | как W4: решения A и B, коммиты, цикл verify | каждый коммит ждёт «ок» на diff | да | коммиты | принято владельцем 29.10 15:35 UTC: «да» (планы и коммиты карточек без отдельного «ок») |
 | W6-D5 | Процедура W5-T05b | B, пакеты C | шаги 0-13, пакеты П1-П9 | необратимые шаги без полного списка и копии | процедура да, шаги нет | W5-T05b | процедура принята, B, 29.10: `reviewer` «принять с замечаниями» по плану (круг 1; круг 0 «вернуть», высокое закрыто решением W6-D16), замечания круга 1 внесены; пакеты П1-П9 ждут «ок» |
-| W6-D6 | 7 лишних parquet bronze | A | не трогать, записать в ADR-025 | удаление данных, которых нет в Kafka | да | ничего | принято исполнителем 27.10, A |
+| W6-D6 | 7 лишних parquet bronze | A | не трогать, записать в ADR-025 | удаление данных, которых нет в Kafka | да | ничего | принято исполнителем 27.10, A; записано в ADR-025 29.10 (W5-T05b) |
 | W6-D7 | WAL слота на простое | B | только правило алерта | слот держит WAL без сигнала | да | W6-T05 | принято, B, 29.10: `reviewer` «принять с замечаниями» по коду W6-T05 (два прохода), коммит 610694d |
 | W6-D8 | Цикл рестартов Spark | B | правило по рестартам `spark-bronze` | 15 рестартов за 5 мин без алерта на Spark | да | W6-T06 | принято, B, 29.10: `reviewer` «принять с замечаниями» по коду W6-T06 (два прохода), коммит 610694d |
 | W6-D9 | `dq_checks` при стоящем CDC | C | покой с учётом источника и алерт; код и доказательства готовит агент | ложный `AirflowDagFailed` при каждом простое CDC | да | коммит W6-T07 | ждёт владельца после готового diff |
@@ -264,6 +264,17 @@ bronze и DAG ретраят; том не меняется.
 Риски: make start, make up и compose up читают compose рабочего дерева и пересоздадут minio и minio-init на новом образе (до части 5 не запускать); откат только блоком compose из git, не строкой image; остальные build-сервисы compose без pull_policy (раздел 7); теги lakehouse/minio:ci, lakehouse/mc:ci, lakehouse/minio:mut остались в хранилище (удаление образов класс C); часть 5 копия tar на /mnt/d/lakehouse-backup/ ещё не сделана (каталога нет)
 ```
 
+**Итог 29.10 (часть 5).**
+
+```text
+Критерий: «smoke по кнопке зелёный (ссылка на run); после пересоздания на живом стеке make verify-fast даёт verify ok, число объектов в бакете до и после равно» (14-closeout-spec.md, W6-T00 «Готово, когда»)
+Изменение: коммит ci (smoke.yml: расписание 0 3 * * 1 вернулось по W6-D2; test_workflows.py требует оба триггера и ровно один cron); живой шаг без кода; исполнитель implementer (код), оркестратор (push, smoke, живая смена по «ок»)
+Проверка: gh run view 40907438614 -> smoke success (workflow_dispatch на 664a7e6, 29.10 16:01 UTC); тест до правки smoke.yml красный, после 7 passed; make check 761 passed, 83 skipped; /mnt/d/lakehouse-backup/minio-images.tar на месте (проба bind mount 29.10); живая смена 16:53 UTC по «ок»: minio и minio-init на lakehouse/minio и lakehouse/mc тех же тегов, minio healthy, minio-init код 0, пересозданы только они (Created), бакет 4045 объектов и 482 441 040 байт до и после (mc du --json), mc admin info version 2025-09-07T16:13:09Z до и после, spark-bronze 0 рестартов, make verify-fast verify ok
+Независимо: reviewer по коду «принять с замечаниями» (1 средняя: README и OPERATIONS про расписание, исправлено; 2 низкие: SHA зелёного run 664a7e6, записано; permissions на уровне job тестом не закреплены, раздел 7)
+Не проверено: первый запуск smoke по расписанию (понедельник 2026-11-02 03:00 UTC: gh run list --workflow smoke.yml); docker load архива minio-images.tar (образы quay в хранилище с теми же digest)
+Риски: откат живой смены блоком compose из git до 6e114af; теги lakehouse/minio:ci, :mut и lakehouse/mc:ci остаются в хранилище (удаление образов класс C)
+```
+
 ### W5-T05b Первые живые запуски обслуживания (поправки к `10-w5-spec.md:347-387`)
 
 Карточка W5 действует, кроме шагов и критериев ниже (W6-D5, редакция 29.10 после ревью плана).
@@ -380,6 +391,26 @@ $COMPOSE exec -T airflow-scheduler airflow dags unpause iceberg_maintenance
 - `rewrite-position-deletes silver.orders` (ADR-025, падал 23.10) в лестницу не входит: «живьём не
   доказано» в итоге карточки.
 Остальное как в W5.
+
+**Итог 29.10 (шаги 0-13 выполнены; каждый пакет по «ок» владельца, журнал «ок» в HANDOFF).**
+
+```text
+Критерий: «Готово, когда» 10-w5-spec.md:378-385 с поправками этой карточки (bronze не больше 1/10 файлов прошлых суток, count и max(kafka_offset) равны; count каждой таблицы silver и gold равен, не больше 1 снапшота старше 7 дней; orphans по разобранному списку; demo в 10 раз; конвейер после; iceberg_maintenance без Spark-шагов)
+Изменение: без кода; образ lakehouse/spark:dev 72e423bd из чистого HEAD 3a213c6, пересоздан spark-bronze; документация: OPERATIONS «Maintenance», ADR-025 (числа), этот итог; исполнитель оркестратор (живые шаги), docs-writer (OPERATIONS)
+Проверка (29.10 UTC, сырые логи и JSON в scratchpad сессии, сводка t05b/FACTS.md):
+ шаг 3 копия 4821 объект и 877 765 423 байт = источник; шаг 2 demo 21 файл в 1, expire код 0;
+ шаг 4 Created изменился только у spark-bronze, Resuming at batch 171, delete-after-commit true;
+ шаг 5 файлы прошлых суток 595 -> 30 (589 в 24), строки 558 629 и max offset 77 659 равны, концы Kafka md5 равны, bronze_offsets_ok;
+ шаги 6-8 expire: count всех 18 таблиц равен, снапшотов старше 7 дней после не больше 1 (sellers: 4 файла 23.09, как ожидалось), make reconcile 7 из 7;
+ шаг 9 dry run: silver, gold, demo 0 кандидатов; bronze metadata 21, files_truncated false;
+ шаг 10 все 21 это metadata.json 00000-00020 от 22.09, ни одного в $metadata_log_entries, $snapshots.manifest_list, $all_manifests; указатель JDBC 00121 не среди них;
+ шаг 11 removed 21, набор равен dry run; bronze data/ 619 объектов до и после; metadata.json 122 -> 101;
+ шаг 12 replay-burst 60 с: virtual_now 2026-07-16 21:33:42 -> 2026-07-17 09:29:04 (233 события); silver_upsert, dbt_build, dq_checks 16:45 зелёные, reconcile_in_flight 0, все *_differing 0;
+ шаг 13 первый запуск iceberg_maintenance: expire_and_compact=False, Spark-задачи skipped, optimize x8 success; make reconcile 7 из 7; make verify-fast verify ok
+Независимо: reviewer по плану (круг 0 «вернуть», круг 1 «принять с замечаниями»); живые числа сняты одними и теми же командами до и после
+Не проверено: rewrite-position-deletes silver.orders живьём; листинг orphans для silver.orders по префиксу (захват silver/orders_per_minute-*): все файлы opm моложе 7 дней, после 2026-10-30 17:45 UTC dry run silver.orders не должен содержать «orders_per_minute-»
+Риски: iceberg_orphans на паузе, расписание за владельцем; точка отката JDBC отпущена (W6-D16), копия warehouse-20261029 на D:; остатки gold/mart_daily_sales__dbt_tmp-* вне таблиц (orphans их не видит)
+```
 
 ### W6-T05 Алерт: слот держит WAL на простое
 
@@ -567,6 +598,9 @@ W6-D14. `docs/evidence.md`: числа chaos 1-9, сверка, обслужив
   есть тривиально; мутацию «сырой ряд» ловят точки 73m и 118m. Порог 200 закреплён тестом только
   снизу. Низкая, найдено ревью круга 0: описание панели слота в
   `observability/grafana/dashboards/pipeline-health.json:222` не называет `SlotWalHeldIdle`.
+- Ревью расписания smoke (29.10), низкая: `test_smoke_runs_on_demand_and_weekly_and_checks_verify_ok`
+  проверяет `permissions` только на верхнем уровне; `contents: write` на уровне job тест не ловит
+  (пробел был и раньше). Кандидат: ни у одного job нет `permissions` шире `contents: read`.
 - Харнесс, 29.10: `guard.py` отказывает («writes a gate stamp by hand») на составной команде,
   где чтение файла отметки или встроенный Python идут в одной строке с
   `scripts/agent_state.py show`, и на heredoc с текстом об отметках; по отдельности проходят.

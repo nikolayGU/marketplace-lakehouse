@@ -736,6 +736,20 @@ bronze is never expired, the compaction does not free space (the old files stay 
 Time travel deeper than 7 days on silver and gold is gone by design (chaos 9 rolls a mart back by one
 snapshot, well within).
 
+First live run, 2026-10-29 (W5-T05b, numbers in OPERATIONS.md, "Maintenance"). Bronze compaction
+rewrote 589 files into 24: files in partitions before the run day 595 to 30, rows 558 629 and max
+offset 77 659 equal. Expire removed only snapshots older than 7 days (silver 2 to 38 snapshots per
+table down to 1 to 15, gold 33 to 82 down to 15 to 32), row counts equal, reconcile 7 of 7. The
+orphan dry run found nothing in silver, gold and demo, and 21 `metadata.json` of bronze (versions
+0 to 20 of 22.09, outside the metadata log); the real run removed exactly that set. After the
+`spark-bronze` recreate the property is on and bronze keeps 101 `metadata.json` (log 100 plus the
+current one). Bronze data is never deleted (W6-D6): before the run `data/` held 595 objects and the
+current snapshot 595 data files, so the 7 extra parquet files counted on 23.10 (534 against 527) no
+longer show as a difference (not traced further); after the compaction `data/` held 619 objects,
+before and after the orphan run. A copy of `warehouse/` was taken before the first delete, and the JDBC rollback point
+(`iceberg_catalog`) was given up by the owner (W6-D16). Not proven live: `rewrite-position-deletes`
+on `silver.orders`.
+
 ## ADR-026 MinIO and mc built from the pinned source
 
 Status: accepted (2026-10-27, W6-D1, group B: it keeps the components, the versions and the volume
