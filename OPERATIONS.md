@@ -510,9 +510,11 @@ curl -s 127.0.0.1:3000/api/health
   shows as a new `docker_container_start_time_seconds`.
 ### Alerts
 
-Nine alerts in `observability/prometheus/alerts.yml`, tested by `make alerts-test` (promtool, failure
-cases first). The first six are each shown firing in their own scenario; the last three, added after
-the review of weeks 4 and 5, watch for a source that went silent and are proven by promtool only. No Alertmanager (ADR-023):
+Eleven alerts in `observability/prometheus/alerts.yml`, tested by `make alerts-test` (promtool, failure
+cases first). The first six are each shown firing in their own scenario; the next three, added after
+the review of weeks 4 and 5, watch for a source that went silent, and the last two (week 6) catch a
+slot that holds WAL on an idle source and a Spark restart loop. These five are proven by promtool;
+`SparkRestartLoop` was also run over the stored chaos 8 data (below), never live. No Alertmanager (ADR-023):
 read them in the Prometheus UI (`/alerts`), `curl 127.0.0.1:9090/api/v1/alerts` or the "Firing
 alerts" panel. After editing the file: `docker kill -s HUP lakehouse-prometheus-1`.
 
@@ -527,10 +529,21 @@ alerts" panel. After editing the file: `docker kill -s HUP lakehouse-prometheus-
 | `FreshnessAbove15m`, `cause="unknown"` | `absent(lakehouse_silver_lag_seconds)` | 15m | `dq_checks` sends no lag it cannot tell, and statsd-exporter drops a gauge 45 minutes after its last value: without this the lag alert goes quiet | promtool | |
 | `DqChecksStale` | `time() - last_over_time(lakehouse_dq_last_run_timestamp_seconds[1h]) > 1800` (`cause="stale"`), `absent(...)` (`cause="gone"`); no gap at the TTL drop (promtool case) | 0 / 15m | `dq_checks` runs every 15 minutes; a paused DAG, a stopped scheduler or a failing `report` stops every `lakehouse_dq_*` gauge | promtool | |
 | `ScrapeTargetDown` | `up{job!="spark-orders-per-minute"} == 0` | 2m | an exporter that is down silences its own alerts (ADR-023); the stateful job runs only with `PROFILE=stateful` | promtool | |
+| `SlotWalHeldIdle` | `min_over_time(lakehouse_slot_retained_bytes[1h])` over 64 MiB, slot active, now at most 512 MiB | 0 | an active slot moves only when the source writes (about 24 MB held after a day idle), so a whole hour above 64 MiB (at least 200 samples in the hour) means no traffic reached it; inactive or over 512 MiB is `SlotWalRetainedHigh` | promtool | |
+| `SparkRestartLoop` | `changes(docker_container_start_time_seconds{name="lakehouse-spark-bronze-1"}[10m]) > 2` | 0 | a driver that dies before its first batch keeps both `SparkNoBatch5m` rules inside their window; one planned restart stays under the threshold | chaos 8 data, TSDB replay | 51 s after the first restart (23.10 data, rule not loaded then) |
 
 Limits worth knowing: `absent()` alerts also burn when the source is off (obs up, core down); a
-crash-looping Spark driver (Kafka stopped, 15 restarts) does not trip `SparkNoBatch5m`, the restart
-series and `ContainerRestarting` show it; `dq_checks` itself goes red with "differs at rest" when the
+crash-looping Spark driver (Kafka stopped, 15 restarts) dies before its first batch, its last-batch
+series stays absent and the `gone` rule is still inside its 5 minutes when Kafka returns, so
+`SparkNoBatch5m` stays quiet, and `SparkRestartLoop` catches it on the third restart
+within 10 minutes. It was not shown firing live: on 2026-10-23 the rule was not loaded, and the
+retro check ran the expression over the stored data (Prometheus `query_range`, step 15 s, taken
+2026-10-29): it was true from 17:11:15 to 17:24:15 UTC with a maximum of 15 changes, the first
+restart at 17:10:24 and the last at 17:15:10. So it fires about 51 s after the first restart, and
+after the loop ends it keeps firing for up to 10 minutes (the window). `SlotWalHeldIdle` needs a
+full hour above 64 MiB, so it is late by design and silent while traffic keeps moving the slot; on
+the move to over 512 MiB or to an inactive slot it goes out at once while `SlotWalRetainedHigh` waits
+its `for: 5m`, so up to 5 minutes pass with no alert. `dq_checks` itself goes red with "differs at rest" when the
 source writes and nothing arrives (Kafka or connector down), which raises `AirflowDagFailed`. The
 `lakehouse_*` gauges arrive every 15 minutes, so alerts on them lag by that much.
 
@@ -1086,9 +1099,12 @@ bootstrap.servers`, the query ends with an error and Docker restarts the driver 
 from 17:10:24 until Kafka was back at 17:15:10: 15 restarts (`RestartCount` 15). Each restart
 resumed from the checkpoint.
 What monitoring shows: `ContainerRestarting` for `kafka` and for `spark-bronze`, and
-`ConnectorNotRunning`. `SparkNoBatch5m` did **not** fire: the restart loop keeps bringing the
-series back before its `for: 5m` is over, so the restart counter and `ContainerRestarting` are
-the signal for a crash-looping driver, not the last-batch age. A `dq_checks` run at 17:15 failed
+`ConnectorNotRunning`. `SparkNoBatch5m` did **not** fire: the series
+`spark_streaming_last_batch_timestamp{query="bronze_cdc_ingest"}` was absent in one piece from
+17:10:23 to 17:15:38 UTC, and Kafka was back before the 5 minutes of `for` of the `gone` rule were
+over (`ALERTS` in the TSDB: `gone` pending from about 17:10:49 to 17:15:34, never firing), so a crash-looping driver is not seen through the last-batch age. The signal for it is
+`SparkRestartLoop` (week 6; the rule was not loaded then, see Alerts above) and, as it was that day,
+`ContainerRestarting`. A `dq_checks` run at 17:15 failed
 with `silver differs from Postgres at rest`: bronze had been quiet for more than the 5 minutes that
 count as "at rest", because the source could not deliver, while Postgres kept writing; that red run
 raised `AirflowDagFailed`. It is a true signal (the pipeline is not delivering), through a check

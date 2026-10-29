@@ -1,4 +1,12 @@
-# Retained WAL growing (SlotWalRetainedHigh)
+# Retained WAL growing (SlotWalRetainedHigh, SlotWalHeldIdle)
+
+Symptom: alert `SlotWalHeldIdle` (warn): the slot is active, its retained bytes stayed above 64 MiB
+for a whole hour and are at most 512 MiB. The reader is fine; the source did not write, and the slot
+moves only on a change in `shop` (a healthy slot holds about 24 MB after a day idle). Nothing to fix: the
+bytes fall under 64 MiB at the next write to the source, that is the next replay portion the owner
+decides to run. Do not drop the slot and do not write into `shop` to move it (the logical-message
+trick is forbidden, OPERATIONS.md, scenario 6). Past 512 MiB `SlotWalRetainedHigh` takes over; confirm the state with
+step 3 below.
 
 Symptom: alert `SlotWalRetainedHigh` firing. `lakehouse_slot_retained_bytes{slot_name="shop_slot"}`
 is above 64 MiB with `lakehouse_slot_active` 0 (nobody reads the slot), or above 512 MiB with the

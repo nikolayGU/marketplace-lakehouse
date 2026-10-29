@@ -50,6 +50,86 @@ tests:
               severity: page
               slot_name: shop_slot
 
+  # An active slot on an idle source grows from 60 MiB and never drops: quiet until the whole hour
+  # is above 64 MiB (the rise crosses it at minute 21), then it fires with no `for`.
+  - interval: 15s
+    input_series:
+      - series: 'lakehouse_slot_retained_bytes{slot_name="shop_slot"}'
+        values: '62914560+50000x720'
+      - series: 'lakehouse_slot_active{slot_name="shop_slot"}'
+        values: '1+0x720'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: SlotWalHeldIdle
+        exp_alerts: []
+      - eval_time: 75m
+        alertname: SlotWalHeldIdle
+        exp_alerts: []
+      - eval_time: 85m
+        alertname: SlotWalHeldIdle
+        exp_alerts:
+          - exp_labels:
+              severity: warn
+              slot_name: shop_slot
+
+  # Traffic moves the slot: the retained bytes saw from 60 to 65 MiB every 15 minutes, so the
+  # hourly minimum stays under 64 MiB even where the value is above 64 MiB (minutes 13, 73, 118).
+  - interval: 15s
+    input_series:
+      - series: 'lakehouse_slot_retained_bytes{slot_name="shop_slot"}'
+        values: >-
+          62914560+95000x59 62914560+95000x59 62914560+95000x59 62914560+95000x59
+          62914560+95000x59 62914560+95000x59 62914560+95000x59 62914560+95000x59
+      - series: 'lakehouse_slot_active{slot_name="shop_slot"}'
+        values: '1+0x480'
+    alert_rule_test:
+      - eval_time: 13m
+        alertname: SlotWalHeldIdle
+        exp_alerts: []
+      - eval_time: 73m
+        alertname: SlotWalHeldIdle
+        exp_alerts: []
+      - eval_time: 118m
+        alertname: SlotWalHeldIdle
+        exp_alerts: []
+
+  # A series that appeared 10 minutes ago above 64 MiB (a fresh Prometheus, a host that slept) has
+  # not been above it for an hour: the window holds too few samples to claim it.
+  - interval: 15s
+    input_series:
+      - series: 'lakehouse_slot_retained_bytes{slot_name="shop_slot"}'
+        values: '73400320+0x40'
+      - series: 'lakehouse_slot_active{slot_name="shop_slot"}'
+        values: '1+0x40'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: SlotWalHeldIdle
+        exp_alerts: []
+
+  # An active slot over 512 MiB is SlotWalRetainedHigh's (tested above): no second alert.
+  - interval: 15s
+    input_series:
+      - series: 'lakehouse_slot_retained_bytes{slot_name="shop_slot"}'
+        values: '600000000+0x480'
+      - series: 'lakehouse_slot_active{slot_name="shop_slot"}'
+        values: '1+0x480'
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: SlotWalHeldIdle
+        exp_alerts: []
+
+  # An inactive slot with 70 MiB for an hour is SlotWalRetainedHigh's too, not this alert's.
+  - interval: 15s
+    input_series:
+      - series: 'lakehouse_slot_retained_bytes{slot_name="shop_slot"}'
+        values: '73400320+0x480'
+      - series: 'lakehouse_slot_active{slot_name="shop_slot"}'
+        values: '0+0x480'
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: SlotWalHeldIdle
+        exp_alerts: []
+
   # Stale tables with nothing waiting to be merged are no traffic, not a fault.
   - interval: 1m
     input_series:
@@ -119,6 +199,83 @@ tests:
               severity: page
               cause: stuck
               query: bronze_cdc_ingest
+
+  # A planned single restart is not a loop: SparkRestartLoop stays quiet (ContainerRestarting
+  # still fires, as it should). Two restarts in 10 minutes are still under the threshold.
+  - interval: 1m
+    input_series:
+      - series: 'docker_container_start_time_seconds{name="lakehouse-spark-bronze-1",service="spark-bronze"}'
+        values: '100 100 100 200 200 200'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: SparkRestartLoop
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: ContainerRestarting
+        exp_alerts:
+          - exp_labels:
+              severity: warn
+              name: lakehouse-spark-bronze-1
+              service: spark-bronze
+
+  - interval: 1m
+    input_series:
+      - series: 'docker_container_start_time_seconds{name="lakehouse-spark-bronze-1",service="spark-bronze"}'
+        values: '100 100 200 200 300 300'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: SparkRestartLoop
+        exp_alerts: []
+
+  # A slow loop, one restart every 3 minutes, is 3 changes in 10 minutes: only the 10-minute window
+  # sees it (a 5-minute window holds one or two).
+  - interval: 1m
+    input_series:
+      - series: 'docker_container_start_time_seconds{name="lakehouse-spark-bronze-1",service="spark-bronze"}'
+        values: '100 100 100 200 200 200 300 300 300 400 400 400 500'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: SparkRestartLoop
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              name: lakehouse-spark-bronze-1
+              service: spark-bronze
+
+  # Kafka is down and the driver restarts every 20 seconds, 15 times in 5 minutes.
+  - interval: 20s
+    input_series:
+      - series: 'docker_container_start_time_seconds{name="lakehouse-spark-bronze-1",service="spark-bronze"}'
+        values: '1+1x15'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: SparkRestartLoop
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              name: lakehouse-spark-bronze-1
+              service: spark-bronze
+
+  # The same loop seen from the batch gauge: the driver's series goes stale at 130 s and never comes
+  # back, because it dies before the first batch. At 420 s (4 min 50 s later) the `gone` rule is
+  # still pending its 5 minutes and stays quiet, while the loop has restarted 15 times and fires.
+  - interval: 10s
+    input_series:
+      - series: 'spark_streaming_last_batch_timestamp{query="bronze_cdc_ingest"}'
+        values: '0x12 stale'
+      - series: 'docker_container_start_time_seconds{name="lakehouse-spark-bronze-1",service="spark-bronze"}'
+        values: '100x12 200x1 300x1 400x1 500x1 600x1 700x1 800x1 900x1 1000x1 1100x1 1200x1 1300x1 1400x1 1500x1 1600x1'
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: SparkNoBatch5m
+        exp_alerts: []
+      - eval_time: 7m
+        alertname: SparkRestartLoop
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              name: lakehouse-spark-bronze-1
+              service: spark-bronze
 
   # lakekeeper-bootstrap runs again on every make start: no alert. Kafka restarting: alert.
   - interval: 1m

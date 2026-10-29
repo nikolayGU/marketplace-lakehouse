@@ -1,5 +1,6 @@
 # The six alerts of week 4 (W4-T05), plus the alerts on a source that went silent (review of W4
-# and W5): a gauge that stops coming must not read as "all quiet". No Alertmanager (W4-D6): state
+# and W5): a gauge that stops coming must not read as "all quiet". Week 6 adds SlotWalHeldIdle
+# (W6-T05) and SparkRestartLoop (W6-T06). No Alertmanager (W4-D6): state
 # is read from the Prometheus UI, /api/v1/alerts and the Pipeline health dashboard. Tests: alerts_test.yml (make alerts-test);
 # live proof per alert: OPERATIONS.md, "Observability".
 groups:
@@ -23,6 +24,19 @@ groups:
         labels:
           severity: page
 
+      # An active slot above 64 MiB for a whole hour on an idle source: the slot moves only when
+      # the source writes (a healthy one holds ~24 MB after a day idle), so traffic drops it under
+      # 64 MiB within the hour. At least 200 samples (scrape 15s, 240 an hour) keep a short history
+      # from passing as a whole hour. An inactive slot and one over 512 MiB belong to the rule above.
+      - alert: SlotWalHeldIdle
+        expr: >-
+          min_over_time(lakehouse_slot_retained_bytes{slot_name="shop_slot"}[1h]) > 64 * 1024 * 1024
+          and on (slot_name) count_over_time(lakehouse_slot_retained_bytes{slot_name="shop_slot"}[1h]) >= 200
+          and on (slot_name) lakehouse_slot_active == 1
+          and on (slot_name) lakehouse_slot_retained_bytes{slot_name="shop_slot"} <= 512 * 1024 * 1024
+        labels:
+          severity: warn
+
       # Idle events keep the timestamp moving, so only a stuck or dead query trips this.
       - alert: SparkNoBatch5m
         expr: time() - spark_streaming_last_batch_timestamp{query="bronze_cdc_ingest"} > 300
@@ -36,6 +50,13 @@ groups:
         labels:
           severity: page
           cause: gone
+
+      # A driver that restarts every few seconds (Kafka stopped, OffsetOutOfRange) dies before its
+      # first batch, so the rules above are still inside their 5 minutes: the restarts are the signal.
+      - alert: SparkRestartLoop
+        expr: changes(docker_container_start_time_seconds{name="lakehouse-spark-bronze-1"}[10m]) > 2
+        labels:
+          severity: page
 
       # The age of the oldest bronze snapshot silver has not merged (W4-D4); 0 at rest. Table
       # freshness is "no traffic" between replay bursts and does not alert.
