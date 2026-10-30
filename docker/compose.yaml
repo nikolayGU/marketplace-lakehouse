@@ -1,8 +1,12 @@
 # Skeleton, week 0. Image tags pinned on 2026-09-19 from official sources; W1-T02 runs
 # `docker compose pull`, fixes whatever does not resolve and records it in DECISIONS.md.
 # Lines marked TODO(W1) / TODO(W3) / TODO(W4) are filled by the corresponding roadmap task.
-# Rules: every service has profiles, healthcheck, restart, logging, memory limit,
-# ports only on ${BIND_IP}.
+# Rules: every service has profiles and log rotation, and every published port is bound to
+# ${BIND_IP} (required: compose refuses to start with it empty). A long-running service also has
+# a healthcheck, restart: unless-stopped and a memory limit. Exceptions: kafka-ui has no
+# healthcheck; the one-shot jobs minio-init, lakekeeper-migrate, lakekeeper-bootstrap and
+# spark-silver have no healthcheck and no restart (restart: "no", minio-init the default), and
+# minio-init has no memory limit.
 
 x-logging: &logging
   driver: json-file
@@ -47,7 +51,7 @@ services:
       - postgres_oltp:/var/lib/postgresql/data
       - ../oltp/init:/docker-entrypoint-initdb.d:ro   # TODO(W1): creates debezium role + publication
     ports:
-      - "${BIND_IP}:5432:5432"
+      - "${BIND_IP:?set BIND_IP in .env}:5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${OLTP_USER} -d ${OLTP_DB}"]
       interval: 10s
@@ -85,7 +89,7 @@ services:
     volumes:
       - kafka:/var/lib/kafka/data
     ports:
-      - "${BIND_IP}:9092:29092"
+      - "${BIND_IP:?set BIND_IP in .env}:9092:29092"
     healthcheck:
       test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1"]
       interval: 15s
@@ -130,7 +134,7 @@ services:
       # old one, which hides the file the image layer adds, and the agent stops the JVM.
       - ./connect/metrics.yaml:/kafka/config/metrics.yaml:ro
     ports:
-      - "${BIND_IP}:8083:8083"
+      - "${BIND_IP:?set BIND_IP in .env}:8083:8083"
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8083/connectors >/dev/null"]
       interval: 15s
@@ -161,7 +165,7 @@ services:
     volumes:
       - minio:/data
     ports:
-      - "${BIND_IP}:9000:9000"
+      - "${BIND_IP:?set BIND_IP in .env}:9000:9000"
     healthcheck:
       test: ["CMD-SHELL", "wget -q --spider http://localhost:9000/minio/health/live"]
       interval: 10s
@@ -233,7 +237,7 @@ services:
     command: ["serve"]
     environment: *lakekeeper-env
     ports:
-      - "${BIND_IP}:8181:8181"
+      - "${BIND_IP:?set BIND_IP in .env}:8181:8181"
     healthcheck:
       # Distroless image: no shell, no curl. The binary checks its own /health.
       test: ["CMD", "/home/nonroot/lakekeeper", "healthcheck"]
@@ -316,8 +320,8 @@ services:
       BRONZE_MAX_OFFSETS_PER_TRIGGER: ${BRONZE_MAX_OFFSETS_PER_TRIGGER}
       METRICS_PORT: "4041"
     ports:
-      - "${BIND_IP}:4040:4040"
-      - "${BIND_IP}:4041:4041"
+      - "${BIND_IP:?set BIND_IP in .env}:4040:4040"
+      - "${BIND_IP:?set BIND_IP in .env}:4041:4041"
     healthcheck:
       # Healthy while the query reported progress or idleness in the last 120 s. Idle events come
       # every 10-20 s on a quiet topic; a query stuck in commit retries stops them.
@@ -377,7 +381,7 @@ services:
       OPM_SHUFFLE_PARTITIONS: ${OPM_SHUFFLE_PARTITIONS:-2}
       METRICS_PORT: "4041"
     ports:
-      - "${BIND_IP}:4043:4040"   # Spark UI
+      - "${BIND_IP:?set BIND_IP in .env}:4043:4040"   # Spark UI
     healthcheck:
       test:
         - CMD-SHELL
@@ -426,7 +430,7 @@ services:
       S3_ACCESS_KEY: ${S3_ACCESS_KEY}
       S3_SECRET_KEY: ${S3_SECRET_KEY}
     ports:
-      - "${BIND_IP}:4042:4040"   # Spark UI while the run lasts
+      - "${BIND_IP:?set BIND_IP in .env}:4042:4040"   # Spark UI while the run lasts
     restart: "no"
     healthcheck:
       disable: true
@@ -458,7 +462,7 @@ services:
     volumes:
       - ${DATA_DIR}:/data:ro
     ports:
-      - "${BIND_IP}:8000:8000"   # /metrics, /status
+      - "${BIND_IP:?set BIND_IP in .env}:8000:8000"   # /metrics, /status
     healthcheck:
       # python:3.12-slim has no curl; urlopen raises on a refused connection or an HTTP error.
       test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
@@ -504,7 +508,7 @@ services:
       # only at startup: an edit there needs `docker restart lakehouse-trino-1`.
       - ./trino/etc:/etc/trino:ro
     ports:
-      - "${BIND_IP}:8080:8080"
+      - "${BIND_IP:?set BIND_IP in .env}:8080:8080"
     healthcheck:
       # Ships with the image: /v1/info answers and reports "starting": false.
       test: ["CMD-SHELL", "/usr/lib/trino/bin/health-check"]
@@ -531,7 +535,7 @@ services:
       - postgres_meta:/var/lib/postgresql/data
       - ./postgres-meta/init:/docker-entrypoint-initdb.d:ro   # creates iceberg_catalog, airflow, lakekeeper, superset databases
     ports:
-      - "${BIND_IP}:5433:5432"
+      - "${BIND_IP:?set BIND_IP in .env}:5433:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${META_USER}"]
       interval: 10s
@@ -558,7 +562,7 @@ services:
       - ../airflow/dags:/opt/airflow/dags:ro
       - ../dbt:/opt/dbt:ro
     ports:
-      - "${BIND_IP}:8090:8080"
+      - "${BIND_IP:?set BIND_IP in .env}:8090:8080"
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8080/api/v2/monitor/health | grep -q healthy"]
       interval: 30s
@@ -630,10 +634,12 @@ services:
     profiles: [obs]
     command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.retention.time=7d"]
     volumes:
-      - ../observability/prometheus:/etc/prometheus:ro   # rules reload on SIGHUP, not on file change
+      # Rules reload on SIGHUP, not on file change: `docker exec lakehouse-prometheus-1 kill -HUP 1`.
+      # Never `docker kill -s HUP`: it marks a manual stop and unless-stopped then skips the container.
+      - ../observability/prometheus:/etc/prometheus:ro
       - prometheus:/prometheus
     ports:
-      - "${BIND_IP}:9090:9090"
+      - "${BIND_IP:?set BIND_IP in .env}:9090:9090"
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:9090/-/healthy >/dev/null"]
       interval: 15s
@@ -661,7 +667,7 @@ services:
       - ../observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
       - grafana:/var/lib/grafana
     ports:
-      - "${BIND_IP}:3000:3000"
+      - "${BIND_IP:?set BIND_IP in .env}:3000:3000"
     depends_on:
       prometheus:
         condition: service_healthy
@@ -783,7 +789,7 @@ services:
       - ./superset/superset_config.py:/app/superset_config.py:ro
       - superset:/app/superset_home
     ports:
-      - "${BIND_IP}:8088:8088"
+      - "${BIND_IP:?set BIND_IP in .env}:8088:8088"
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8088/health"]
       interval: 30s
@@ -807,7 +813,7 @@ services:
       KAFKA_CLUSTERS_0_KAFKACONNECT_0_NAME: connect
       KAFKA_CLUSTERS_0_KAFKACONNECT_0_ADDRESS: http://kafka-connect:8083
     ports:
-      - "${BIND_IP}:8085:8080"
+      - "${BIND_IP:?set BIND_IP in .env}:8085:8080"
     deploy:
       resources:
         limits:

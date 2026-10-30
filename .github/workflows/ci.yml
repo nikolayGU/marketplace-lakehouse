@@ -64,6 +64,15 @@ jobs:
           dockerfile: ${{ matrix.dockerfile }}
           failure-threshold: warning
 
+  # promtool checks observability/prometheus/alerts.yml and runs alerts_test.yml in the pinned
+  # Prometheus image (QA-01: neither `make check` nor another job runs it).
+  alerts-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - run: make alerts-test
+
   # The Spark tests of MERGE, quarantine and epoch skipping need the Iceberg jar, which only the
   # image has: pytest on the runner skips them. `make test-spark` sets FAIL_ON_SKIP=1
   # (tests/unit/conftest.py), which turns any skip into a failure, so green here means they ran.

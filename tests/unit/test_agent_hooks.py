@@ -372,7 +372,7 @@ def test_guard_asks_the_owner(command: str) -> None:
         # Review 29.10, finding 7: reads and tests of the stamp code are no stamp writes.
         "uv run mypy scripts/agent_state.py && uv run pytest tests/unit -q -k record_review",
         "make check 2>&1 | tail -5",
-        "cd /home/gusev/marketplace-lakehouse && make check",
+        "cd /home/user/marketplace-lakehouse && make check",
         "make lint",
         "make test",
     ],

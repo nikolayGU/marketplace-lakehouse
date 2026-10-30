@@ -58,7 +58,7 @@ bootstrap: ## fresh clone to verified data: start, migrate, connector, load, ver
 	@bash scripts/bootstrap.sh
 
 # ---------------------------------------------------------------- operate
-verify: ## bronze holds every Kafka record once and silver equals Postgres: prints verify ok
+verify: ## bronze holds every Kafka record once, silver matches Postgres on rows, keys and decimal sums: prints verify ok
 	@bash scripts/verify.sh
 
 verify-fast: ## make verify without the silver merge: reads only, writes nothing to the lake

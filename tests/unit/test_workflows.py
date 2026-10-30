@@ -61,6 +61,8 @@ def test_ci_runs_the_checks_it_claims() -> None:
     assert "make test-spark" in runs["spark-tests"]
     assert "make dags-check AIRFLOW_IMAGE=lakehouse/airflow:ci" in runs["airflow-image"]
     assert "scripts/check-minio-images.sh" in runs["minio-images"]
+    # QA-01: promtool is in no other gate; a broken alert rule would reach main unnoticed.
+    assert "make alerts-test" in runs["alerts-test"]
 
 
 def test_the_minio_images_are_built_through_the_layer_cache_in_ci() -> None:

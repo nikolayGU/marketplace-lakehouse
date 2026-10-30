@@ -418,7 +418,7 @@ def spark(tmp_path_factory: pytest.TempPathFactory) -> Iterator[SparkSession]:
 
 @pytest.fixture
 def sandbox(spark: SparkSession) -> str:
-    """lake.demo.events: day-partitioned, one small file per insert, five snapshots."""
+    """lake.demo.events: day-partitioned, one small file per insert, six snapshots."""
     table = "lake.demo.events"
     spark.sql("create namespace if not exists lake.demo")
     spark.sql(f"drop table if exists {table}")
@@ -442,6 +442,7 @@ def test_expire_leaves_one_snapshot_and_reports_deleted_files(
 ) -> None:
     args = parse_args(["expire", "--days", "0", sandbox])
     rows_before = spark.table(sandbox).count()
+    snapshots_before = snapshots(spark, sandbox)
 
     # The sandbox snapshots are written now: a fixed NOW stops covering them a day after it.
     later = datetime.now(timezone.utc) + timedelta(days=1)  # noqa: UP017
@@ -449,7 +450,11 @@ def test_expire_leaves_one_snapshot_and_reports_deleted_files(
 
     assert snapshots(spark, sandbox) == 1
     assert spark.table(sandbox).count() == rows_before
-    assert "deleted_data_files_count" in result
+    # Every expired snapshot owns one manifest list and expire deletes it; the data files stay,
+    # the surviving snapshot still reads them (QA-06: the key alone was also there for a no-op).
+    assert snapshots_before > 1
+    assert result["deleted_manifest_lists_count"] == snapshots_before - 1
+    assert result["deleted_data_files_count"] == 0
 
 
 @needs_iceberg
