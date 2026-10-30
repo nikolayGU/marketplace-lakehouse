@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -307,6 +308,11 @@ def test_guard_denies_every_file_tool_on_a_gate_stamp(tool: str, name: str) -> N
         "sed -i s/a/b/ scripts/agent_state.py",
         "cp /tmp/x scripts/agent_state.py",
         f"cat /tmp/x > {REPO}/scripts/agent_state.py",
+        # Stopping the stack by make is the same act as stopping it by compose.
+        "make down",
+        "make down PROFILE=tools",
+        "make down PROFILE=obs,query",
+        "PROFILE=bi make down",
     ],
 )
 def test_guard_asks_the_owner(command: str) -> None:
@@ -314,6 +320,176 @@ def test_guard_asks_the_owner(command: str) -> None:
 
     assert decision(result) == "ask"
     assert "AGENTS.md hard rule" in result.stdout
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        # A read of .env is a read of every password of the stack, even though it only reads.
+        "cat .env",
+        "cat ./.env",
+        f"cat {REPO}/.env",
+        "cat .env.local",
+        'cat "$PWD/.env"',
+        "less .env",
+        "more .env",
+        "head -5 .env",
+        "tail -n 3 .env",
+        "tac .env | head -2",
+        "grep REPLAY .env",
+        "grep -n PASSWORD ./.env",
+        "grep -f .env README.md",
+        "rg POSTGRES .env",
+        "awk -F= '{print $1}' .env",
+        "sed -n 1,5p .env",
+        "source .env",
+        ". .env",
+        "set -a; . ./.env; set +a",
+        "cat < .env",
+        "cat<.env",
+        "export $(cat .env | xargs)",
+        "echo `cat .env`",
+        "bash -c 'cat .env'",
+        "cd /tmp && cat .env",
+        "git status\ncat .env",
+        "diff .env .env.example",
+        "cp .env /tmp/copy",
+        "env X=1 cat .env",
+        "python3 -c \"print(open('.env').read())\"",
+        "uv run python -c \"from pathlib import Path; print(Path('.env').read_text())\"",
+        "python3 - <<'EOF'\nprint(open('.env').read())\nEOF",
+        # The compose file with the values of .env filled in, and the environment of a container.
+        "docker compose --env-file .env -f docker/compose.yaml config",
+        "docker compose --env-file .env -f docker/compose.yaml --profile '*' config",
+        "docker compose --env-file .env -f docker/compose.yaml --profile core config | head -20",
+        "$COMPOSE --profile core config",
+        "docker-compose -f docker/compose.yaml config",
+        "docker --context x compose -f docker/compose.yaml config",
+        "docker compose -f docker/compose.yaml config --format json",
+        "docker compose -f docker/compose.yaml config -o /tmp/resolved.yaml",
+        "docker compose -f docker/compose.yaml config --no-interpolate --format json",
+        "docker inspect lakehouse-postgres-oltp-1",
+        "docker container inspect lakehouse-postgres-oltp-1",
+        "docker inspect lakehouse-postgres-oltp-1 | jq '.[0].Config.Env'",
+        "docker inspect lakehouse-trino-1 -f '{{.Config.Env}}'",
+        "docker inspect --format '{{json .Config.Env}}' lakehouse-trino-1",
+        "docker inspect --format='{{range .Config.Env}}{{println .}}{{end}}' lakehouse-trino-1",
+        "docker inspect --format '{{json .}}' lakehouse-trino-1",
+        "docker inspect -f '{{json .Config}}' lakehouse-trino-1",
+        "docker inspect -f '{{.State.Status}}' a -f '{{.Config.Env}}' b",
+        # The whole object, which holds Config.Env, by the json shortcut or a pipe.
+        "docker inspect --format json lakehouse-trino-1",
+        "docker inspect --format=json lakehouse-trino-1",
+        "docker inspect -f json lakehouse-trino-1",
+        "docker inspect -f '{{.Config | json}}' lakehouse-trino-1",
+        "docker inspect -f '{{ . | json }}' lakehouse-trino-1",
+        "docker inspect -f '{{(index . 0).Config}}' lakehouse-trino-1",
+        # The first segment is a free cp; the read of .env after it is not. The command must come
+        # out as ask: a deny of the cp (a SHELL_WRITE_ENV that reaches over `&&`) is a wrong answer.
+        "cp .env.example /tmp/a && grep REPLAY .env",
+        # A quoted word with parentheses is an argument, not the start of another command.
+        "grep 'foo(' .env",
+        'grep "print(1)" ./.env',
+        "cat 'a (b)' .env",
+        # More ways to open .env, and to print the environment of a container.
+        "jq -R . .env",
+        "jq -Rr 'split(\"=\")[1]' ./.env",
+        "yq . .env",
+        'echo "$(<.env)"',
+        "echo $(<.env)",
+        'echo "$(cat .env)"',
+        'x="$(head -1 .env)"; echo "$x"',
+        'echo "`cat .env`"',
+        "docker exec lakehouse-postgres-oltp-1 env",
+        "docker exec lakehouse-postgres-oltp-1 printenv",
+        "docker exec -it lakehouse-postgres-oltp-1 printenv POSTGRES_PASSWORD",
+        "docker exec -e A=b lakehouse-postgres-oltp-1 env",
+        "docker exec lakehouse-postgres-oltp-1 sh -c env",
+        "docker exec lakehouse-postgres-oltp-1 cat /proc/1/environ",
+        "docker compose --env-file .env -f docker/compose.yaml exec postgres-oltp env",
+        "docker compose --env-file .env -f docker/compose.yaml exec -T trino printenv",
+        "docker compose --env-file .env -f docker/compose.yaml exec -T -u root kafka printenv",
+        "$COMPOSE exec -T kafka env",
+        "docker compose --env-file .env -f docker/compose.yaml run --rm spark-silver env",
+    ],
+)
+def test_guard_asks_before_a_command_shows_a_secret(command: str) -> None:
+    result = bash(command)
+
+    assert decision(result) == "ask"
+    assert "AGENTS.md hard rule" in result.stdout
+    assert "secret" in result.stdout
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        # The example file holds no secret, and `--env-file .env` hands the file to compose.
+        "cat .env.example",
+        "head -5 .env.example",
+        "grep -n BIND_IP .env.example",
+        "sed -n 1,5p .env.example",
+        "cat < .env.example",
+        "diff .env.example /tmp/other",
+        "cp .env.example /tmp/a && grep REPLAY .env.example",
+        "cat docker/airflow/airflow.env",
+        "ls -la .env",
+        "git check-ignore .env",
+        # A pattern that names .env is not a file that is read.
+        "grep -rn '.env' docs",
+        'grep -rn "\\.env" docs',
+        "rg -n '.env' Makefile",
+        'echo "copy .env.example to .env"',
+        "docker compose --env-file .env -f docker/compose.yaml config -q",
+        "docker compose --env-file .env -f docker/compose.yaml --profile '*' config --quiet",
+        "$COMPOSE --profile '*' config -q",
+        "docker compose --env-file .env -f docker/compose.yaml config --services",
+        "docker compose --env-file .env -f docker/compose.yaml config --profiles",
+        "docker compose --env-file .env -f docker/compose.yaml config --images",
+        "docker compose --env-file .env -f docker/compose.yaml config --volumes",
+        "docker compose --env-file .env -f docker/compose.yaml --profile core ps",
+        "docker compose --env-file .env -f docker/compose.yaml logs --tail=50 config",
+        "docker inspect lakehouse-trino-1 -f '{{.State.Status}}'",
+        "docker inspect --format '{{.State.Health.Status}}' lakehouse-trino-1 lakehouse-kafka-1",
+        "docker inspect --format='{{.HostConfig.RestartPolicy.Name}}' lakehouse-trino-1",
+        "docker container inspect -f '{{.State.ExitCode}} {{.State.OOMKilled}}' lakehouse-trino-1",
+        "docker inspect -f '{{.Config.Image}}' lakehouse-trino-1",
+        "docker inspect -f '{{.HostConfig.RestartPolicy.Name}}' lakehouse-trino-1",
+        "docker inspect -f '{{json .State}}' lakehouse-trino-1",
+        "docker inspect -f '{{.Config.Labels | json}}' lakehouse-trino-1",
+        # `--env-file .env` hands the file to compose; it does not make the command read it.
+        "docker compose --env-file .env -f docker/compose.yaml exec -T airflow-scheduler "
+        "python -c 'print(1)'",
+        "docker compose --env-file=.env -f docker/compose.yaml exec -T airflow-scheduler "
+        "python -c 'print(1)'",
+        "docker compose --env-file .env -f docker/compose.yaml exec -T airflow-scheduler "
+        "airflow dags list",
+        # Running something in a container is not printing its environment.
+        "docker exec lakehouse-postgres-oltp-1 pg_isready",
+        "docker exec lakehouse-postgres-oltp-1 psql -c 'select 1'",
+        "docker exec lakehouse-postgres-oltp-1 env PGOPTIONS=x psql -c 'select 1'",
+        "docker compose --env-file .env -f docker/compose.yaml exec -T trino trino --version",
+        "make status",
+        "make downstream",
+        "grep down Makefile",
+        "make -n downgrade",
+    ],
+)
+def test_guard_lets_a_command_that_shows_no_secret_pass(command: str) -> None:
+    assert decision(bash(command)) == "allow"
+
+
+def test_a_secret_read_is_asked_before_the_early_exit_of_read_only_commands() -> None:
+    # cat is a reader and passes on its own words; .env is what makes the difference.
+    assert decision(bash("cat Makefile")) == "allow"
+    assert decision(bash("cat Makefile .env")) == "ask"
+    assert decision(bash("git log -1 && cat .env")) == "ask"
+
+
+def test_a_shell_write_to_env_is_still_denied_not_asked() -> None:
+    assert decision(bash("cp /tmp/x .env")) == "deny"
+    assert decision(bash("grep KEY f > .env")) == "deny"
+    assert decision(bash("sed -i s/a/b/ .env")) == "deny"
 
 
 @pytest.mark.parametrize(
@@ -327,7 +503,6 @@ def test_guard_asks_the_owner(command: str) -> None:
         "git status && git log -1",
         'psql -c "delete from cdc.debezium_signal where id = 1"',
         "truncate -s 0 /tmp/x.log",
-        "cp .env.example /tmp/a && grep REPLAY .env",
         "rm /tmp/one-file",
         'grep -rn "DROP TABLE" docs',
         'grep -rnE "make silver|delete from shop.orders" docs 2>/dev/null | head -5',
@@ -525,6 +700,153 @@ def test_session_context_survives_missing_docs(repo: Path) -> None:
     context = json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]
 
     assert "docs/HANDOFF.md is missing" in context
+
+
+def fake_docker(
+    bin_dir: Path, monkeypatch: pytest.MonkeyPatch, *, running: str, stopped: str, rows: str
+) -> None:
+    """A `docker` first on PATH: `ps` lists the running containers, `ps -a` the ids of the stopped
+    ones and `inspect` one row per id (name, restart policy, state, exit code). Every call is
+    appended to calls.txt next to it."""
+    bin_dir.mkdir()
+    for name, text in (("ps.txt", running), ("ps_all.txt", stopped), ("inspect.txt", rows)):
+        (bin_dir / name).write_text(text)
+    script = bin_dir / "docker"
+    script.write_text(
+        '#!/bin/sh\nd=$(dirname "$0")\necho "$*" >> "$d/calls.txt"\ncase "$1" in\n'
+        '  ps) case " $* " in *" -a "*) cat "$d/ps_all.txt";; *) cat "$d/ps.txt";; esac;;\n'
+        '  inspect) cat "$d/inspect.txt";;\n  *) exit 1;;\nesac\n'
+    )
+    script.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+
+
+def session_context(repo: Path) -> str:
+    result = hook("session_context.py", {"source": "startup"}, repo)
+    assert result.returncode == 0
+    return str(json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"])
+
+
+def test_session_context_names_a_stopped_container_that_should_run(
+    repo: Path, tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # 27.10 and 30.10: prometheus stayed in Exited (255) after a Docker restart and nobody saw it.
+    fake_docker(
+        tmp_path_factory.mktemp("bin") / "bin",
+        monkeypatch,
+        running="lakehouse-kafka-1 Up 2 hours (healthy)\n",
+        stopped="aaa\nbbb\nccc\nddd\n",
+        rows=(
+            "/lakehouse-prometheus-1 unless-stopped exited 255\n"
+            "/lakehouse-minio-init-1 no exited 0\n"
+            "/lakehouse-grafana-1 always exited 137\n"
+            "/lakehouse-spark-silver-1 on-failure exited 1\n"
+        ),
+    )
+
+    context = session_context(repo)
+
+    assert "lakehouse-kafka-1 Up 2 hours (healthy)" in context
+    stopped = [line for line in context.splitlines() if "docker start" in line]
+    assert len(stopped) == 2
+    assert stopped[0].startswith("lakehouse-prometheus-1: exited (255)")
+    assert "unless-stopped did not bring it back" in stopped[0]
+    assert "docker start lakehouse-prometheus-1 only with the owner's ok" in stopped[0]
+    assert stopped[1].startswith("lakehouse-grafana-1: exited (137)") and "always" in stopped[1]
+    assert "minio-init" not in context and "spark-silver" not in context
+
+
+def test_session_context_has_no_stopped_line_when_everything_runs(
+    repo: Path, tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_docker(
+        tmp_path_factory.mktemp("bin") / "bin",
+        monkeypatch,
+        running="lakehouse-kafka-1 Up 2 hours (healthy)\n",
+        stopped="",
+        rows="",
+    )
+
+    context = session_context(repo)
+
+    assert "lakehouse-kafka-1 Up 2 hours (healthy)" in context
+    assert "docker start" not in context and "Not running" not in context
+
+
+def test_session_context_asks_for_the_compose_project_of_the_environment(
+    repo: Path, tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("COMPOSE_PROJECT_NAME", raising=False)
+    default = tmp_path_factory.mktemp("default") / "bin"
+    fake_docker(default, monkeypatch, running="", stopped="", rows="")
+    session_context(repo)
+    assert "label=com.docker.compose.project=lakehouse " in (default / "calls.txt").read_text()
+
+    monkeypatch.setenv("COMPOSE_PROJECT_NAME", "otherstack")
+    named = tmp_path_factory.mktemp("named") / "bin"
+    fake_docker(
+        named,
+        monkeypatch,
+        running="",
+        stopped="aaa\n",
+        rows="/otherstack-prometheus-1 unless-stopped exited 255\n",
+    )
+    context = session_context(repo)
+
+    calls = (named / "calls.txt").read_text()
+    assert "label=com.docker.compose.project=otherstack " in calls
+    assert "project=lakehouse" not in calls
+    assert "docker start otherstack-prometheus-1 only with the owner's ok" in context
+
+    monkeypatch.setenv("COMPOSE_PROJECT_NAME", "")
+    empty = tmp_path_factory.mktemp("empty") / "bin"
+    fake_docker(empty, monkeypatch, running="", stopped="", rows="")
+    session_context(repo)
+    assert "label=com.docker.compose.project=lakehouse " in (empty / "calls.txt").read_text()
+
+
+def test_session_context_inspects_nothing_when_the_project_has_no_containers(
+    repo: Path, tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # `docker inspect` with no id is an error, and its output must never be read as a container.
+    bin_dir = tmp_path_factory.mktemp("none") / "bin"
+    fake_docker(
+        bin_dir,
+        monkeypatch,
+        running="",
+        stopped="",
+        rows="/lakehouse-ghost-1 always exited 255\n",
+    )
+
+    context = session_context(repo)
+
+    calls = (bin_dir / "calls.txt").read_text().splitlines()
+    assert not [call for call in calls if call.startswith("inspect")]
+    assert "ghost" not in context and "Not running" not in context and "docker start" not in context
+
+
+def test_session_context_survives_a_docker_that_fails_or_is_missing(
+    repo: Path, tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    broken = tmp_path_factory.mktemp("broken") / "bin"
+    fake_docker(broken, monkeypatch, running="", stopped="", rows="")
+    (broken / "docker").write_text("#!/bin/sh\nexit 1\n")
+    assert "docker start" not in session_context(repo)
+
+    # The listing works and the inspect after it fails.
+    half = tmp_path_factory.mktemp("half") / "bin"
+    fake_docker(half, monkeypatch, running="", stopped="", rows="")
+    (half / "docker").write_text('#!/bin/sh\ncase "$1" in ps) echo aaa;; *) exit 1;; esac\n')
+    context = session_context(repo)
+    assert "Containers:\naaa" in context and "docker start" not in context
+
+    # Nothing but git on PATH: no docker at all.
+    only_git = tmp_path_factory.mktemp("only-git")
+    (only_git / "git").symlink_to(shutil.which("git") or "git")
+    monkeypatch.setenv("PATH", str(only_git))
+    context = session_context(repo)
+
+    assert "Containers:" in context and "docker start" not in context
 
 
 def test_commit_of_code_lists_every_step_of_the_gate_it_lacks(repo: Path) -> None:
@@ -822,6 +1144,17 @@ def test_the_review_hook_never_fails_the_session(
     )
     assert result.returncode == 0 and "could not record" in result.stderr
     assert list(outside.iterdir()) == []
+
+
+def test_settings_deny_reading_the_secret_files_but_not_the_example() -> None:
+    deny = json.loads((REPO / ".claude" / "settings.json").read_text())["permissions"]["deny"]
+
+    assert {"Read(./.env)", "Read(**/*.pem)", "Read(**/*.key)"} <= set(deny)
+    assert {"Edit(.env)", "Edit(**/*.pem)", "Edit(**/*.key)"} <= set(deny)
+    # A rule such as Read(./.env*) would also close .env.example, which holds no secret.
+    assert [rule for rule in deny if rule.startswith("Read(") and ".env" in rule] == [
+        "Read(./.env)"
+    ]
 
 
 def test_settings_wire_the_review_hook_and_make_the_guard_fail_closed() -> None:

@@ -68,15 +68,21 @@ def _phrases(values: Iterable[str]) -> str:
     )
 
 
-def _field(name: str, values: str) -> tuple[re.Pattern[str], re.Pattern[str]]:
+def _field(name: str, values: str, tail: str = r"\b.*") -> tuple[re.Pattern[str], re.Pattern[str]]:
     """The head of a report line (`<name>:` after markup) and the whole line with a valid value."""
     head = rf"{_MARKUP}{name}{_MARKUP}:"
-    line = rf"{head}{_MARKUP}({values})\b(.*)"
+    line = rf"{head}{_MARKUP}({values})({tail})"
     return re.compile(head, re.IGNORECASE), re.compile(line, re.IGNORECASE)
 
 
+# After a verdict only the end of the line, spaces, a full stop, Markdown marks and one remark in
+# parentheses may follow, so "принять нельзя, вернуть" is no accept. A line that goes on is garbled,
+# and so is a remark with a word that takes the verdict back: "принять (нельзя, вернуть)".
+_TAKES_BACK = r"верн|нельзя|\bне\b|\bнет\b|отклон|отказ"  # noqa: RUF001
+_VERDICT_TAIL = rf"(?![^\W_])[\s.*_`]*(?:\((?![^()|]*(?:{_TAKES_BACK}))[^()|]*\)[\s.*_`]*)?$"
+
 _FIELDS = {
-    "verdict": _field("вердикт", _phrases(VERDICTS)),
+    "verdict": _field("вердикт", _phrases(VERDICTS), _VERDICT_TAIL),
     "subject": _field("предмет", _phrases(SUBJECTS)),
     "tree": _field("дерево", r"[0-9a-f]{64}|[0-9a-f]{40}"),
 }

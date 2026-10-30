@@ -15,7 +15,14 @@
     "claude-md-management@claude-plugins-official": true
   },
   "permissions": {
-    "deny": ["Edit(.env)", "Edit(**/*.pem)", "Edit(**/*.key)"]
+    "deny": [
+      "Edit(.env)",
+      "Edit(**/*.pem)",
+      "Edit(**/*.key)",
+      "Read(./.env)",
+      "Read(**/*.pem)",
+      "Read(**/*.key)"
+    ]
   },
   "hooks": {
     "PreToolUse": [

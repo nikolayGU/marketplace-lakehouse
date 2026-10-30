@@ -15,13 +15,19 @@ and docs/), also `make check` (.check-stamp) and a reviewer verdict other than "
 Markdown and docs/ changed since it.
 ask (a permission prompt, so the owner's ok is a click): replay and scenarios, source, silver and
 other lake writes, Iceberg maintenance and its DAGs, push, rebase, history rewrites, discarded work,
-volume, image and recursive deletes, stopped, removed or recreated containers (not the scheduler
-stop of the verify cycle), Kafka topic settings, connector, catalog and Postgres settings, DDL,
-actions on GitHub, Windows and WSL settings, edits of the agent roles, skills and rules and of
-scripts/agent_state.py, which decides what a stamp means.
+volume, image and recursive deletes, stopped, removed or recreated containers (`make down` as well;
+not the scheduler stop of the verify cycle), Kafka topic settings, connector, catalog and Postgres
+settings, DDL, actions on GitHub, Windows and WSL settings, edits of the agent roles, skills and
+rules and of scripts/agent_state.py, which decides what a stamp means; and a command that shows a
+secret: a read of .env (cat, grep, jq, source, a `<` redirect, `$(<.env)`, inline Python and the
+like; not .env.example and not `--env-file .env`), `docker compose config` without -q or a listing
+flag (--services, --profiles, --images, --volumes), `docker inspect` without a --format or with one
+that prints Env or the whole object (`json`, a lone dot, `.Config` with no field), and `env` or
+`printenv` run by `docker exec` or `compose exec|run`, or a read of /proc/<pid>/environ.
 The match is on the command text. A command made only of searches and reads (grep, rg, git log,
-cat and the like, no substitution or redirect) runs none of these words and passes. If the guard
-itself fails, it asks instead of letting the call through.
+cat and the like, no substitution or redirect) runs none of these words and passes, except that
+the secret check runs before that exit. If the guard itself fails, it asks instead of letting the
+call through.
 """
 
 import json
@@ -215,9 +221,11 @@ ASK = [
         "stops or removes stack containers (the scheduler stop of the verify cycle is free)",
     ),
     # A changed image recreates spark-bronze, and its start sets the bronze metadata property.
+    # `make down` runs `compose down`, which the rule above asks for by its own words.
     (
-        re.compile(r"\bmake\b[^;&|\n]*\s(start|up)(\s|$)|\bcompose\b[^\n;&|]*\sup(\s|$)"),
-        "may recreate spark-bronze or minio (ADR-025 bronze metadata property, MinIO image)",
+        re.compile(r"\bmake\b[^;&|\n]*\s(start|up|down)(\s|$)|\bcompose\b[^\n;&|]*\sup(\s|$)"),
+        "make start and up may recreate spark-bronze or minio (ADR-025 bronze metadata property,"
+        " MinIO image), make down removes the stack containers",
     ),
     (
         re.compile(
@@ -289,6 +297,81 @@ RUNS_MORE = re.compile(r"\$[(\x27\"]|`|<\(|\n")
 # program; git log and diff --output write a file.
 RUNS_PROGRAM = re.compile(r"--pre|--hostname-bin|--op|--output|-[a-zA-Z]*O")
 
+# Showing a secret: a read of .env, the compose file with the values of .env filled in, the Env of
+# a container. Checked on the words of each command: `--env-file .env` hands the file to compose
+# and `grep .env docs` only searches for the name, neither shows what is in it.
+ENV_FILE = re.compile(r"(^|/)\.env(\.(?!example$)[^/]*)?$")
+ENV_TEXT = re.compile(r"(?:^|[\s\"'=/(])\.env(?:\.(?!example\b)\w+)?(?![\w.-])")
+# `--env-file .env` hands the file to compose; the command does not read it.
+ENV_FILE_OPTION = re.compile(r"--env-file[=\s]+\S+")
+INLINE_CODE = re.compile(
+    r"\b(python[\d.]*|perl|ruby|node)\b[^\n;|&]*(\s-[a-zA-Z]*[ce]\b|<<|\s-(\s|$))"
+)
+# The text of $(...) and of a backtick pair, which a quoted word hides from the word split.
+SUBSTITUTION = re.compile(r"\$\(([^()]*)\)|`([^`]*)`")
+PROC_ENVIRON = re.compile(r"/proc/[^\s/]+/environ")
+# Commands that print a file, search it, edit it, or copy it somewhere a later read can reach.
+SECRET_READERS = re.compile(
+    r"cat|tac|nl|head|tail|less|more|most|cut|sort|uniq|paste|column|fold|rev|grep|egrep|fgrep"
+    r"|rg|ag|awk|gawk|mawk|sed|jq|yq|diff|cmp|comm|strings|od|xxd|hexdump|base64|bat|batcat|view"
+    r"|vi|vim|nvim|nano|emacs|source|\.|cp|mv|rsync|tar|zip"
+)
+# The first word after these is the pattern or script, not a file.
+PATTERN_FIRST = {"grep", "egrep", "fgrep", "rg", "ag", "awk", "gawk", "mawk", "sed", "jq", "yq"}
+SHELLS = {"bash", "sh", "zsh", "dash", "ksh"}
+# Words that run the next command, and keywords that start one.
+WRAPPERS = {"sudo", "env", "time", "command", "exec", "nohup", "nice", "xargs"}
+KEYWORDS = {"{", "!", "if", "then", "else", "elif", "do", "while", "until"}
+ASSIGNMENT = re.compile(r"[A-Za-z_]\w*=")
+DOCKER_VALUE_OPTIONS = {"--config", "--context", "-c", "-H", "--host", "-l", "--log-level"}
+COMPOSE_VALUE_OPTIONS = {
+    "-f",
+    "--file",
+    "-p",
+    "--project-name",
+    "--profile",
+    "--env-file",
+    "--project-directory",
+    "--ansi",
+    "--parallel",
+    "--progress",
+    "--context",
+    "-c",
+    "-H",
+    "--host",
+}
+CONFIG_LISTINGS = {"-q", "--quiet", "--services", "--profiles", "--images", "--volumes"}
+# Options of `exec` and `run` that take a value, so that the word after them is not the container.
+EXEC_VALUE_OPTIONS = {
+    "-e",
+    "--env",
+    "-u",
+    "--user",
+    "-w",
+    "--workdir",
+    "--index",
+    "--detach-keys",
+    "--entrypoint",
+    "-v",
+    "--volume",
+    "-p",
+    "--publish",
+    "--name",
+    "-l",
+    "--label",
+}
+# In an action of a docker inspect format: the whole object (a lone dot) or .Config with no field.
+WHOLE_OBJECT = re.compile(r"(?<![\w.])\.(?![\w.])|(?<!\w)\.Config(?![\w.])")
+SECRET_ENV = "reads .env, which holds every password of the stack (a secret)"
+SECRET_ENVIRON = "prints the environment of a process or container, with its passwords (a secret)"
+SECRET_CONFIG = (
+    "docker compose config prints the passwords of .env (a secret); -q or --services is enough"
+)
+SECRET_INSPECT = (
+    "docker inspect prints the Env of the container with its passwords (a secret);"
+    " use --format with fields other than Env"
+)
+
 
 def deny(reason: str, fix: str = "ask the owner for an explicit ok") -> None:
     print(f"blocked by .claude/hooks/guard.py: {reason}; {fix}", file=sys.stderr)
@@ -331,6 +414,175 @@ def reads_only(command: str) -> bool:
     )
 
 
+def shell_words(command: str) -> tuple[list[list[str]], list[str]] | None:
+    """The words of each simple command in the text, and the files a `<` redirect reads. A
+    separator, a subshell, a substitution, a backtick or a newline starts a new command. None when
+    the quotes do not balance."""
+    lexer = shlex.shlex(
+        command.replace("\n", " ; ").replace("`", " ( "), posix=True, punctuation_chars=True
+    )
+    lexer.whitespace_split = True
+    lexer.commenters = ""  # bash reads `#` inside a word as text, shlex as a comment
+    try:
+        tokens = list(lexer)
+    except ValueError:
+        return None
+    segments: list[list[str]] = [[]]
+    stdin_files: list[str] = []
+    redirect = ""
+    for token in tokens:
+        if redirect:  # the word after a redirect operator is its target, not an argument
+            if redirect == "<":
+                stdin_files.append(token)
+            redirect = ""
+        elif token and set(token) <= set("();<>|&"):  # an operator; a quoted `f(x)` is a word
+            if set(token) <= set("<>&") and set(token) & set("<>"):
+                redirect = token
+            else:
+                segments.append([])
+        else:
+            segments[-1].append(token)
+    return segments, stdin_files
+
+
+def subcommand(args: list[str], value_options: set[str]) -> int | None:
+    """Index of the first word that is not an option or the value of one."""
+    skip = False
+    for at, arg in enumerate(args):
+        if skip:
+            skip = False
+        elif arg in value_options:
+            skip = True
+        elif not arg.startswith("-"):
+            return at
+    return None
+
+
+def format_prints_env(text: str) -> bool:
+    """A docker inspect format that prints Env, or the whole object or its Config, which hold it:
+    `json` (the shortcut for the whole object), a lone dot, `.Config` with no field after it."""
+    if text.strip() == "json" or re.search(r"\bEnv\b", text):
+        return True
+    return any(WHOLE_OBJECT.search(action) for action in re.findall(r"\{\{(.*?)\}\}", text))
+
+
+def inspect_prints_env(options: list[str]) -> bool:
+    """`docker inspect` options: no --format, or one that prints Env or the whole object."""
+    formats = []
+    for at, option in enumerate(options):
+        if option in ("-f", "--format") and at + 1 < len(options):
+            formats.append(options[at + 1])
+        elif option.startswith("--format="):
+            formats.append(option.removeprefix("--format="))
+        elif option.startswith("-f") and not option.startswith("--"):
+            formats.append(option[2:])
+    return not formats or any(format_prints_env(text) for text in formats)
+
+
+def prints_environment(words: list[str]) -> bool:
+    """The command given to a container prints its environment: printenv, env with no command to
+    run, or a shell script that does either."""
+    if not words:
+        return False
+    name, args = words[0], words[1:]
+    if name == "printenv":
+        return True
+    if name == "env":
+        return not [arg for arg in args if not arg.startswith("-") and "=" not in arg]
+    script = next(
+        (at for at, arg in enumerate(args[:-1]) if re.fullmatch(r"-[a-zA-Z]*c", arg)), None
+    )
+    if name in SHELLS and script is not None:
+        return bool(
+            re.search(r"(?:^|[;&|(]\s*)(?:printenv\b|env\s*(?:$|[;&|)]))", args[script + 1])
+        )
+    return False
+
+
+def exec_prints_environment(args: list[str]) -> bool:
+    """The words after `exec` or `run`: options, the container or service, then its command."""
+    at = subcommand(args, EXEC_VALUE_OPTIONS)
+    return at is not None and prints_environment(args[at + 1 :])
+
+
+def secret_in_segment(words: list[str]) -> str | None:
+    wrapped = False
+    while words:
+        word = words[0]
+        if word in WRAPPERS:
+            wrapped = True
+        elif not (word in KEYWORDS or ASSIGNMENT.match(word) or (wrapped and word[:1] == "-")):
+            break
+        del words[0]
+    if not words:
+        return None
+    name, args = words[0], words[1:]
+    script = next(
+        (at for at, arg in enumerate(args[:-1]) if re.fullmatch(r"-[a-zA-Z]*c", arg)), None
+    )
+    if name in SHELLS and script is not None:
+        return secret_shown(args[script + 1])
+    if name == "eval":
+        return secret_shown(" ".join(args))
+    if SECRET_READERS.fullmatch(name):
+        files = [arg for arg in args if not arg.startswith("-")]
+        if name in PATTERN_FIRST and not any(arg in ("-f", "--file") for arg in args):
+            files = files[1:]
+        return SECRET_ENV if any(ENV_FILE.search(file) for file in files) else None
+    if name in ("docker-compose", "$COMPOSE", "${COMPOSE}"):
+        return compose_secret(args)
+    if name == "docker":
+        at = subcommand(args, DOCKER_VALUE_OPTIONS)
+        if at is None:
+            return None
+        sub, rest = args[at], args[at + 1 :]
+        if sub == "container" and rest[:1] == ["inspect"]:
+            sub, rest = "inspect", rest[1:]
+        if sub == "compose":
+            return compose_secret(rest)
+        if sub == "inspect" and inspect_prints_env(rest):
+            return SECRET_INSPECT
+        if sub == "exec" and exec_prints_environment(rest):
+            return SECRET_ENVIRON
+    return None
+
+
+def compose_secret(args: list[str]) -> str | None:
+    at = subcommand(args, COMPOSE_VALUE_OPTIONS)
+    if at is None:
+        return None
+    sub, rest = args[at], args[at + 1 :]
+    if sub in ("config", "convert"):
+        return None if CONFIG_LISTINGS & set(rest) else SECRET_CONFIG
+    if sub in ("exec", "run") and exec_prints_environment(rest):
+        return SECRET_ENVIRON
+    return None
+
+
+def secret_shown(command: str) -> str | None:
+    """Why the command shows a secret (the reason for the owner), None when it does not."""
+    if PROC_ENVIRON.search(command):
+        return SECRET_ENVIRON
+    text = ENV_FILE_OPTION.sub(" ", command)
+    if INLINE_CODE.search(text) and ENV_TEXT.search(text):
+        return SECRET_ENV
+    for found in SUBSTITUTION.finditer(command):
+        reason = secret_shown(found[1] or found[2] or "")
+        if reason:
+            return reason
+    parsed = shell_words(command)
+    if parsed is None:
+        return SECRET_ENV if ENV_TEXT.search(text) else None
+    segments, stdin_files = parsed
+    if any(ENV_FILE.search(file) for file in stdin_files):
+        return SECRET_ENV
+    for segment in segments:
+        reason = secret_in_segment(segment)
+        if reason:
+            return reason
+    return None
+
+
 def commit_gap(low: str) -> list[str]:
     """What a `git commit` still lacks on this working tree, empty when it may go ahead: a full
     verify always, and for changed code also a check and a reviewer verdict that is not `return`."""
@@ -346,7 +598,9 @@ def commit_gap(low: str) -> list[str]:
     current = tree_hash(ROOT)
 
     def covers(stamp: Stamp | None) -> bool:
-        # Markdown and docs/ edited after the stamp need no new one, as in stop_gate.py.
+        # The commit gate is more lenient than stop_gate.py, which wants a verify stamp that is
+        # exactly fresh whenever code changed: here a stamp also covers a tree that differs from
+        # the stamped one only in Markdown and docs/.
         if stamp is None:
             return False
         try:
@@ -406,6 +660,10 @@ def check(event: dict[str, Any]) -> None:
         return
     command = args.get("command", "")
     if reads_only(command):
+        # The one read that is not free: its words are data, but the file it opens is a secret.
+        secret = secret_shown(command)
+        if secret:
+            ask(secret)
         return
     low = command.lower()
     if FORCE_PUSH.search(low):
@@ -445,6 +703,9 @@ def check(event: dict[str, Any]) -> None:
             )
     if SHELL_WRITE_RULES.search(command):
         ask("edits the agent roles or rules")
+    secret = secret_shown(command)
+    if secret:
+        ask(secret)
     for pattern, reason in ASK:
         if pattern.search(low):
             ask(reason)

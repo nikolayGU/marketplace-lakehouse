@@ -273,6 +273,18 @@ def test_only_a_return_verdict_is_not_accepted() -> None:
         ("## ВЕРДИКТ:  Принять", "accept"),
         (f"> _Вердикт_: {WIDE_NOTES}", "accept-with-notes"),
         ("`Вердикт: вернуть`", "return"),
+        # Only the end of the line, spaces, a full stop, Markdown marks and one remark in
+        # parentheses may follow the value.
+        ("Вердикт: принять.", "accept"),
+        (f"Вердикт: **{WITH_NOTES}**", "accept-with-notes"),
+        ("**Вердикт: принять**", "accept"),
+        ("Вердикт: `принять`", "accept"),
+        ("Вердикт: принять   ", "accept"),
+        (f"_Вердикт: {WITH_NOTES}_.", "accept-with-notes"),
+        ("Вердикт: вернуть.", "return"),
+        ("Вердикт: принять (1 низкое)", "accept"),
+        (f"Вердикт: {WITH_NOTES} (1 низкое)", "accept-with-notes"),
+        (f"**Вердикт:** {WITH_NOTES} (2 средних, 1 низкое).", "accept-with-notes"),
     ],
 )
 def test_record_review_writes_the_verdict_for_the_reported_tree(
@@ -311,6 +323,20 @@ def test_record_review_ignores_a_line_that_is_not_a_verdict(repo: Path, line: st
         "Вердикт:",
         "Вердикт: возможно, принять",
         "Вердикт: вернуться",
+        # The first word is a verdict, the rest of the line takes it back.
+        "Вердикт: принять нельзя, вернуть",
+        "Вердикт: принять, но вернуть",
+        "Вердикт: принять - нельзя",
+        f"Вердикт: {WITH_NOTES}, но лучше вернуть",
+        "Вердикт: принять (нельзя | вернуть)",
+        "Вердикт: принять; вернуть",
+        # A remark in parentheses must not take the verdict back either.
+        "Вердикт: принять (нельзя, вернуть)",
+        "Вердикт: принять (не принимать)",
+        f"Вердикт: {WITH_NOTES} (нет, вернуть)",
+        f"Вердикт: {WITH_NOTES} (НЕЛЬЗЯ)",
+        "Вердикт: принять (отклонить)",
+        "Вердикт: принять (вернуть автору)",
     ],
 )
 def test_record_review_revokes_on_a_garbled_verdict_line(repo: Path, line: str) -> None:
@@ -320,6 +346,18 @@ def test_record_review_revokes_on_a_garbled_verdict_line(repo: Path, line: str) 
     message = record_review(repo, lines(line, "Предмет: код", f"Дерево: {tree}"))
 
     assert_revoked(repo, message)
+
+
+def test_record_review_never_accepts_a_verdict_that_words_after_it_take_back(repo: Path) -> None:
+    tree = tree_hash(repo)
+
+    message = record_review(
+        repo, lines("Вердикт: принять нельзя, вернуть", "Предмет: код", f"Дерево: {tree}")
+    )
+
+    assert_revoked(repo, message)
+    stamp = read_stamp(repo, "review")
+    assert stamp is not None and stamp.mode not in ACCEPTED
 
 
 def test_record_review_revokes_on_two_different_verdicts(repo: Path) -> None:
