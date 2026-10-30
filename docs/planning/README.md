@@ -20,5 +20,5 @@
 | `13-harness-guard.patch` | патч guard 27.10 | применён в `5ca361a`, история |
 | `14-closeout-spec.md` | W6, закрытие проекта: решения W6-D*, карточки, бэклог | действует, единственный бэклог W6 |
 | `15-audit-2026-10-30.md` | независимый аудит: находки, бэклог Б1..Б12 | действует |
-| `15-audit-p1-harness.patch` | патч П-1: guard, settings, `session_context.py`, `agent_state.py` | ждёт владельца (`git apply`) |
+| `15-audit-p1-harness.patch` | патч П-1: guard, settings, `session_context.py`, `agent_state.py` | применён в `8577de1`, история |
 | `archive/` | перенесённая история (HANDOFF до 24.10) | история |
