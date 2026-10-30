@@ -1,10 +1,17 @@
 """SQL for `reconcile` in `scripts/chaos/lib.sh`, derived from `contracts/silver/*.json`.
 
-Prints one line per contract: `<table>\\t<postgres query>\\t<trino query>`. Each query returns one
-text value, `<rows> <md5 of the sorted keys> [<sum> ...]`, and the two values are equal when
-silver's live rows match the source: same count, same set of primary keys, and the same sum of
-every decimal column at its contract scale. Counts alone miss a lost row that an undeleted one
-offsets.
+Prints one line per contract:
+`<table>\\t<postgres query>\\t<trino query>\\t<postgres fingerprint>\\t<trino fingerprint>`.
+
+The first two queries return one text value, `<rows> <md5 of the sorted keys> [<sum> ...]`, and
+the two values are equal when silver's live rows match the source: same count, same set of primary
+keys, and the same sum of every decimal column at its contract scale. Counts alone miss a lost row
+that an undeleted one offsets.
+
+The last two return `<rows> <md5 of the sorted key=row hash pairs>`, the fingerprint the dq_checks
+DAG compares (`airflow/dags/lakehouse/reconcile.py`, imported here, not rebuilt): every column of a
+row, so a changed `order_status` under the same keys differs. This file runs under the system
+`python3`, so that module has to stay standard library only (a test runs it with `-I -S`).
 """
 
 import json
@@ -13,14 +20,34 @@ import sys
 from pathlib import Path
 from typing import Any
 
+# `lakehouse` is a top-level package in the Airflow image; on the host it lives in airflow/dags.
+# First on the path, so no other installed `lakehouse` can stand in for the DAG's module.
+_DAGS = str(Path(__file__).resolve().parents[1] / "airflow" / "dags")
+if _DAGS not in sys.path:
+    sys.path.insert(0, _DAGS)
+
+from lakehouse import reconcile as by_value  # noqa: E402
+
 DECIMAL = re.compile(r"decimal\(\s*\d+\s*,\s*(\d+)\s*\)")
 
 
-def queries(contract: dict[str, Any]) -> tuple[str, str, str]:
-    source = contract["x-source-table"]
+def _source_table(contract: dict[str, Any]) -> tuple[str, str]:
+    source: str = contract["x-source-table"]
     if source.count(".") != 1:
         raise ValueError(f"x-source-table {source!r} is not schema.table")
-    table = source.split(".")[1]
+    return source, source.split(".")[1]
+
+
+def value_queries(contract: dict[str, Any]) -> tuple[str, str]:
+    """The table fingerprint of the source (Postgres) and of silver's live rows (Trino)."""
+    source, table = _source_table(contract)
+    if table not in by_value.TABLES:
+        raise ValueError(f"{source}: reconcile.py has no columns for {table!r}")
+    return by_value.fingerprint_sql_postgres(table), by_value.fingerprint_sql_trino(table)
+
+
+def queries(contract: dict[str, Any]) -> tuple[str, str, str]:
+    source, table = _source_table(contract)
     keys: list[str] = contract.get("x-primary-key") or []
     if not keys:
         raise ValueError(f"{source}: no x-primary-key")
@@ -69,7 +96,8 @@ def _concat(parts: list[str]) -> str:
 def main() -> None:
     contracts_dir = Path(sys.argv[1])
     for path in sorted(contracts_dir.glob("*.json")):
-        print("\t".join(queries(json.loads(path.read_text()))))
+        contract = json.loads(path.read_text())
+        print("\t".join((*queries(contract), *value_queries(contract))))
 
 
 if __name__ == "__main__":

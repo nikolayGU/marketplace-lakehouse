@@ -13,8 +13,10 @@ Contents: [Reconciliation](#reconciliation-source-against-silver) |
 ## Reconciliation: source against silver
 
 `make reconcile` compares Postgres with the live rows of silver for all seven tables: row count,
-set of primary keys, sum of every decimal column (`scripts/chaos/lib.sh`, `scripts/reconcile_sql.py`).
-It only reads. Output of 2026-10-29 18:50 UTC, run for this page:
+set of primary keys, sum of every decimal column (`scripts/chaos/lib.sh`, `scripts/reconcile_sql.py`),
+and since 2026-10-30 the row fingerprint of every contract column that `dq_checks` uses, printed
+as a last `values` column (`ok` or `DIFF`). It only reads. Output of 2026-10-29 18:50 UTC, before the fingerprint,
+run for this page:
 
 ```
 customers    postgres    99441  silver    99441  rows ok   keys ok   sums -

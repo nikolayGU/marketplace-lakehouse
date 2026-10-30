@@ -66,7 +66,8 @@ of the Spark image adds about 80 seconds with its base image already pulled (202
 Otherwise it waits up to `VERIFY_WAIT` seconds (default 900) for bronze to catch up with Kafka,
 runs one silver merge, and checks that every Kafka offset is in bronze exactly once, that live
 silver rows equal Postgres for all seven tables (row count, set of primary keys, sum of every
-decimal column; `reconcile`), and that all seven tables reached bronze. The last line is
+decimal column, and since 2026-10-30 the row fingerprint of every column; `reconcile`), and that
+all seven tables reached bronze. The last line is
 `verify ok` or `verify failed: <reason>`.
 
 ```
@@ -465,7 +466,8 @@ manual merge: `airflow dags pause silver_upsert` in the scheduler container, wai
 running `merge` ends, `make silver`, then `airflow dags unpause silver_upsert`. The first run from
 Airflow continues from the checkpoint of the last `make silver`.
 
-`reconcile_values` compares by value what `reconcile` compares by count, key set and sums: a row
+`reconcile_values` compares by value (`make reconcile` uses the same fingerprint since 2026-10-30,
+for the source-silver pairs only and without the at-rest check): a row
 fingerprint is the md5 of the canonical text of every column (null as `\N`, decimals at the contract
 scale, timestamps as epoch milliseconds), built the same in Postgres and Trino; a table is the row
 count plus the md5 of its sorted `key=fingerprint` pairs. Pairs: each of the seven source tables

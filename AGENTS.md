@@ -23,7 +23,7 @@ Olist), Debezium, Kafka, Spark bronze и silver (`MERGE`), Iceberg в Lakekeeper
 | `make start` | `core` без контейнера реплея плюс `trino` |
 | `make verify` | ждёт bronze, один `make silver`, offsets Kafka в bronze, `reconcile`, 7 таблиц в bronze; последняя строка `verify ok` |
 | `make verify-fast` | то же без `make silver`: только чтение, в lake ничего не пишет |
-| `make reconcile` | Postgres против живых строк silver по 7 таблицам: количество, md5 набора PK, суммы decimal |
+| `make reconcile` | Postgres против живых строк silver по 7 таблицам: количество, md5 набора PK, суммы decimal, отпечаток значений всех колонок |
 | `make dbt-build` | seed, run, test в `lake.gold` |
 | `make report` | факты для отчёта: git, отметки verify, check и ревью, контейнеры, часы реплея; только чтение |
 | `make check` | `make lint` и `make test`, при успехе пишет `.check-stamp` для гейта коммита |
@@ -86,7 +86,8 @@ Olist), Debezium, Kafka, Spark bronze и silver (`MERGE`), Iceberg в Lakekeeper
 
 - Идемпотентность: повтор батча bronze, merge silver, `dbt build`, `make bootstrap` не меняет
   результат и не создаёт дублей.
-- Сверка источника и silver по всем 7 таблицам: количество живых строк, набор PK, суммы decimal.
+- Сверка источника и silver по всем 7 таблицам: количество живых строк, набор PK, суммы decimal,
+  значения всех колонок.
   Расхождение означает стоп и разбор, а не правку проверки.
 - Деньги в новых моделях только `decimal`, не `double`.
 - Удаления мягкие (`_is_deleted`), фильтрует модель-потребитель (D4).

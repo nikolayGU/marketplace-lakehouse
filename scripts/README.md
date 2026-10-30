@@ -19,7 +19,8 @@
 - `replay-burst.sh` (W3-T00, `make replay-burst SECONDS=<n> [SPEED=720]`): plays `n` real
   seconds of the replay schedule on the host, prints the virtual clock before and after.
 - `reconcile_sql.py`: the Postgres and Trino queries `reconcile` (`chaos/lib.sh`) runs per silver
-  contract: live row count, md5 of the sorted primary keys, sum of every decimal column.
+  contract: live row count, md5 of the sorted primary keys, sum of every decimal column, and the
+  row fingerprint of every column that `dq_checks` uses (`airflow/dags/lakehouse/reconcile.py`).
 - `fetch_data.py` (W1-T03): downloads Olist into `data/raw` via Kaggle CLI or explains manual download.
 - `chaos/<name>.sh`: failure scenarios, one per file, each prints the verification SQL at the end.
 - `make iceberg-demo` is not a script here: it runs `streaming/spark_jobs/iceberg_demo.py`.

@@ -514,7 +514,9 @@ up to the millisecond. The microseconds are gone already in Kafka, because `conn
 milliseconds, so a silver timestamp can differ from Postgres by less than 1 ms; reconciliation
 (`reconcile` in `scripts/chaos/lib.sh`) compares live row counts, the set of primary keys and the
 sums of decimal columns, not timestamps. Changing a column type in the source is a contract
-change here and an Iceberg type promotion in silver.
+change here and an Iceberg type promotion in silver. Since 2026-10-30 `reconcile` also compares
+the row fingerprint of `dq_checks`, which reads timestamps as epoch milliseconds on both sides, so
+the sub-millisecond difference does not show.
 
 W5-T04: `dq_checks` compares values through a row fingerprint at millisecond precision for
 timestamps and at the contract scale for decimals; the fingerprints from Postgres and Trino were

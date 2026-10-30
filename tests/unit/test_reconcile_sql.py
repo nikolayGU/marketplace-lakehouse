@@ -4,8 +4,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from lakehouse import reconcile as by_value
 
-from scripts.reconcile_sql import queries
+from scripts.reconcile_sql import queries, value_queries
 
 REPO = Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "scripts" / "reconcile_sql.py"
@@ -80,16 +81,20 @@ def test_contract_that_cannot_be_reconciled_fails_loudly(
         queries(contract(**overrides))
 
 
-def test_cli_prints_one_tab_separated_line_per_silver_contract() -> None:
+def run_cli(*flags: str) -> list[list[str]]:
     result = subprocess.run(
-        [sys.executable, str(SCRIPT), str(REPO / "contracts" / "silver")],
+        [sys.executable, *flags, str(SCRIPT), str(REPO / "contracts" / "silver")],
         capture_output=True,
         text=True,
         check=True,
     )
-    lines = result.stdout.splitlines()
+    return [line.split("\t") for line in result.stdout.splitlines()]
 
-    assert [line.split("\t")[0] for line in lines] == [
+
+def test_cli_prints_one_tab_separated_line_per_silver_contract() -> None:
+    lines = run_cli()
+
+    assert [line[0] for line in lines] == [
         "customers",
         "order_items",
         "orders",
@@ -98,4 +103,33 @@ def test_cli_prints_one_tab_separated_line_per_silver_contract() -> None:
         "reviews",
         "sellers",
     ]
-    assert all(len(line.split("\t")) == 3 for line in lines)
+    assert all(len(line) == 5 for line in lines)
+
+
+def test_cli_value_queries_are_the_ones_the_dag_builds() -> None:
+    # One implementation of the row fingerprint: dq_checks and `make reconcile` run the same SQL.
+    for table, _, _, postgres, trino in run_cli():
+        assert postgres == by_value.fingerprint_sql_postgres(table)
+        assert trino == by_value.fingerprint_sql_trino(table)
+
+
+def test_cli_runs_on_the_bare_interpreter_lib_sh_uses() -> None:
+    # `python3` in lib.sh has no packages: no site, no environment, only the standard library.
+    assert run_cli("-I", "-S") == run_cli()
+
+
+def test_value_queries_cover_every_column_of_a_table_without_decimals() -> None:
+    # `orders` has no decimal column: before the fingerprint a changed status went unnoticed.
+    postgres, trino = value_queries(
+        contract(**{"x-source-table": "shop.orders", "x-primary-key": ["order_id"]})
+    )
+
+    for query in (postgres, trino):
+        assert "order_status" in query
+    assert postgres == by_value.fingerprint_sql_postgres("orders")
+    assert trino == by_value.fingerprint_sql_trino("orders")
+
+
+def test_table_the_fingerprint_does_not_know_fails_loudly() -> None:
+    with pytest.raises(ValueError, match="no columns for 'refunds'"):
+        value_queries(contract(**{"x-source-table": "shop.refunds"}))

@@ -30,7 +30,7 @@ make secrets                                          # generates .env from .env
 sed -i 's/^REPLAY_DATA=.*/REPLAY_DATA=sample/' .env   # the sample slice in data/sample
 make bootstrap                                        # start, migrate, connector, load, verify, protect
 make replay-burst SECONDS=60                          # plays about 12 virtual hours of the remaining history, then stops
-make verify                                           # bronze holds every Kafka record once, silver matches Postgres (rows, keys, decimal sums)
+make verify                                           # bronze holds every Kafka record once, silver matches Postgres (rows, keys, sums, values)
 ```
 
 `make bootstrap` is the one command: it starts the stack, migrates the source, registers the
@@ -174,7 +174,8 @@ docs/           evidence, interview notes, runbooks, images, planning (ru)
 ## Data quality
 
 `make verify` checks that bronze holds every Kafka offset exactly once and that silver's live rows
-match Postgres per table by row count, set of primary keys and sums of decimal columns. Invalid
+match Postgres per table by row count, set of primary keys, sums of decimal columns and a row
+fingerprint of every column. Invalid
 events land in `silver.quarantine`. dbt tests run with every gold build, and the `dq_checks` DAG
 runs every 15 minutes: duplicate keys, source against silver and silver against gold by row
 fingerprint, freshness, and a verdict that stays `in flight` instead of a false failure while CDC

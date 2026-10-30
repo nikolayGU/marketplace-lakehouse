@@ -303,10 +303,11 @@ deleted. Compare the count, a hash of the sorted key set and the sums of money c
 sides, and only when nothing is in flight.
 
 In this project: for each of the seven tables `make reconcile` compares live row count, `md5` of the
-sorted primary keys and the sum of every decimal column at its contract scale, Postgres against
-`silver` where `not _is_deleted`. The SQL is generated from the contracts
+sorted primary keys, the sum of every decimal column at its contract scale and, since 2026-10-30,
+the row fingerprint of every contract column, Postgres against `silver` where `not _is_deleted`.
+The SQL is generated from the contracts
 ([scripts/reconcile_sql.py:1](../scripts/reconcile_sql.py); runner `reconcile` in
-[scripts/chaos/lib.sh:158](../scripts/chaos/lib.sh)). `make verify-fast` reported `verify ok` with
+[scripts/chaos/lib.sh](../scripts/chaos/lib.sh)). `make verify-fast` reported `verify ok` with
 7 of 7 tables on 2026-10-29 ([HANDOFF](HANDOFF.md), section «Состояние на 29.10.2026, харнесс
 v0.3», row «Стек», ru). `dq_checks` also compares row
 fingerprints, source to silver and silver to gold; Postgres and Trino fingerprints were equal on all

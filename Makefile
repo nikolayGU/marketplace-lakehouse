@@ -58,13 +58,13 @@ bootstrap: ## fresh clone to verified data: start, migrate, connector, load, ver
 	@bash scripts/bootstrap.sh
 
 # ---------------------------------------------------------------- operate
-verify: ## bronze holds every Kafka record once, silver matches Postgres on rows, keys and decimal sums: prints verify ok
+verify: ## bronze holds every Kafka record once, silver matches Postgres on rows, keys, decimal sums and column values: prints verify ok
 	@bash scripts/verify.sh
 
 verify-fast: ## make verify without the silver merge: reads only, writes nothing to the lake
 	@bash scripts/verify.sh --no-merge
 
-reconcile: ## Postgres against live silver rows: count, set of primary keys, decimal sums
+reconcile: ## Postgres against live silver rows: count, set of primary keys, decimal sums, row fingerprint of every column
 	@bash -c '. scripts/chaos/lib.sh && reconcile'
 
 report: ## facts for a session report: git, the verify, check and review stamps, containers, replay clock; reads only

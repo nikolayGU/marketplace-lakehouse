@@ -152,25 +152,36 @@ slot_reattached() {
                    where slot_name = 'shop_slot'")" = t ]
 }
 
-# Every silver contract, Postgres against silver's live rows: row count, md5 of the sorted
-# primary keys, and the sum of each decimal column (scripts/reconcile_sql.py). 1 when any table
-# differs, 2 when a query fails. Counts alone miss a lost row that an undeleted one offsets.
+# Every silver contract, Postgres against silver's live rows (scripts/reconcile_sql.py): row count,
+# md5 of the sorted primary keys, the sum of each decimal column, and the row fingerprint of the
+# dq_checks DAG (airflow/dags/lakehouse/reconcile.py): every column of every row, so a changed
+# value under the same keys is a difference too. 1 when any table differs, 2 when a query fails or
+# returns nothing. Counts alone miss a lost row that an undeleted one offsets.
 reconcile() {
-  local t pg_sql lake_sql pg lake sql status=0
+  local t pg_sql lake_sql pg_values_sql lake_values_sql pg lake pg_values lake_values sql status=0
   local -a p l
   sql=$(python3 "$ROOT/scripts/reconcile_sql.py" "$ROOT/contracts/silver") || return 2
   # fd 3: docker compose exec inside the loop would otherwise read the remaining lines.
-  while IFS=$'\t' read -r -u 3 t pg_sql lake_sql; do
+  while IFS=$'\t' read -r -u 3 t pg_sql lake_sql pg_values_sql lake_values_sql; do
     pg=$(psql_value "$pg_sql") || return 2
     lake=$(trino_value "$lake_sql") || return 2
+    pg_values=$(psql_value "$pg_values_sql") || return 2
+    lake_values=$(trino_value "$lake_values_sql") || return 2
+    # Two empty answers are equal: a query that returned nothing is not a match.
+    [ -n "$pg" ] && [ -n "$lake" ] && [ -n "$pg_values" ] && [ -n "$lake_values" ] || {
+      echo "$t: a reconcile query returned nothing" >&2
+      return 2
+    }
     read -r -a p <<<"$pg"
     read -r -a l <<<"$lake"
-    printf '%-12s postgres %8s  silver %8s  rows %-4s keys %-4s sums %s\n' "$t" "${p[0]}" \
-      "${l[0]}" "$([ "${p[0]}" = "${l[0]}" ] && echo ok || echo DIFF)" \
+    printf '%-12s postgres %8s  silver %8s  rows %-4s keys %-4s sums %s  values %s\n' "$t" \
+      "${p[0]}" "${l[0]}" "$([ "${p[0]}" = "${l[0]}" ] && echo ok || echo DIFF)" \
       "$([ "${p[1]}" = "${l[1]}" ] && echo ok || echo DIFF)" \
       "$(if [ ${#p[@]} -eq 2 ]; then echo -; elif [ "${p[*]:2}" = "${l[*]:2}" ]; then
-           echo "ok (${p[*]:2})"; else echo "DIFF (postgres ${p[*]:2}, silver ${l[*]:2})"; fi)"
+           echo "ok (${p[*]:2})"; else echo "DIFF (postgres ${p[*]:2}, silver ${l[*]:2})"; fi)" \
+      "$([ "$pg_values" = "$lake_values" ] && echo ok || echo DIFF)"
     [ "$pg" = "$lake" ] || status=1
+    [ "$pg_values" = "$lake_values" ] || status=1
   done 3<<<"$sql"
   return "$status"
 }

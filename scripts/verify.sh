@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # make verify: data went through the whole stack. Bronze holds every Kafka record exactly once,
-# silver matches Postgres on row count, key set and decimal sums (`make reconcile`; values are
-# compared only by dq_checks, OPERATIONS.md), all seven source tables reached bronze. Ends with
+# silver matches Postgres on row count, key set, decimal sums and a fingerprint of every column
+# (`make reconcile`), all seven source tables reached bronze. Ends with
 # `verify ok` or the reason and a non-zero exit code. It runs one silver merge, so it refuses
 # while Airflow may run another (two writers on one checkpoint) and while a replayer plays
 # (reconcile would compare a moving source). `--no-merge` (make verify-fast) skips the merge and
