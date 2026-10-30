@@ -115,8 +115,9 @@ No single component is exactly-once. Debezium and Kafka are at-least-once; Spark
 micro-batch after a crash. The end result is still correct because the sinks that matter are
 idempotent: silver applies changes by primary key with an LSN guard, so a replayed or
 duplicated event is a no-op; dbt incremental models merge on a unique key. Bronze is treated as
-at-least-once by contract; whether the Iceberg sink really skips an already committed epoch
-after a crash is verified by chaos scenario 1, not assumed. The measured cases are in
+at-least-once by contract; chaos scenario 1 found no repeated or missing offset after a driver
+kill, and since both live kills landed before the write stage, the skip of an already committed
+epoch is reproduced by `tests/unit/test_iceberg_sink.py`, not by a live run. The measured cases are in
 [docs/evidence.md](docs/evidence.md).
 
 ## What is deliberately absent

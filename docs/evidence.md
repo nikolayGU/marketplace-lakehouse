@@ -28,9 +28,25 @@ reviews      postgres    93494  silver    93494  rows ok   keys ok   sums -
 sellers      postgres     3095  silver     3095  rows ok   keys ok   sums -
 ```
 
-`make verify` adds the bronze check (every Kafka offset exactly once, all seven tables present)
-and ends with `verify ok`. Its last full run before this page: `verify ok`, 2026-10-29 19:16 UTC,
-before commit `46f5282` (the W6-T11 check, [Trino access control](#trino-access-control)).
+With the `values` column (the row fingerprint, commit `8164afe`, audit B2): `make verify-fast` of
+2026-10-30 16:37 UTC, HEAD `ea64b6e` (stamp `fast at 2026-10-30T16:37:13Z`). `verify-fast` only
+reads: it does not run `make silver`. The block above stays as the record before the fingerprint.
+Output as printed:
+
+```
+customers    postgres    99441  silver    99441  rows ok   keys ok   sums -  values ok
+order_items  postgres   109081  silver   109081  rows ok   keys ok   sums ok (13173478.80 2182507.96)  values ok
+orders       postgres    96258  silver    96258  rows ok   keys ok   sums -  values ok
+payments     postgres   100623  silver   100623  rows ok   keys ok   sums ok (15530922.11)  values ok
+products     postgres    32951  silver    32951  rows ok   keys ok   sums -  values ok
+reviews      postgres    93494  silver    93494  rows ok   keys ok   sums -  values ok
+sellers      postgres     3095  silver     3095  rows ok   keys ok   sums -  values ok
+verify ok
+```
+
+Both `verify` targets add the bronze check to `reconcile` (every Kafka offset exactly once, all
+seven tables present) and end with `verify ok`; `make verify` first runs one silver merge. A full
+run that this page records: `verify ok`, 2026-10-29 19:16 UTC, before commit `46f5282` (the W6-T11 check, [Trino access control](#trino-access-control)).
 `dq_checks` repeats the comparison every 15 minutes and also compares row fingerprints source to
 silver and silver to gold (`reconcile_values`); its run at 16:45 on 2026-10-29 had every
 `reconcile_*_differing` at 0 and `reconcile_in_flight` at 0 ([OPERATIONS, Maintenance step 11](../OPERATIONS.md#first-live-run-2026-10-29)).
@@ -88,6 +104,11 @@ The MinIO image swap of the same day (the images are built from source, ADR-026)
 objects and 482 441 040 bytes before and after (`mc du --json`), `mc admin info` version
 2025-09-07T16:13:09Z before and after, `make verify-fast` `verify ok`
 ([W6-T00 result](planning/14-closeout-spec.md)).
+
+The orphans dry run of `silver.orders` on 2026-10-30 17:48 UTC found 0 candidates while files of
+`orders_per_minute` (its location starts with the same string, `silver/orders`) were older than the
+7-day cutoff: the procedure does not take the other table's files for orphans
+([OPERATIONS, Orphans next to orders_per_minute](../OPERATIONS.md#orphans-next-to-orders_per_minute-2026-10-30)).
 
 ## Alerts and time to fire
 
@@ -190,8 +211,6 @@ not a person with an admin login, a shell or network access.
 ## Not proven yet
 
 - `rewrite-position-deletes silver.orders` did not run live; the scheduled run skipped it.
-- `remove_orphan_files` on `silver.orders` and the prefix of `silver/orders_per_minute-*`: check
-  after 2026-10-30 17:45 UTC with the dry run in OPERATIONS, "Not proven yet".
 - `iceberg_orphans` stays paused; running it weekly is the owner's decision.
 - Scenario 8 live against `CdcStalledSourceWrites` (it is shorter than the alert window) and
   `SparkRestartLoop` as a live firing.

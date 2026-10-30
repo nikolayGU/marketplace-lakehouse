@@ -1,0 +1,911 @@
+diff --git a/.claude/agents/reviewer.md b/.claude/agents/reviewer.md
+index 61d721b..722d18c 100644
+--- a/.claude/agents/reviewer.md
++++ b/.claude/agents/reviewer.md
+@@ -51,7 +51,10 @@ color: red
+ Вердикт «вернуть», если открыто хоть одно высокое замечание; «принять с замечаниями» только со
+ средними и низкими. Предмет называет бриф: `код` (diff для коммита), `план` или `документ`. Строки
+ `Вердикт:`, `Предмет:` и `Дерево:` в отчёте по одной, без эха шаблона: по ним хук `review_stamp.py`
+-ведёт отметку гейта коммита. «Принять» по коду открывает коммит этого дерева; «вернуть», отчёт без
++ведёт отметку гейта коммита. В строке `Вердикт:` только слова вердикта и, если нужно, счёт в скобках
++(`принять с замечаниями (2 средних)`); ремарку («не блокируют») пиши следующей строкой: слова «не»,
++«нет», «нельзя», «верн…», «отклон…», «отказ…» в строке вердикта хук читает как отмену и отзывает
++отметку. «Принять» по коду открывает коммит этого дерева; «вернуть», отчёт без
+ предмета или дерева, два вердикта её отзывают; отчёт по плану или документу её не трогает. Перед
+ отчётом сними дерево ещё раз; не совпало с первым: напиши это в отчёте, вердикт по изменившемуся
+ коду хук не запишет.
+diff --git a/.claude/hooks/guard.py b/.claude/hooks/guard.py
+index 01bd4d0..b5b685f 100644
+--- a/.claude/hooks/guard.py
++++ b/.claude/hooks/guard.py
+@@ -598,9 +598,8 @@ def commit_gap(low: str) -> list[str]:
+     current = tree_hash(ROOT)
+
+     def covers(stamp: Stamp | None) -> bool:
+-        # The commit gate is more lenient than stop_gate.py, which wants a verify stamp that is
+-        # exactly fresh whenever code changed: here a stamp also covers a tree that differs from
+-        # the stamped one only in Markdown and docs/.
++        # The same rule as stop_gate.py: a stamp covers the tree it was written on and any tree
++        # that differs from it only in Markdown and docs/.
+         if stamp is None:
+             return False
+         try:
+diff --git a/.claude/hooks/session_context.py b/.claude/hooks/session_context.py
+index 0edb5d1..387a79d 100644
+--- a/.claude/hooks/session_context.py
++++ b/.claude/hooks/session_context.py
+@@ -14,7 +14,10 @@ ROOT = Path(os.environ.get("CLAUDE_PROJECT_DIR") or Path(__file__).resolve().par
+ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+ from scripts.agent_state import describe_stamp  # noqa: E402
+
+-COMPOSE_PROJECT = os.environ.get("COMPOSE_PROJECT_NAME") or "lakehouse"
++# The stack is found by the directory of its compose file, which docker compose writes into the
++# label of every container, not by the project name: the name may come from .env, which neither
++# this hook nor its environment reads. One filter only, as docker ANDs the label filters.
++STACK_LABEL = f"label=com.docker.compose.project.working_dir={ROOT / 'docker'}"
+ # Docker brings these back after a daemon restart, unless they were stopped by hand.
+ RESTARTED = ("unless-stopped", "always")
+
+@@ -38,6 +41,18 @@ def docker_lines(*args: str) -> list[str] | None:
+     return result.stdout.splitlines() if result.returncode == 0 else None
+
+
++def stack_missing() -> str | None:
++    """A line when no container carries the label of this checkout's compose directory while
++    other containers exist: a stack started from another directory, or a path that docker wrote
++    another way, would otherwise read as a stack with nothing stopped."""
++    ours = docker_lines("ps", "-a", "--filter", STACK_LABEL, "--format", "{{.ID}}")
++    if ours is None or ours:
++        return None
++    if not docker_lines("ps", "-a", "--format", "{{.ID}}"):
++        return None
++    return f"no containers of the stack at {ROOT / 'docker'} (other containers exist)"
++
++
+ def stopped_containers() -> list[str]:
+     """One line per stopped container of the stack that a restart policy should have kept up
+     (27.10 and 30.10: prometheus stayed in Exited (255) after a Docker restart and nobody saw
+@@ -46,7 +61,7 @@ def stopped_containers() -> list[str]:
+         "ps",
+         "-a",
+         "--filter",
+-        f"label=com.docker.compose.project={COMPOSE_PROJECT}",
++        STACK_LABEL,
+         "--filter",
+         "status=exited",
+         "--filter",
+@@ -118,13 +133,16 @@ def containers_section() -> str:
+     if running.startswith("unavailable"):  # no point in asking a docker that does not answer
+         return running
+     try:
++        missing = stack_missing()
+         stopped = stopped_containers()
+     except Exception as error:  # a surprise from docker must not block the session start
++        missing = None
+         stopped = [f"stopped containers unreadable ({error.__class__.__name__})"]
++    section = running + (f"\n\n{missing}" if missing else "")
+     if not stopped:
+-        return running
++        return section
+     return (
+-        running + "\n\nNot running, restart policy unless-stopped or always:\n" + "\n".join(stopped)
++        section + "\n\nNot running, restart policy unless-stopped or always:\n" + "\n".join(stopped)
+     )
+
+
+diff --git a/.claude/hooks/stop_gate.py b/.claude/hooks/stop_gate.py
+index 7f99032..e0b75e8 100644
+--- a/.claude/hooks/stop_gate.py
++++ b/.claude/hooks/stop_gate.py
+@@ -1,28 +1,55 @@
+ #!/usr/bin/env python3
+ """Stop hook: a turn that changed code ends only after `make verify-fast` or `make verify` passed
+-on the current working tree (.verify-stamp). Markdown and docs/ changes need no check. Blocks once
+-per stop: when Claude Code is already continuing because of this hook, it lets the turn end, so a
+-stack that is down cannot loop the session."""
++on this code (.verify-stamp). The stamp counts when it is exactly fresh for the working tree or
++when the tree differs from the stamped one only in Markdown and docs/, the rule of the commit
++gate in guard.py: a report written after the verify does not ask for another one, an edit of code
++after it does. Markdown and docs/ changes alone need no check. Blocks once per stop: when Claude
++Code is already continuing because of this hook, it lets the turn end, so a stack that is down
++cannot loop the session."""
+
+ import json
+ import os
++import subprocess
+ import sys
+ from pathlib import Path
+
+ ROOT = Path(os.environ.get("CLAUDE_PROJECT_DIR") or Path(__file__).resolve().parents[2])
+ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+-from scripts.agent_state import code_changes, read_stamp  # noqa: E402
++from scripts.agent_state import (  # noqa: E402
++    code_changes,
++    code_changes_since,
++    read_stamp,
++    tree_hash,
++)
++
++
++def unverified_code() -> list[str]:
++    """The code paths that no verify stamp covers: every changed path when there is no stamp or
++    its tree is gone from the object store, else those that differ from the stamped tree."""
++    changed = code_changes(ROOT)
++    if not changed:
++        return []
++    current = tree_hash(ROOT)
++    stamp = read_stamp(ROOT, "verify", current)
++    if stamp is None:
++        return changed
++    if stamp.fresh:
++        return []
++    try:
++        return code_changes_since(ROOT, stamp, current)
++    except subprocess.CalledProcessError:  # the stamped tree is gone, so the stamp covers nothing
++        return changed
++
+
+ event = json.load(sys.stdin)
+ if event.get("stop_hook_active"):
+     sys.exit(0)
+ try:
+-    changed = code_changes(ROOT)
+-    stamp = read_stamp(ROOT) if changed else None
++    changed = unverified_code()
+ except Exception as error:  # a broken git state must not trap the session
+     print(f"stop_gate.py could not read the repo state: {error}", file=sys.stderr)
+     sys.exit(0)
+-if not changed or (stamp is not None and stamp.fresh):
++if not changed:
+     sys.exit(0)
+
+ shown = ", ".join(changed[:5]) + (f" and {len(changed) - 5} more" if len(changed) > 5 else "")
+diff --git a/AGENTS.md b/AGENTS.md
+index 890be7a..b141b71 100644
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -44,8 +44,8 @@ Olist), Debezium, Kafka, Spark bronze и silver (`MERGE`), Iceberg в Lakekeeper
+   обходить его запрещено (`13-harness.md`, раздел 2).
+ - `review_stamp.py`: по отчёту `reviewer` (строки `Вердикт:`, `Предмет:`, `Дерево:`) пишет или
+   отзывает `.review-stamp`.
+-- `stop_gate.py`: один раз останавливает конец хода с изменённым кодом, если нет свежего
+-  `verify-fast` или `verify`.
++- `stop_gate.py`: один раз останавливает конец хода с изменённым кодом, если нет отметки
++  `verify-fast` или `verify`; отметки хватает, если с её дерева менялись только Markdown и `docs/`.
+ - `session_context.py`: на старте сессии подгружает git, отметку verify, HANDOFF, NEXT_SESSION.
+ - `guard.py` читает текст команды: правку, в тексте которой есть такие слова, делать через Edit.
+ - Правки `.claude/hooks/` и `.claude/settings.json` агент готовит в копии в scratchpad, владелец
+diff --git a/scripts/agent_state.py b/scripts/agent_state.py
+index f45b943..f845380 100644
+--- a/scripts/agent_state.py
++++ b/scripts/agent_state.py
+@@ -163,13 +163,20 @@ def _is_code(path: str) -> bool:
+
+ def code_changes(root: Path) -> list[str]:
+     """Changed or untracked paths other than Markdown and `docs/`: what a check must cover."""
+-    lines = _git(root, "status", "--porcelain", "--untracked-files=all").decode().splitlines()
+-    paths = [line[3:].split(" -> ")[-1] for line in lines]
++    # --no-renames: a staged `git mv` is listed as `old -> new`, and only the new name was read.
++    lines = (
++        _git(root, "status", "--porcelain", "--no-renames", "--untracked-files=all")
++        .decode()
++        .splitlines()
++    )
++    paths = [line[3:] for line in lines]
+     return sorted(p for p in paths if _is_code(p))
+
+
+ def _code_diff(root: Path, old: str, new: str) -> list[str]:
+-    names = _git(root, "diff", "--name-only", old, new).decode().splitlines()
++    # Without --no-renames a moved file is listed by its new name only, and code moved to docs/ or
++    # renamed to .md would look like a Markdown change.
++    names = _git(root, "diff", "--name-only", "--no-renames", old, new).decode().splitlines()
+     return sorted(p for p in names if _is_code(p))
+
+
+diff --git a/scripts/report.sh b/scripts/report.sh
+index 906e3f5..c32ccff 100644
+--- a/scripts/report.sh
++++ b/scripts/report.sh
+@@ -19,18 +19,21 @@ docker ps --format '{{.Names}} {{.Status}}' 2>/dev/null || echo "docker unavaila
+ # REL-01: docker ps does not show a container that is down. After `docker kill` or `docker stop`
+ # restart: unless-stopped leaves it down, and nothing else raises it. One-shot jobs (restart "no")
+ # are meant to exit and are not listed. Only name, policy, state and exit code are read, no Env.
+-# The project is COMPOSE_PROJECT_NAME of this shell, as `docker compose` reads it, else lakehouse.
++# The stack is found by the directory of its compose file: docker compose labels every container
++# with com.docker.compose.project.working_dir, which holds whatever COMPOSE_PROJECT_NAME is. The
++# name may come from .env, which this shell does not read, so a lookup by name would miss the stack.
++# One filter only: docker ANDs label filters, so a second spelling of the path would match nothing.
+ stopped_containers() {
+-  local project="${COMPOSE_PROJECT_NAME:-lakehouse}"
+-  local label="label=com.docker.compose.project=$project"
++  local stack="$root/docker"
++  local label="label=com.docker.compose.project.working_dir=$stack"
+   local format='{{.Name}} {{.HostConfig.RestartPolicy.Name}}'
+   format+=' {{.State.Status}} {{.State.ExitCode}}'
+   local ids_text info="" name policy state code down=0
+   local -a ids
+   ids_text="$(docker ps -aq --filter "$label" 2>/dev/null)" || return 1
+-  echo "project: $project"
++  echo "stack: $stack"
+   if [ -z "$ids_text" ]; then
+-    echo "no containers of project $project"
++    echo "no containers of the stack at $stack"
+     return 0
+   fi
+   mapfile -t ids <<<"$ids_text"
+diff --git a/tests/unit/test_agent_hooks.py b/tests/unit/test_agent_hooks.py
+index 36e99b7..734bcc1 100644
+--- a/tests/unit/test_agent_hooks.py
++++ b/tests/unit/test_agent_hooks.py
+@@ -3,6 +3,7 @@ import os
+ import shutil
+ import subprocess
+ import sys
++from collections.abc import Callable
+ from pathlib import Path
+ from typing import Any
+
+@@ -479,6 +480,125 @@ def test_guard_lets_a_command_that_shows_no_secret_pass(command: str) -> None:
+     assert decision(bash(command)) == "allow"
+
+
++# B11 was rolled back: the guard pairs inline code with .env over the whole command, so a
++# mention of .env in another command still opens the window (an accepted false positive). A
++# pairing per command missed the forms below, each of which reads .env and must ask.
++@pytest.mark.parametrize(
++    "command",
++    [
++        # The `;` inside the quotes of the code does not split the command.
++        "python3 -c \"import os; print(open('.env').read())\"",
++        "python3 -c 'import os; print(open(\".env\").read())' && echo done",
++        "echo start; python3 -c \"import os; print(open('.env').read())\"; echo done",
++        "python3 -c 'print(1)'; python3 -c \"import os; print(open('.env').read())\"",
++        "python3 -c 'print(1)'\npython3 -c \"import os; print(open('.env').read())\"",
++        "python3 -c 'print(1)' | python3 -c \"import os; print(open('.env').read())\"",
++        "python3 -c 'a=1' && node -e \"require('fs').readFileSync('.env')\" || true",
++        "perl -e 'open(F, \".env\"); print <F>' && echo done",
++        "env X=1 python3 -c \"import os; print(open('.env').read())\"",
++        # A `$(...)`, a backtick pair or `&&` inside the code, or the code inside a substitution.
++        "python3 -c \"x = '$(date)'; print(open('.env').read())\"",
++        "python3 -c \"print(1 and 2 or 3 | 4); print(open('.env').read())\"",
++        "echo $(python3 -c \"print(open('.env').read())\")",
++        "echo `python3 -c \"print(open('.env').read())\"`",
++        "x=$(python3 -c \"import os; print(open('.env').read())\"); echo done",
++        # A here-document or a here-string: the code is not among the words of the interpreter.
++        "python3 - <<'EOF'\nimport os; print(open('.env').read())\nEOF",
++        "python3 <<EOF\nprint(open('.env').read())\nEOF\necho done",
++        "git status; python3 - <<'EOF'\nprint(open('.env').read())\nEOF",
++        "python3 - <<-EOF\n\tprint(open('.env').read())\n\tEOF",
++        "python3 - <<< \"print(open('.env').read())\"",
++        # Code piped to the interpreter, or a file name handed to it by xargs, comes from an
++        # earlier command of the line.
++        "echo \"print(open('.env').read())\" | python3 -",
++        "printf 'print(open(\".env\").read())' | python3 - && echo done",
++        "echo .env | xargs python3 -c 'import sys; print(open(sys.argv[1]).read())'",
++        # Quotes that do not balance: the segments are unknown, the whole line counts.
++        "echo done; python3 -c \"print(open('.env').read())",
++        # The name is in a variable, an `export` or a `for`, or the code runs in another shell.
++        "f=.env; python3 -c \"print(open('$f').read())\"",
++        "F=.env && python3 -c \"print(open('$F').read())\"",
++        "export F=.env; python3 -c \"import os; print(open(os.environ['F']).read())\"",
++        "export F=.env\npython3 -c \"import os; print(open(os.environ['F']).read())\"",
++        "for f in .env; do python3 -c \"print(open('$f').read())\"; done",
++        'bash -c "python3 -c \\"print(open(\'.env\').read())\\""',
++        'sh -c \'f=.env; python3 -c "print(open(\\"$f\\").read())"\'',
++        "eval 'f=.env'; python3 -c \"print(open('$f').read())\"",
++        'eval "python3 -c \\"print(open(\'.env\').read())\\""',
++        "env F=.env python3 -c \"import os; print(open(os.environ['F']).read())\"",
++        "F=.env python3 -c \"import os; print(open(os.environ['F']).read())\"",
++        "f=.env; python3 <<< \"print(open('$f').read())\"",
++        ("cd /work/lakehouse; F=.env; uv run python -c \"import os; print(open('$F').read())\""),
++        "ENV_FILE=$(pwd)/.env && python3 -c \"print(open('$ENV_FILE').read())\"",
++        "python3 -c \"print(open('$HOME/marketplace-lakehouse/'+'.env').read())\"",
++        # A `$(...)` or a backtick pair before the path, a process substitution.
++        'python3 -c "import sys; print(open(sys.argv[1]).read())" $(pwd)/.env',
++        "python3 -c 'import sys; print(open(sys.argv[1]).read())' `pwd`/.env",
++        (
++            "python3 -c 'import sys; print(open(sys.argv[1]).read())' "
++            "$(git rev-parse --show-toplevel)/.env"
++        ),
++        "python3 -c 'import sys; print(open(sys.argv[1]).read())' \"$(pwd)/.env\"",
++        "python3 -c 'import sys; print(open(sys.argv[1]).read())' $(echo .env)",
++        "python3 -c 'import sys; print(open(sys.argv[1]).read())' `echo .env`",
++        "python3 -c 'import sys; print(open(sys.argv[1]).read())' <(cat .env)",
++        "python3 -c 'import sys; print(open(sys.argv[1]).read())' <(< .env)",
++        "python3 -c 'import sys; print(sys.stdin.read())' < <(tr a a < .env)",
++        (
++            'uv run python -c "import sys; '
++            'print(open(sys.argv[1]).read())" \\\n    $(git rev-parse '
++            "--show-toplevel)/.env"
++        ),
++        # The name is on the stdin of the code, from an earlier command of the pipeline.
++        ('echo .env | python3 -c "import sys; print(open(sys.stdin.read().strip()).read())"'),
++        "printf .env | python3 -c 'import sys; print(open(input()).read())'",
++        "dd if=.env 2>/dev/null | python3 -c 'import sys; print(sys.stdin.read())'",
++        "base64 .env | python3 -c 'import sys; print(sys.stdin.read())'",
++        (
++            'git check-ignore .env | python3 -c "import sys; '
++            'print(open(sys.stdin.read().strip()).read())"'
++        ),
++        (
++            'ls -a | grep -x .env | python3 -c "import sys; '
++            'print(open(sys.stdin.read().strip()).read())"'
++        ),
++        # A backslash and a newline inside the command, or the flag glued to the code.
++        "echo hi\\\n; python3 -c \"print(open('.env').read())\"",
++        "python3 -c \\\n\"print(open('.env').read())\"",
++        "python3 -c 'import sys; print(open(sys.argv[1]).read())' \\\n  .env",
++        "python3 -c \\\n  'import sys; print(open(sys.argv[1]).read())' .env",
++        "python3 -c\"print(open('.env').read())\"",
++        "python3 -c'print(open(\".env\").read())'",
++        "node -e\"console.log(require('fs').readFileSync('.env','utf8'))\"",
++        "python3 -c \"import os\nprint(open('.env').read())\"",
++        # Another command before, after or around the code, a here-document, quoting forms.
++        "python3 -c \"print(open('.env').read())\" &",
++        "sleep 1 & python3 -c \"print(open('.env').read())\"",
++        "cat <<'A'\nhello\nA\npython3 - <<'B'\nprint(open('.env').read())\nB",
++        "python3 - <<'A'\nprint(1)\nA\ncat <<'B'\n.env\nB",
++        "python3 /dev/stdin <<'EOF'\nprint(open('.env').read())\nEOF",
++        "python3 -c \"$(cat <<'EOF'\nprint(open('.env').read())\nEOF\n)\"",
++        "python3 -c 'print(open(\".env\").read())'",
++        "python3 -c $'print(open(\".env\").read())'",
++        "uv run python - <<'EOF'\nprint(open('.env').read())\nEOF",
++        "ruby -e 'puts File.read(\".env\")'",
++        # The name as an argument of the code, in a group, a condition, `time`, `find`, `xargs`.
++        "python3 -c 'import sys; print(open(sys.argv[1]).read())' .env",
++        "python3 -c 'import sys; print(open(sys.argv[1]).read())' ./.env",
++        "{ python3 -c 'import sys; print(open(sys.argv[1]).read())' .env; }",
++        ("if true; then python3 -c 'import sys; print(open(sys.argv[1]).read())' .env; fi"),
++        "time python3 -c 'import sys; print(open(sys.argv[1]).read())' .env",
++        "xargs -a <(echo .env) python3 -c 'import sys; print(open(sys.argv[1]).read())'",
++        ("find . -name .env -exec python3 -c 'import sys; print(open(sys.argv[1]).read())' {} \\;"),
++    ],
++)
++def test_inline_code_that_names_env_is_still_asked(command: str) -> None:
++    result = bash(command)
++
++    assert decision(result) == "ask"
++    assert "secret" in result.stdout
++
++
+ def test_a_secret_read_is_asked_before_the_early_exit_of_read_only_commands() -> None:
+     # cat is a reader and passes on its own words; .env is what makes the difference.
+     assert decision(bash("cat Makefile")) == "allow"
+@@ -677,6 +797,128 @@ def test_stop_gate_lets_the_turn_end(repo: Path) -> None:
+     assert hook("stop_gate.py", {}, repo).stdout == ""
+
+
++@pytest.mark.parametrize("mode", ["fast", "full"])
++def test_stop_gate_lets_markdown_edited_after_a_verify_end_the_turn(repo: Path, mode: str) -> None:
++    # B12 (RT-S3, AI-05): code is verified, then only the notes change. The turn must end without
++    # another verify, as it does for the commit gate.
++    (repo / "job.py").write_text("x = 2\n")
++    write_stamp(repo, mode)
++    (repo / "NOTES.md").write_text("report\n")
++    (repo / "docs").mkdir()
++    (repo / "docs" / "plan.txt").write_text("plan\n")
++
++    assert hook("stop_gate.py", {}, repo).stdout == ""
++
++
++@pytest.mark.parametrize(
++    ("edit", "named"),
++    [
++        (lambda root: (root / "job.py").write_text("x = 3\n"), "job.py"),
++        (lambda root: (root / "extra.py").write_text("y = 1\n"), "extra.py"),
++        (lambda root: (root / "job.py").unlink(), "job.py"),
++    ],
++    ids=["code edited", "new code file", "code removed"],
++)
++def test_stop_gate_blocks_code_changed_after_a_verify(
++    repo: Path, edit: Callable[[Path], object], named: str
++) -> None:
++    (repo / "job.py").write_text("x = 2\n")
++    write_stamp(repo, "fast")
++    (repo / "NOTES.md").write_text("report\n")
++    edit(repo)
++
++    result = hook("stop_gate.py", {}, repo)
++
++    assert json.loads(result.stdout)["decision"] == "block"
++    assert named in json.loads(result.stdout)["reason"]
++
++
++MOVED_OUT = pytest.mark.parametrize(
++    "target", ["docs/job.txt", "job.md"], ids=["code moved to docs", "code renamed to md"]
++)
++
++
++def move_code_out(repo: Path, target: str) -> None:
++    """`job.py` leaves the code paths with its content: git shows it as a rename."""
++    (repo / target).parent.mkdir(exist_ok=True)
++    (repo / "job.py").rename(repo / target)
++
++
++@MOVED_OUT
++def test_stop_gate_blocks_code_moved_out_of_the_code_paths_after_a_verify(
++    repo: Path, target: str
++) -> None:
++    # B12 review: git lists a rename by its new name only, a Markdown or docs/ path.
++    (repo / "job.py").write_text("x = 2\n")
++    write_stamp(repo, "fast")
++    move_code_out(repo, target)
++
++    result = hook("stop_gate.py", {}, repo)
++
++    assert json.loads(result.stdout)["decision"] == "block"
++    assert "job.py" in json.loads(result.stdout)["reason"]
++
++
++@MOVED_OUT
++def test_stop_gate_blocks_a_staged_move_of_code_out_of_the_code_paths(
++    repo: Path, target: str
++) -> None:
++    (repo / target).parent.mkdir(exist_ok=True)
++    git(repo, "mv", "job.py", target)
++
++    result = hook("stop_gate.py", {}, repo)
++
++    assert json.loads(result.stdout)["decision"] == "block"
++    assert "job.py" in json.loads(result.stdout)["reason"]
++
++
++@MOVED_OUT
++def test_commit_of_a_staged_move_of_code_out_of_the_code_paths_needs_check_and_review(
++    repo: Path, target: str
++) -> None:
++    (repo / target).parent.mkdir(exist_ok=True)
++    git(repo, "mv", "job.py", target)
++    write_stamp(repo, "full")
++
++    result = bash("git commit -m move", repo)
++
++    assert decision(result) == "deny"
++    assert "git commit without make check and a reviewer verdict" in result.stderr
++
++
++@MOVED_OUT
++def test_commit_is_refused_when_code_moved_out_of_the_code_paths_after_the_stamps(
++    repo: Path, target: str
++) -> None:
++    (repo / "job.py").write_text("x = 2\n")
++    gate_stamps(repo)
++    move_code_out(repo, target)
++
++    result = bash(COMMIT, repo)
++
++    assert decision(result) == "deny"
++    assert "a full make verify, make check and a reviewer verdict" in result.stderr
++
++
++def test_stop_gate_names_only_the_code_changed_after_the_verify(repo: Path) -> None:
++    (repo / "job.py").write_text("x = 2\n")
++    write_stamp(repo, "fast")
++    (repo / "extra.py").write_text("y = 1\n")
++
++    reason = json.loads(hook("stop_gate.py", {}, repo).stdout)["reason"]
++
++    assert "extra.py" in reason and "job.py" not in reason
++
++
++def test_stop_gate_blocks_a_stamp_of_a_tree_that_is_gone(repo: Path) -> None:
++    (repo / "job.py").write_text("x = 2\n")
++    (repo / ".verify-stamp").write_text(f"fast 2026-10-30T10:00:00Z {'0' * 40}\n")
++
++    result = hook("stop_gate.py", {}, repo)
++
++    assert json.loads(result.stdout)["decision"] == "block"
++
++
+ def test_session_context_reports_state_goal_and_stamp(repo: Path) -> None:
+     (repo / "docs").mkdir()
+     (repo / "docs" / "HANDOFF.md").write_text(
+@@ -703,18 +945,38 @@ def test_session_context_survives_missing_docs(repo: Path) -> None:
+
+
+ def fake_docker(
+-    bin_dir: Path, monkeypatch: pytest.MonkeyPatch, *, running: str, stopped: str, rows: str
++    bin_dir: Path,
++    monkeypatch: pytest.MonkeyPatch,
++    *,
++    running: str,
++    stopped: str,
++    rows: str,
++    stack: str | None = None,
++    others: str = "",
+ ) -> None:
+-    """A `docker` first on PATH: `ps` lists the running containers, `ps -a` the ids of the stopped
+-    ones and `inspect` one row per id (name, restart policy, state, exit code). Every call is
+-    appended to calls.txt next to it."""
++    """A `docker` first on PATH: `ps` lists the running containers, `ps -a` with a status filter
++    the ids of the stopped ones, with the label filter alone the ids of the stack (`stack`, the
++    stopped ones by default) and with no filter the ids of every container (`others`), and
++    `inspect` one row per id (name, restart policy, state, exit code). Every call is appended to
++    calls.txt next to it."""
+     bin_dir.mkdir()
+-    for name, text in (("ps.txt", running), ("ps_all.txt", stopped), ("inspect.txt", rows)):
++    files = (
++        ("ps.txt", running),
++        ("ps_all.txt", stopped),
++        ("ps_stack.txt", stopped if stack is None else stack),
++        ("ps_any.txt", others),
++        ("inspect.txt", rows),
++    )
++    for name, text in files:
+         (bin_dir / name).write_text(text)
+     script = bin_dir / "docker"
+     script.write_text(
+         '#!/bin/sh\nd=$(dirname "$0")\necho "$*" >> "$d/calls.txt"\ncase "$1" in\n'
+-        '  ps) case " $* " in *" -a "*) cat "$d/ps_all.txt";; *) cat "$d/ps.txt";; esac;;\n'
++        '  ps) case " $* " in\n'
++        '    *" -a "*status=*) cat "$d/ps_all.txt";;\n'
++        '    *" -a "*label=*) cat "$d/ps_stack.txt";;\n'
++        '    *" -a "*) cat "$d/ps_any.txt";;\n'
++        '    *) cat "$d/ps.txt";;\n  esac;;\n'
+         '  inspect) cat "$d/inspect.txt";;\n  *) exit 1;;\nesac\n'
+     )
+     script.chmod(0o755)
+@@ -773,36 +1035,88 @@ def test_session_context_has_no_stopped_line_when_everything_runs(
+     assert "docker start" not in context and "Not running" not in context
+
+
+-def test_session_context_asks_for_the_compose_project_of_the_environment(
+-    repo: Path, tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
++@pytest.mark.parametrize("project", [None, "otherstack", ""])
++def test_session_context_finds_the_stack_by_its_compose_directory_not_a_project_name(
++    repo: Path,
++    tmp_path_factory: pytest.TempPathFactory,
++    monkeypatch: pytest.MonkeyPatch,
++    project: str | None,
+ ) -> None:
+-    monkeypatch.delenv("COMPOSE_PROJECT_NAME", raising=False)
+-    default = tmp_path_factory.mktemp("default") / "bin"
+-    fake_docker(default, monkeypatch, running="", stopped="", rows="")
+-    session_context(repo)
+-    assert "label=com.docker.compose.project=lakehouse " in (default / "calls.txt").read_text()
+-
+-    monkeypatch.setenv("COMPOSE_PROJECT_NAME", "otherstack")
+-    named = tmp_path_factory.mktemp("named") / "bin"
++    # B11: the project name may come from .env, which the hook does not read and the hook's own
++    # environment does not hold. The working_dir label of the containers does not depend on it.
++    if project is None:
++        monkeypatch.delenv("COMPOSE_PROJECT_NAME", raising=False)
++    else:
++        monkeypatch.setenv("COMPOSE_PROJECT_NAME", project)
++    bin_dir = tmp_path_factory.mktemp("stack") / "bin"
+     fake_docker(
+-        named,
++        bin_dir,
+         monkeypatch,
+         running="",
+         stopped="aaa\n",
+-        rows="/otherstack-prometheus-1 unless-stopped exited 255\n",
++        rows="/renamed-prometheus-1 unless-stopped exited 255\n",
++    )
++
++    context = session_context(repo)
++
++    listings = [
++        call
++        for call in (bin_dir / "calls.txt").read_text().splitlines()
++        if call.startswith("ps -a") and "--filter" in call
++    ]
++    label = f"label=com.docker.compose.project.working_dir={repo}/docker"
++    assert len(listings) == 2
++    for listing in listings:
++        assert listing.split().count(label) == 1
++        assert "label=com.docker.compose.project=" not in listing
++    assert "docker start renamed-prometheus-1 only with the owner's ok" in context
++
++
++def test_session_context_says_when_the_stack_directory_matches_no_container(
++    repo: Path, tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    # B11 review: a stack started from another directory, or a path that docker wrote another way,
++    # must not read as a stack with nothing stopped.
++    fake_docker(
++        tmp_path_factory.mktemp("elsewhere") / "bin",
++        monkeypatch,
++        running="otherstack-kafka-1 Up 2 hours (healthy)\n",
++        stopped="",
++        rows="",
++        stack="",
++        others="aaa\nbbb\n",
+     )
++
+     context = session_context(repo)
+
+-    calls = (named / "calls.txt").read_text()
+-    assert "label=com.docker.compose.project=otherstack " in calls
+-    assert "project=lakehouse" not in calls
+-    assert "docker start otherstack-prometheus-1 only with the owner's ok" in context
++    assert f"no containers of the stack at {repo}/docker" in context
++    assert "otherstack-kafka-1 Up 2 hours (healthy)" in context
++    assert "docker start" not in context
++
++
++@pytest.mark.parametrize(
++    ("stack", "others"),
++    [("aaa\n", "aaa\nbbb\n"), ("", "")],
++    ids=["the stack has containers", "docker has no containers at all"],
++)
++def test_session_context_has_no_missing_stack_line_otherwise(
++    repo: Path,
++    tmp_path_factory: pytest.TempPathFactory,
++    monkeypatch: pytest.MonkeyPatch,
++    stack: str,
++    others: str,
++) -> None:
++    fake_docker(
++        tmp_path_factory.mktemp("stack") / "bin",
++        monkeypatch,
++        running="lakehouse-kafka-1 Up 2 hours (healthy)\n",
++        stopped="",
++        rows="",
++        stack=stack,
++        others=others,
++    )
+
+-    monkeypatch.setenv("COMPOSE_PROJECT_NAME", "")
+-    empty = tmp_path_factory.mktemp("empty") / "bin"
+-    fake_docker(empty, monkeypatch, running="", stopped="", rows="")
+-    session_context(repo)
+-    assert "label=com.docker.compose.project=lakehouse " in (empty / "calls.txt").read_text()
++    assert "no containers of the stack" not in session_context(repo)
+
+
+ def test_session_context_inspects_nothing_when_the_project_has_no_containers(
+diff --git a/tests/unit/test_agent_state.py b/tests/unit/test_agent_state.py
+index 62c18ca..4c44785 100644
+--- a/tests/unit/test_agent_state.py
++++ b/tests/unit/test_agent_state.py
+@@ -137,6 +137,52 @@ def test_changes_since_the_stamp_are_listed_by_path(repo: Path) -> None:
+     assert code_changes_since(repo, stamp) == ["job.py"]
+
+
++def move_code_out(repo: Path, target: str) -> None:
++    """`job.py` leaves the code paths with its content: git shows it as a rename."""
++    (repo / target).parent.mkdir(exist_ok=True)
++    (repo / "job.py").rename(repo / target)
++
++
++@pytest.mark.parametrize("target", ["docs/job.txt", "job.md"])
++def test_code_that_is_moved_out_of_the_code_paths_still_counts_as_changed(
++    repo: Path, target: str
++) -> None:
++    # B12 review: a rename shows only its new name, a Markdown or docs/ path, so the code that
++    # left `job.py` was not listed and a stamp seemed to cover the tree.
++    (repo / "job.py").write_text("x = 2\n")
++    write_stamp(repo, "fast")
++    stamp = read_stamp(repo)
++    assert stamp is not None
++    move_code_out(repo, target)
++
++    assert code_changes_since(repo, stamp) == ["job.py"]
++
++
++@pytest.mark.parametrize("target", ["docs/job.txt", "job.md"])
++def test_a_staged_move_of_code_out_of_the_code_paths_is_a_code_change(
++    repo: Path, target: str
++) -> None:
++    # `git mv` stages a rename, and `git status` shows a staged rename by its new name only.
++    (repo / target).parent.mkdir(exist_ok=True)
++    git(repo, "mv", "job.py", target)
++
++    assert code_changes(repo) == ["job.py"]
++
++
++@pytest.mark.parametrize("target", ["docs/job.txt", "job.md"])
++def test_a_review_does_not_cover_code_that_was_moved_out_of_the_code_paths(
++    repo: Path, target: str
++) -> None:
++    (repo / "job.py").write_text("x = 2\n")
++    tree = tree_hash(repo)
++    move_code_out(repo, target)
++
++    message = record_review(repo, reviewer_report("принять", tree))
++
++    assert message.startswith("nothing recorded: code changed since tree")
++    assert not (repo / REVIEW_STAMP).exists()
++
++
+ WIDE_NOTES = "принять \t с   замечаниями"  # noqa: RUF001
+
+
+@@ -360,6 +406,59 @@ def test_record_review_never_accepts_a_verdict_that_words_after_it_take_back(rep
+     assert stamp is not None and stamp.mode not in ACCEPTED
+
+
++@pytest.mark.parametrize(
++    "line",
++    [
++        f"Вердикт: {WITH_NOTES} (не блокируют)",
++        f"**Вердикт:** {WITH_NOTES} (замечания не блокируют коммит)",
++        "Вердикт: принять (нет блокирующих, вернуть не нужно)",
++        f"Вердикт: {WITH_NOTES}, не блокируют",
++    ],
++)
++def test_a_remark_with_a_word_that_takes_back_on_the_verdict_line_revokes(
++    repo: Path, line: str
++) -> None:
++    # B11: the parser is not loosened, a closed refusal is safe. The reviewer role says where a
++    # remark goes instead (the test below and the role text).
++    tree = tree_hash(repo)
++    record_review(repo, reviewer_report("принять", tree))
++
++    message = record_review(repo, lines(line, "Предмет: код", f"Дерево: {tree}"))
++
++    assert_revoked(repo, message)
++
++
++@pytest.mark.parametrize("mode", ["принять", WITH_NOTES])
++def test_a_remark_on_the_line_after_the_verdict_does_not_take_it_back(
++    repo: Path, mode: str
++) -> None:
++    tree = tree_hash(repo)
++
++    message = record_review(
++        repo,
++        lines(
++            f"Вердикт: {mode}",
++            "Ремарка: замечания не блокируют коммит, вернуть код не нужно, нет причин для отказа",
++            "Предмет: код",
++            "Проверено и чисто: make test",
++            f"Дерево: {tree}",
++        ),
++    )
++
++    stamp = read_stamp(repo, "review")
++    assert stamp is not None
++    assert (stamp.mode, stamp.tree, stamp.fresh) == (VERDICTS[mode], tree, True)
++    assert "revoked" not in message
++
++
++def test_the_reviewer_role_keeps_remarks_off_the_verdict_line() -> None:
++    # The role wraps its lines at 100 columns, so a phrase may sit across a line break.
++    role = " ".join((REPO / ".claude" / "agents" / "reviewer.md").read_text().split())
++
++    assert "только слова вердикта" in role
++    assert "следующей строкой" in role
++
++
+ def test_record_review_revokes_on_two_different_verdicts(repo: Path) -> None:
+     tree = tree_hash(repo)
+     record_review(repo, reviewer_report("принять", tree))
+diff --git a/tests/unit/test_report.py b/tests/unit/test_report.py
+index 0305831..b6e3018 100644
+--- a/tests/unit/test_report.py
++++ b/tests/unit/test_report.py
+@@ -6,10 +6,13 @@ marked as stopped by hand, and nothing else raises it. The script runs here agai
+ """
+
+ import os
++import shutil
+ import stat
+ import subprocess
+ from pathlib import Path
+
++import pytest
++
+ REPO = Path(__file__).resolve().parents[2]
+ SCRIPT = REPO / "scripts" / "report.sh"
+ SECTION = "== stopped containers"
+@@ -20,7 +23,12 @@ echo "$*" >> "$FAKE_DOCKER_DIR/calls.log"
+ case "$1" in
+   ps)
+     case "$*" in
+-      *--filter*) cat "$FAKE_DOCKER_DIR/ids.txt" ;;
++      *--filter*)
++        # Only the stack of FAKE_DOCKER_WORKDIR answers, as its containers carry the label.
++        case " $* " in
++          *" label=com.docker.compose.project.working_dir=$FAKE_DOCKER_WORKDIR "*)
++            cat "$FAKE_DOCKER_DIR/ids.txt" ;;
++        esac ;;
+       *) echo "lakehouse-trino-1 Up 3 hours (healthy)" ;;
+     esac ;;
+   inspect) cat "$FAKE_DOCKER_DIR/inspect.txt" ;;
+@@ -37,11 +45,14 @@ def _run_report(
+     *,
+     ids: list[str] | None = None,
+     project: str | None = None,
++    script: Path = SCRIPT,
++    workdir: Path = REPO / "docker",
+ ) -> tuple[str, list[str]]:
+     """Return the report and the docker calls; inspect_lines None means docker fails.
+
+     ids are the container ids `docker ps` finds (five by default); project is the shell's
+-    COMPOSE_PROJECT_NAME, unset when None.
++    COMPOSE_PROJECT_NAME, unset when None; script is the copy of report.sh to run; workdir is the
++    compose directory the containers carry in their working_dir label.
+     """
+     bin_dir = tmp_path / "bin"
+     bin_dir.mkdir()
+@@ -59,9 +70,10 @@ def _run_report(
+         **({"COMPOSE_PROJECT_NAME": project} if project is not None else {}),
+         "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+         "FAKE_DOCKER_DIR": str(tmp_path),
++        "FAKE_DOCKER_WORKDIR": str(workdir),
+     }
+     result = subprocess.run(
+-        ["bash", str(SCRIPT)], capture_output=True, text=True, env=env, check=False
++        ["bash", str(script)], capture_output=True, text=True, env=env, check=False
+     )
+     assert result.returncode == 0, result.stderr
+     calls_log = tmp_path / "calls.log"
+@@ -92,7 +104,7 @@ def test_a_stopped_unless_stopped_container_is_listed_and_a_one_shot_job_is_not(
+
+     section = _section(report, SECTION)
+
+-    assert "project: lakehouse" in section
++    assert f"stack: {REPO}/docker" in section
+     assert "lakehouse-prometheus-1 exited" in section
+     assert "255" in section
+     assert "lakehouse-legacy-1 exited" in section
+@@ -116,28 +128,57 @@ def test_nothing_is_listed_when_every_restartable_container_runs(tmp_path: Path)
+
+
+ def test_no_containers_of_the_project_is_not_reported_as_all_running(tmp_path: Path) -> None:
+-    # An empty list (the stack is down, or the project is another one) must not read as healthy.
++    # An empty list (the stack is down, or it is another checkout's) must not read as healthy.
+     report, _ = _run_report(tmp_path, [], ids=[])
+
+     section = _section(report, SECTION)
+
+-    assert "no containers of project lakehouse" in section
++    assert f"no containers of the stack at {REPO}/docker" in section
+     assert "all restartable containers run" not in section
+
+
+-def test_the_project_comes_from_compose_project_name(tmp_path: Path) -> None:
++@pytest.mark.parametrize("project", [None, "lakehouse-fresh", ""])
++def test_the_stack_is_found_by_its_compose_directory_not_by_a_project_name(
++    tmp_path: Path, project: str | None
++) -> None:
++    # B11: .env may name the project (.env.example sets COMPOSE_PROJECT_NAME) and this shell never
++    # sees it, since .env is not read. The working_dir label does not depend on the name.
+     report, calls = _run_report(
+-        tmp_path,
+-        ["/lakehouse-fresh-prometheus-1 unless-stopped exited 255"],
+-        project="lakehouse-fresh",
++        tmp_path, ["/renamed-prometheus-1 unless-stopped exited 255"], project=project
+     )
+
+     section = _section(report, SECTION)
+
+-    assert "project: lakehouse-fresh" in section
+-    assert "lakehouse-fresh-prometheus-1 exited" in section
++    assert "renamed-prometheus-1 exited" in section
+     [listing] = [call for call in calls if call.startswith("ps") and "--filter" in call]
+-    assert "label=com.docker.compose.project=lakehouse-fresh" in listing.split()
++    label = f"label=com.docker.compose.project.working_dir={REPO}/docker"
++    assert listing.split().count(label) == 1
++    assert "label=com.docker.compose.project=" not in listing
++
++
++@pytest.mark.parametrize("answers_for", ["this checkout", "the repository of the tests"])
++def test_the_stack_is_the_one_of_the_checkout_the_script_runs_from(
++    tmp_path: Path, answers_for: str
++) -> None:
++    clone = tmp_path / "clone"
++    (clone / "scripts").mkdir(parents=True)
++    (clone / "docker").mkdir()
++    shutil.copy(SCRIPT, clone / "scripts" / "report.sh")
++    run = tmp_path / "run"
++    run.mkdir()
++    own = answers_for == "this checkout"
++
++    report, _ = _run_report(
++        run,
++        ["/lakehouse-fresh-prometheus-1 unless-stopped exited 255"],
++        script=clone / "scripts" / "report.sh",
++        workdir=clone / "docker" if own else REPO / "docker",
++    )
++
++    section = _section(report, SECTION)
++    assert f"stack: {clone}/docker" in section
++    assert ("lakehouse-fresh-prometheus-1 exited" in section) is own
++    assert (f"no containers of the stack at {clone}/docker" in section) is not own
+
+
+ def test_a_docker_that_fails_reads_unavailable_and_the_report_goes_on(tmp_path: Path) -> None:

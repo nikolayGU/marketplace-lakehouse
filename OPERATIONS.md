@@ -897,15 +897,20 @@ are in the list above.
 Rollback point. The owner released the JDBC rollback point on 2026-10-29 (W6-D16 in
 `docs/planning/14-closeout-spec.md`); the rows of `iceberg_catalog` were not deleted.
 
+### Orphans next to orders_per_minute, 2026-10-30
+
+The table location `s3a://lakehouse/warehouse/silver/orders` is a string prefix of
+`silver/orders_per_minute-01a169dd-...`, so a listing by prefix would see the files of the other
+table. `$C maintenance orphans silver.orders` (dry run) at 17:48 UTC, `older_than` 2026-10-23
+17:48:44: `{"candidates":0,"dry_run":true,"files":[],"files_truncated":false}`. The first snapshot
+of `orders_per_minute` (2026-10-23 17:45:11, `append`, 3 data files) is older than that and still
+live, so its files were old enough to show up: the procedure lists the table directory, not the
+string prefix.
+
 ### Not proven yet
 
 - `rewrite-position-deletes silver.orders` (ADR-025, failed on 2026-10-23) did not run live: the
   scheduled run of 2026-10-29 skipped `rewrite_position_deletes`.
-- Whether `remove_orphan_files` on `silver.orders` lists the prefix `silver/orders` and so also sees
-  the files of `silver/orders_per_minute-*` is not checked. Every file of `orders_per_minute` is
-  younger than 7 days today (its first snapshot is 2026-10-23 17:45), so the dry run could not show
-  it. Check after 2026-10-30 17:45 UTC: `$C maintenance orphans silver.orders` (dry run) must list
-  no path containing `orders_per_minute-`.
 - `iceberg_orphans` stays paused. Whether it runs weekly is the owner's decision.
 - 13 directories `gold/mart_daily_sales__dbt_tmp-*` are left outside every table location. The
   orphans procedure does not touch them.

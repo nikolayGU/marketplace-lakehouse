@@ -133,7 +133,8 @@ Components:
 | `iceberg_orphans` on its weekly schedule | planned | paused by decision: [not proven yet](docs/evidence.md#not-proven-yet) |
 | `rewrite-position-deletes` on `silver.orders` | planned | failed on 2026-10-23, not run live since: [not proven yet](docs/evidence.md#not-proven-yet) |
 | 24 hour unattended run | planned | card W6-T09, no result yet: [not proven yet](docs/evidence.md#not-proven-yet) |
-| Interview notes checked against the evidence, mock interview, learning gates | planned | [draft of 30 questions](docs/interview-notes.md) exists; [LEARNING.md](LEARNING.md) is empty |
+| Interview notes: 30 questions, each with a project example and a link | done | [interview notes](docs/interview-notes.md), every link and anchor opened by script, stale numbers corrected against OPERATIONS, the ADRs and [evidence](docs/evidence.md), 2026-10-30 |
+| Mock interview and learning gates | planned | [LEARNING.md](LEARNING.md) is empty |
 | Superset (optional) | planned | [ADR-014](DECISIONS.md) |
 
 Failure scenarios (`make chaos-<name>`, each ends in a check that fails on any duplicate, missing
