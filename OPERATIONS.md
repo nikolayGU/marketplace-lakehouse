@@ -505,13 +505,34 @@ inside the task (25 s through the Trino CLI), 0 differing, 19 `reconcile_rows` s
 key and its reason) is covered by unit tests, since a live difference would have to be written to
 the source, and from there it goes to silver.
 
-A red `dq_checks` means one of two things. `silver_keys_unique`: silver holds a primary key
+GMV against the source (audit B5, 2026-10-30; it replaces the part of W5-D9 that left the marts to
+the dbt tests alone): after the silver-gold pairs, `reconcile_values` compares GMV per purchase
+date in Postgres (`sum(price)` of `shop.order_items` joined to `shop.orders`, status not
+`canceled` or `unavailable`, the filter of `int_daily_sales`) with `gold.mart_daily_sales` (days
+with a live item), pair `source_gold`, table `mart_daily_sales_gmv`, exact decimal text. It runs
+only when the source pairs run (at rest, CDC not stalled) and only when the mart has caught up
+with `fct_orders` (`max(source_updated_at)` of the mart not older than `max(updated_at)` of
+`fct_orders`), since `dbt build` rebuilds `fct_orders` before the mart; otherwise the log says
+`mart_daily_sales has not caught up with fct_orders: GMV not compared`. The full recompute test
+compares the mart only with `int_daily_sales`, so a wrong filter in that model passes it; this
+comparison does not share the model's SQL. Measured 2026-10-30 by `select`: 596 days, fingerprint
+`0857d53200f24741049bbdf3c2d3520f` on both sides, totals 13 101 558.80 and 108 637 items; the same
+GMV computed with `canceled` left in gives another fingerprint (`ba89f32e...`), so such a change in
+the model turns the task red for every date dbt rebuilds after it.
+
+A red `dq_checks` task: `silver_keys_unique`: silver holds a primary key
 twice, which MERGE must never produce; read the last `silver_upsert` log and the quarantine.
 `silver_matches_postgres`: counts differ although bronze has been quiet for 5 minutes and silver
 merged its latest snapshot and CDC is not stalled (below), so a change never reached silver;
-`make verify` (with the scheduler stopped) shows the offsets and the counts. Differences with `at_rest=False` are normal during a
-replay burst. A stale `dbt source freshness` (exit code 1) is logged, not failed: no traffic is not
-a broken pipeline.
+`make verify` (with the scheduler stopped) shows the offsets and the counts. `reconcile_values`
+with `source_gold mart_daily_sales_gmv`: GMV of a purchase date in the mart differs from Postgres
+at rest; the log names the dates. A soft-deleted order leaves its old date stale (D18, the
+replayer does not delete orders; a seller moved to another state does not change GMV per day, only
+the full recompute test sees it). While neither `silver_upsert` nor `dbt_build` runs,
+`cd dbt && uv run dbt build --profiles-dir . --target dev --select mart_daily_sales --full-refresh`
+rebuilds the mart; a wrong filter in `int_daily_sales` needs a fix of the model.
+Differences with `at_rest=False` are normal during a replay burst. A stale `dbt source freshness`
+(exit code 1) is logged, not failed: no traffic is not a broken pipeline.
 
 Host sleep pauses the Docker VM. A task in flight at that moment fails on wake: Trino has
 abandoned its query (`ABANDONED_QUERY`), the scheduler fails task instances without a heartbeat,
@@ -557,13 +578,14 @@ stops instead of showing its last value for ever.
 
 | Series | Labels | Meaning |
 |---|---|---|
-| `lakehouse_dq_reconcile_rows` | `layer` (`source`, `silver`, `gold`), `table` | rows compared (19 series: 7 + 7 + 5) |
-| `lakehouse_dq_reconcile_values_differing` | `pair` (`source_silver`, `silver_gold`), `table` | keys on both sides whose row fingerprints differ |
+| `lakehouse_dq_reconcile_rows` | `layer` (`source`, `silver`, `gold`), `table` | rows compared (20 series: 7 + 7 + 6; for `mart_daily_sales_gmv` the count is days) |
+| `lakehouse_dq_reconcile_values_differing` | `pair` (`source_silver`, `silver_gold`, `source_gold`), `table` | keys on both sides whose row fingerprints differ (for `source_gold`: purchase dates whose GMV differs) |
 | `lakehouse_dq_reconcile_keys_missing` | `pair`, `table`, `side` | keys the other side lacks; `side="right"` is a key the source (or silver) has and silver (or gold) lacks |
 | `lakehouse_dq_reconcile_in_flight` | none | 1 while work is in flight and no verdict was made, or while a stalled CDC keeps the source-silver pairs out (the silver-gold pairs are still compared) |
 | `lakehouse_dq_cdc_stalled` | none | 1 while CDC stands: the source wrote since the previous run (write counter of schema `shop` in `pg_stat_user_tables`) and `confirmed_flush_lsn` of `shop_slot` did not move; it stays 1 until the slot moves. 0 without a slot, and for one run after a reset of the statistics (1 again at the next write while the slot stands). Sent every run, whether or not counts differ |
 | `lakehouse_dq_reconcile_verdict_timestamp_seconds` | none | Unix time of the last verdict |
 | `lakehouse_dq_reconcile_gold_compared` | none | 1 when the run compared silver and gold, 0 when it did not: nothing at rest, or gold behind silver |
+| `lakehouse_dq_reconcile_gmv_compared` | none | 1 when the run compared GMV per day with Postgres, 0 when it did not: not at rest, CDC stalled, gold behind silver, or the mart behind `fct_orders` |
 | `lakehouse_dq_gold_not_compared_runs` | none | runs in a row without a silver-gold comparison (Airflow Variable `dq_gold_not_compared_runs`), 0 after a comparison |
 
 Values come at the cadence of `dq_checks` (15 minutes), so an alert on them can lag by that long.

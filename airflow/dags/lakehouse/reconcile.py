@@ -1,4 +1,5 @@
-"""Reconciliation by value: source against silver, silver against gold (W5-T04, W5-D9).
+"""Reconciliation by value: source against silver, silver against gold (W5-T04, W5-D9), and the
+GMV of every day, source against gold, independent of the dbt model (audit MODEL-02).
 
 A row fingerprint is the md5 of the column values in one canonical text, built the same way in
 Postgres and in Trino; a table fingerprint is the row count and the md5 of the sorted
@@ -164,6 +165,9 @@ where not o._is_deleted and not c._is_deleted
 GOLD_CUSTOMERS = "select count(*) from gold.dim_customers"
 # Gold has caught up when its newest row is not older than the newest silver row it is built from.
 GOLD_UPDATED = "select cast(max(updated_at) as varchar) from gold.fct_orders"
+# The mart has caught up with fct_orders when its watermark (the newest fct_orders.updated_at among
+# the orders of a row) is not older than the newest fct_orders row. gold_at_rest compares them.
+MART_UPDATED = "select cast(max(source_updated_at) as varchar) from gold.mart_daily_sales"
 SILVER_UPDATED = """
 select cast(max(u) as varchar) from (
     select max(_updated_at) as u from silver.orders
@@ -213,18 +217,26 @@ def _postgres(table: str) -> tuple[str, str, str]:
     return rows, "k", "h"
 
 
-def fingerprint_sql_postgres(table: str) -> str:
-    """`<rows> <md5>` of the source table."""
-    rows, _, _ = _postgres(table)
+def _fingerprint_postgres(rows: str) -> str:
     return (
         f"with r as ({rows}) select concat_ws(' ', count(*), "
         "md5(coalesce(string_agg(k || '=' || h, ',' order by k collate \"C\"), ''))) from r"
     )
 
 
+def _pairs_postgres(rows: str) -> str:
+    return f'with r as ({rows}) select k, h from r order by k collate "C"'
+
+
+def fingerprint_sql_postgres(table: str) -> str:
+    """`<rows> <md5>` of the source table."""
+    rows, _, _ = _postgres(table)
+    return _fingerprint_postgres(rows)
+
+
 def pairs_sql_postgres(table: str) -> str:
     rows, _, _ = _postgres(table)
-    return f'with r as ({rows}) select k, h from r order by k collate "C"'
+    return _pairs_postgres(rows)
 
 
 def _trino(
@@ -284,6 +296,47 @@ def gold_pairs_sql_trino(gold: str, side: str) -> str:
     else:
         rows = _trino(f"gold.{gold}", pair.keys, [(c, c.gold_name) for c in pair.columns], "")
     return f"with r as ({rows}) select k, h from r order by k"
+
+
+# Orders whose items are not GMV. int_daily_sales.sql says the same (test_reconcile.py compares).
+GMV_EXCLUDED_STATUSES = ("canceled", "unavailable")
+GMV_TABLE = "mart_daily_sales_gmv"
+_EXCLUDED = ", ".join(f"'{status}'" for status in GMV_EXCLUDED_STATUSES)
+# The source deletes hard, so there is no soft-delete flag to filter. A day is `YYYY-MM-DD` and a
+# sum is text at the scale of price (decimal(10,2)): the same text from both engines.
+_GMV_POSTGRES = f"""
+select to_char(o.order_purchase_timestamp, 'YYYY-MM-DD') as k,
+    (sum(i.price))::numeric(38, 2)::text as h
+from shop.order_items i join shop.orders o on o.order_id = i.order_id
+where o.order_status not in ({_EXCLUDED})
+group by 1
+"""
+# A day with only canceled or unavailable orders has a row in the mart with no live items: the
+# source has no such day, so it is not an extra one.
+_GMV_TRINO = """
+select cast(purchase_date as varchar) as k, cast(cast(sum(gmv) as decimal(38, 2)) as varchar) as h
+from gold.mart_daily_sales
+group by purchase_date
+having sum(items_count) > 0
+"""
+
+
+def gmv_fingerprint_sql_postgres() -> str:
+    """`<days> <md5>` of `day=GMV` in the source, from order_items and orders."""
+    return _fingerprint_postgres(_GMV_POSTGRES)
+
+
+def gmv_pairs_sql_postgres() -> str:
+    return _pairs_postgres(_GMV_POSTGRES)
+
+
+def gmv_fingerprint_sql_trino() -> str:
+    """`<days> <md5>` of `day=GMV` in gold.mart_daily_sales, summed over the seller states."""
+    return _fingerprint_trino(_GMV_TRINO)
+
+
+def gmv_pairs_sql_trino() -> str:
+    return f"with r as ({_GMV_TRINO}) select k, h from r order by k"
 
 
 def diff_keys(

@@ -359,6 +359,9 @@ reprocesses every date that has an order changed since the last run
 the date filter is at [dbt/models/marts/mart_daily_sales.sql:27](../dbt/models/marts/mart_daily_sales.sql)). The test
 `assert_mart_daily_sales_matches_full_recompute` compares it with a recompute over all dates
 ([dbt/tests/assert_mart_daily_sales_matches_full_recompute.sql:1](../dbt/tests/assert_mart_daily_sales_matches_full_recompute.sql)).
+The recompute shares the model's SQL, so a wrong filter passes it; since 2026-10-30 `dq_checks` also
+compares GMV per purchase date with Postgres, outside dbt
+([OPERATIONS.md, Airflow](../OPERATIONS.md#airflow)).
 Failure path: `make chaos-break-dbt-test` fails a test on `fct_orders`; dbt skips the children and the
 marts keep their previous snapshot ([OPERATIONS.md, scenario 9](../OPERATIONS.md#9-airflow-task-failure-dbt-test)).
 

@@ -7,7 +7,8 @@ models:
       orders_count summed over states can exceed the orders of the day. Known limit (D18): a
       soft-deleted order or a seller moved to another state leaves its old dates stale, since
       neither moves fct_orders.updated_at. The replayer does neither; if it happens, the full
-      recompute test fails and `--full-refresh` rebuilds the mart. Check against silver:
+      recompute test fails and `--full-refresh` rebuilds the mart. dq_checks, which compares
+      GMV per day with Postgres summed over states, catches only the soft-deleted order. Check against silver:
       `select sum(i.price) from lake.silver.order_items i join lake.silver.orders o
       on i.order_id = o.order_id where not i._is_deleted and not o._is_deleted
       and o.order_status not in ('canceled', 'unavailable')` equals sum(gmv)

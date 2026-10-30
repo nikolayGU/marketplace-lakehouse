@@ -251,7 +251,9 @@ class DqChecks:
         self.cdc: tuple[int | None, str | None] | None = (10, "0/10")
         self.bronze: list[list[Any]] = [[5, datetime(2026, 10, 1, tzinfo=UTC)]]
         self.gold_differs = False
+        self.gmv_differs = False
         self.gold_updated = "2026-10-01 00:00:00"
+        self.mart_updated: str | None = "2026-10-01 00:00:00"
         self.trino_fails_on: str | None = None
         variables = self.variables
 
@@ -301,6 +303,8 @@ class DqChecks:
 
     def postgres_value(self, _settings: object, query: str) -> Any:
         self.queries.append(query)
+        if query == reconcile.gmv_fingerprint_sql_postgres():
+            return "596 gmv"
         for table in SOURCE_TABLES:
             if query == sql.postgres_rows(table):
                 return self.postgres_counts.get(table, 10)
@@ -310,12 +314,16 @@ class DqChecks:
         self.queries.append(query)
         if query == sql.CDC_PROGRESS:
             return [] if self.cdc is None else [self.cdc]
+        if query == reconcile.gmv_pairs_sql_postgres():
+            return [("2026-07-17", "20585.00")]
         return []
 
     def trino_rows(self, _settings: object, query: str) -> list[list[Any]]:
         self.queries.append(query)
         if query == sql.LATEST_BRONZE_SNAPSHOT:
             return self.bronze
+        if query == reconcile.gmv_pairs_sql_trino():
+            return [["2026-07-17", "20585.01" if self.gmv_differs else "20585.00"]]
         for gold in reconcile.GOLD_PAIRS:
             if query == reconcile.gold_pairs_sql_trino(gold, "gold") and self.gold_differs:
                 return [["key", "changed"]]
@@ -327,6 +335,8 @@ class DqChecks:
         self.queries.append(query)
         if query == self.trino_fails_on:
             raise RuntimeError("trino is down")
+        if query == reconcile.gmv_fingerprint_sql_trino():
+            return "596 other" if self.gmv_differs else "596 gmv"
         for table in SOURCE_TABLES:
             if query == sql.silver_live_rows(table):
                 return 10
@@ -338,6 +348,8 @@ class DqChecks:
             return 4
         if query == reconcile.GOLD_UPDATED:
             return self.gold_updated
+        if query == reconcile.MART_UPDATED:
+            return self.mart_updated
         if query == reconcile.SILVER_UPDATED:
             return "2026-10-01 00:00:00"
         return "10 fp"
@@ -351,6 +363,12 @@ class DqChecks:
     def queried_gold_values(self) -> bool:
         gold = next(iter(reconcile.GOLD_PAIRS))
         return reconcile.gold_sql_trino(gold) in self.queries
+
+    def queried_gmv(self) -> bool:
+        return {
+            reconcile.gmv_fingerprint_sql_postgres(),
+            reconcile.gmv_fingerprint_sql_trino(),
+        } <= set(self.queries)
 
     def gauge(self, name: str) -> object:
         return next(value for sent, value, _ in self.sent if sent == name)
@@ -465,6 +483,121 @@ def test_a_gold_difference_is_still_red_at_a_stalled_cdc(dq: DqChecks) -> None:
         dq.run("reconcile_values", True)
 
 
+def test_gmv_by_day_is_compared_with_the_source_at_rest(dq: DqChecks) -> None:
+    dq.at_rest()
+
+    dq.run("reconcile_values", False)
+
+    assert dq.queried_gmv()
+    assert dq.gauge("lakehouse.dq.reconcile_gmv_compared") == 1
+    assert (
+        "lakehouse.dq.reconcile_values_differing",
+        0,
+        {"pair": "source_gold", "table": "mart_daily_sales_gmv"},
+    ) in dq.sent
+
+
+def test_a_day_whose_gmv_differs_from_the_source_is_red_and_named(dq: DqChecks) -> None:
+    # What a mutation in int_daily_sales looks like from here: gold says 20585.01 for a day
+    # where Postgres says 20585.00, and every other check of the mart still agrees with itself.
+    dq.at_rest()
+    dq.gmv_differs = True
+
+    with pytest.raises(ValueError) as failure:
+        dq.run("reconcile_values", False)
+
+    message = str(failure.value)
+    assert "source_gold" in message
+    assert "mart_daily_sales_gmv" in message
+    assert "2026-07-17" in message
+    assert dq.gauge("lakehouse.dq.reconcile_gmv_compared") == 1
+    assert (
+        "lakehouse.dq.reconcile_values_differing",
+        1,
+        {"pair": "source_gold", "table": "mart_daily_sales_gmv"},
+    ) in dq.sent
+
+
+def test_gmv_is_not_compared_at_a_stalled_cdc(dq: DqChecks) -> None:
+    # The source has writes silver has not seen: the source-gold pair has no verdict either.
+    dq.at_rest()
+    dq.gmv_differs = True
+
+    dq.run("reconcile_values", True)
+
+    assert not dq.queried_gmv()
+    assert dq.queried_gold_values()
+    assert dq.gauge("lakehouse.dq.reconcile_gmv_compared") == 0
+
+
+def test_gmv_is_not_compared_while_gold_is_behind_silver(dq: DqChecks) -> None:
+    dq.at_rest()
+    dq.gmv_differs = True
+    dq.gold_updated = "2026-09-30 00:00:00"
+
+    dq.run("reconcile_values", False)
+
+    assert not dq.queried_gmv()
+    assert dq.gauge("lakehouse.dq.reconcile_gmv_compared") == 0
+
+
+@pytest.mark.parametrize("mart_updated", ["2026-09-30 23:59:59", None], ids=["older", "empty"])
+def test_gmv_is_not_compared_while_the_mart_is_behind_fct_orders(
+    dq: DqChecks, capsys: pytest.CaptureFixture[str], mart_updated: str | None
+) -> None:
+    # dbt builds fct_orders first and delete+inserts the mart's changed days after: in between
+    # (and while the days are deleted) gold and the source differ for a reason that is not an error.
+    dq.at_rest()
+    dq.gmv_differs = True
+    dq.mart_updated = mart_updated
+    dq.variables[GOLD_NOT_COMPARED_RUNS] = "23"
+
+    dq.run("reconcile_values", False)
+
+    assert not dq.queried_gmv()
+    assert dq.queried_gold_values()
+    assert "mart_daily_sales has not caught up with fct_orders: GMV not compared" in (
+        capsys.readouterr().out
+    )
+    # Gold was compared, the mart's lag is not the silver-gold alert's business.
+    assert dq.gauge("lakehouse.dq.reconcile_gold_compared") == 1
+    assert dq.gauge("lakehouse.dq.reconcile_gmv_compared") == 0
+    assert dq.variables[GOLD_NOT_COMPARED_RUNS] == "0"
+
+
+def test_gmv_is_compared_when_the_mart_is_as_new_as_fct_orders(dq: DqChecks) -> None:
+    dq.at_rest()
+    dq.gmv_differs = True
+    dq.mart_updated = dq.gold_updated
+
+    with pytest.raises(ValueError, match="mart_daily_sales_gmv"):
+        dq.run("reconcile_values", False)
+
+    assert dq.queried_gmv()
+
+
+def test_gmv_is_not_compared_while_bronze_is_moving(dq: DqChecks) -> None:
+    dq.variables[LAST_BRONZE_SNAPSHOT] = "4"
+    dq.gmv_differs = True
+
+    dq.run("reconcile_values", False)
+
+    assert not dq.queried_gmv()
+    assert dq.gauge("lakehouse.dq.reconcile_gmv_compared") == 0
+
+
+def test_the_gmv_verdict_comes_after_the_silver_gold_verdicts(dq: DqChecks) -> None:
+    dq.at_rest()
+    dq.gold_differs = True
+    dq.gmv_differs = True
+
+    with pytest.raises(ValueError) as failure:
+        dq.run("reconcile_values", False)
+
+    message = str(failure.value)
+    assert 0 <= message.index("silver_gold") < message.index("source_gold")
+
+
 def test_nothing_is_compared_while_bronze_is_moving(dq: DqChecks) -> None:
     dq.variables[LAST_BRONZE_SNAPSHOT] = "4"
 
@@ -486,6 +619,7 @@ def test_a_run_without_a_verdict_counts_one_more_run_without_gold(dq: DqChecks) 
 
     assert dq.gauge("lakehouse.dq.reconcile_in_flight") == 1
     assert dq.gauge("lakehouse.dq.reconcile_gold_compared") == 0
+    assert dq.gauge("lakehouse.dq.reconcile_gmv_compared") == 0
     assert dq.gauge("lakehouse.dq.gold_not_compared_runs") == 4
     assert dq.variables[GOLD_NOT_COMPARED_RUNS] == "4"
 
@@ -546,9 +680,11 @@ def test_a_count_that_is_missing_or_unreadable_starts_from_zero(
     [
         reconcile.GOLD_UPDATED,  # before gold is known to be at rest
         reconcile.gold_sql_trino(next(iter(reconcile.GOLD_PAIRS))),  # inside the pair comparison
-        reconcile.GOLD_CUSTOMERS,  # after the pairs, the last gold query
+        reconcile.GOLD_CUSTOMERS,  # after the pairs
+        reconcile.MART_UPDATED,  # after the silver-gold verdicts, before the mart is at rest
+        reconcile.gmv_fingerprint_sql_trino(),  # the source-gold pair, the last gold query
     ],
-    ids=["gold_updated", "first_gold_pair", "gold_customers"],
+    ids=["gold_updated", "first_gold_pair", "gold_customers", "mart_updated", "gmv"],
 )
 def test_a_comparison_that_fails_does_not_reset_the_count(dq: DqChecks, failing_query: str) -> None:
     dq.at_rest()

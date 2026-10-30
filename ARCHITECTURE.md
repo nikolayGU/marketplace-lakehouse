@@ -89,9 +89,9 @@ docker run --rm -v "$T:/in" -v "$PWD/docs/img:/out" minlag/mermaid-cli:11.4.2 \
    `mart_delivery_sla`) after every silver merge, triggered by the Asset `lake.silver`. Tests run
    with it; docs are generated on demand (`make dbt-docs`).
 7. `dq_checks` (every 15 minutes) fails on a duplicate key in silver and on silver differing from
-   Postgres at rest, compares row fingerprints source to silver and silver to gold
-   (`reconcile_values`), and logs delivery repeats, source no-ops, quarantine growth and
-   freshness. While CDC stands (the source wrote, the slot did not move) it gives no verdict for
+   Postgres at rest, compares row fingerprints source to silver and silver to gold and GMV per
+   day source to `mart_daily_sales` (`reconcile_values`), and logs delivery repeats, source
+   no-ops, quarantine growth and freshness. While CDC stands (the source wrote, the slot did not move) it gives no verdict for
    the source-silver pairs and says `in flight` instead of a false red (W6-D9). Its gauges go to
    Prometheus through StatsD. `iceberg_maintenance` (daily 03:30) runs `optimize` on silver;
    snapshot expiry, bronze compaction and orphan removal are manual or per-run parameters, and

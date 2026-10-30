@@ -9,6 +9,10 @@ from lakehouse.reconcile import Column
 
 CONTRACTS = Path(__file__).parents[2] / "contracts" / "silver"
 MODELS = Path(__file__).parents[2] / "dbt" / "models" / "marts"
+INT_DAILY_SALES = (
+    Path(__file__).parents[2] / "dbt" / "models" / "intermediate" / "int_daily_sales.sql"
+)
+EXCLUDED_STATUSES = re.compile(r"order_status not in \(([^)]*)\)")
 
 
 def _contract(table: str) -> dict[str, Any]:
@@ -37,6 +41,58 @@ def test_gold_columns_exist_in_the_model(gold: str) -> None:
 
     for column in pair.columns:
         assert re.search(rf"\b{column.gold_name}\b", text), f"{gold} lacks {column.gold_name}"
+
+
+def _statuses(sql: str) -> list[frozenset[str]]:
+    return [
+        frozenset(s.strip().strip("'") for s in listed.split(","))
+        for listed in EXCLUDED_STATUSES.findall(sql)
+    ]
+
+
+def test_gmv_leaves_out_the_statuses_the_model_leaves_out() -> None:
+    # The definition of GMV lives in int_daily_sales.sql; the source side repeats it in SQL, so a
+    # change of the model that is not made here turns the comparison red for a day with no error.
+    in_model = _statuses(INT_DAILY_SALES.read_text())
+
+    assert in_model, "int_daily_sales.sql no longer says `order_status not in (...)`"
+    excluded = frozenset(reconcile.GMV_EXCLUDED_STATUSES)
+    assert set(in_model) == {excluded}
+    assert _statuses(reconcile.gmv_pairs_sql_postgres()) == [excluded]
+
+
+def test_gmv_queries_are_fixed_text() -> None:
+    for sql in (
+        reconcile.gmv_fingerprint_sql_postgres(),
+        reconcile.gmv_fingerprint_sql_trino(),
+        reconcile.gmv_pairs_sql_postgres(),
+        reconcile.gmv_pairs_sql_trino(),
+    ):
+        assert ";" not in sql and "--" not in sql
+
+
+def _one_line(sql: str) -> str:
+    return " ".join(sql.split())
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [reconcile.gmv_fingerprint_sql_trino(), reconcile.gmv_pairs_sql_trino()],
+    ids=["fingerprint", "pairs"],
+)
+def test_gmv_in_gold_skips_days_without_a_live_item(sql: str) -> None:
+    # A day whose orders are all canceled or unavailable is a row of the mart with no GMV and no
+    # counterpart in the source: without this filter it is a day the source "lacks" and red.
+    assert "having sum(items_count) > 0" in _one_line(sql)
+
+
+def test_the_mart_watermark_is_read_from_the_mart() -> None:
+    # Read from fct_orders it would be equal to the value it is compared with, and never lag.
+    query = _one_line(reconcile.MART_UPDATED)
+
+    assert "max(source_updated_at)" in query
+    assert "from gold.mart_daily_sales" in query
+    assert "fct_orders" not in query
 
 
 def test_diff_keys_tells_missing_extra_and_changed_apart() -> None:

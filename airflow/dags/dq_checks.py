@@ -2,9 +2,12 @@
 
 Fails the run: a primary key twice in a silver table; live row counts that differ from Postgres
 while nothing is in flight (checks.at_rest) and CDC is not stalled; a value that differs between
-the source and silver, or silver and gold, at rest (reconcile_values, W5-T04). A CDC that stands
-(the source wrote and the slot moved no further, checks.cdc_state) is "in flight, no verdict" for
-the source-silver comparisons and the gauge `lakehouse.dq.cdc_stalled` (W6-D9). The runs in a
+the source and silver, or silver and gold, at rest (reconcile_values, W5-T04), or a day whose GMV
+differs between the source and gold.mart_daily_sales (audit MODEL-02: the mart's own test compares
+it with int_daily_sales, the same logic; `lakehouse.dq.reconcile_gmv_compared` is 1 when a run did
+it). A CDC that stands (the source wrote and the slot moved no further, checks.cdc_state) is "in
+flight, no verdict" for the source-silver comparisons, the GMV comparison and the gauge
+`lakehouse.dq.cdc_stalled` (W6-D9). The runs in a
 row that did not compare silver with gold are counted in `lakehouse.dq.gold_not_compared_runs`
 (alert SilverGoldNotCompared). Every value is logged as a `dq <name>=<value>` line and sent to
 statsd-exporter as a `lakehouse.*` gauge (lakehouse/metrics.py, observability/statsd/mapping.yml).
@@ -146,9 +149,11 @@ def dq_checks() -> None:
 
     @task
     def reconcile_values(stalled: bool) -> None:
-        """Source against silver, and silver against gold, by value (W5-T04). Only at rest: with
-        work in flight the layers differ for a reason that is not an error. A CDC that stands
-        leaves out the source-silver pairs; silver-gold needs nothing from the source."""
+        """Source against silver, and silver against gold, by value (W5-T04), and the GMV of each
+        day, source against gold. Only at rest: with work in flight the layers differ for a reason
+        that is not an error. A CDC that stands leaves out the source pairs; silver-gold needs
+        nothing from the source. The GMV waits until the mart has caught up with fct_orders; that
+        lag does not count as a run without a silver-gold comparison."""
         rows = trino_rows(settings, sql.LATEST_BRONZE_SNAPSHOT)
         latest, committed_at = (int(rows[0][0]), rows[0][1]) if rows else (None, None)
         remembered = Variable.get(LAST_BRONZE_SNAPSHOT, default=None)
@@ -162,6 +167,7 @@ def dq_checks() -> None:
             export(
                 ("lakehouse.dq.reconcile_in_flight", 1, {}),
                 ("lakehouse.dq.reconcile_gold_compared", 0, {}),
+                ("lakehouse.dq.reconcile_gmv_compared", 0, {}),
                 ("lakehouse.dq.gold_not_compared_runs", runs, {}),
             )
             return
@@ -205,6 +211,7 @@ def dq_checks() -> None:
         gold_ready = reconcile.gold_at_rest(gold_updated, silver_updated)
         # The verdict timestamp moves either way: this tells whether it covered gold too.
         gauges.append(("lakehouse.dq.reconcile_gold_compared", int(gold_ready), {}))
+        gmv_compared = False
         if gold_ready:
             for gold in reconcile.GOLD_PAIRS:
                 verdict = reconcile.compare(
@@ -242,8 +249,34 @@ def dq_checks() -> None:
                     {"layer": "gold", "table": "dim_customers"},
                 )
             )
+            # The mart is built after fct_orders and refreshed by delete+insert: its days wait
+            # until its own watermark has reached fct_orders (gold_updated, read above).
+            if not skip_source:
+                mart_updated = trino_value(settings, reconcile.MART_UPDATED)
+                if reconcile.gold_at_rest(mart_updated, gold_updated):
+                    verdict = reconcile.compare(
+                        "source_gold",
+                        reconcile.GMV_TABLE,
+                        postgres_value(settings, reconcile.gmv_fingerprint_sql_postgres()),
+                        trino_value(settings, reconcile.gmv_fingerprint_sql_trino()),
+                        lambda: dict(postgres_rows(settings, reconcile.gmv_pairs_sql_postgres())),
+                        lambda: dict(trino_rows(settings, reconcile.gmv_pairs_sql_trino())),
+                    )
+                    verdicts.append(verdict)
+                    gmv_compared = True
+                    gauges.append(
+                        (
+                            "lakehouse.dq.reconcile_rows",
+                            verdict.rows_right,
+                            {"layer": "gold", "table": reconcile.GMV_TABLE},
+                        )
+                    )
+                else:
+                    print("mart_daily_sales has not caught up with fct_orders: GMV not compared")
         else:
             print("gold has not caught up with silver: the silver-gold pairs wait for dbt_build")
+        # Sent every run, 0 when GMV was not compared for any reason, as reconcile_gold_compared is.
+        gauges.append(("lakehouse.dq.reconcile_gmv_compared", int(gmv_compared), {}))
 
         for verdict in verdicts:
             tags = {"pair": verdict.pair, "table": verdict.table}
