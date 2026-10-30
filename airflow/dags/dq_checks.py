@@ -14,7 +14,7 @@ import json
 import shlex
 import subprocess
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from airflow.sdk import Variable, dag, task
@@ -44,6 +44,8 @@ def export(*gauges: tuple[str, object, dict[str, str]]) -> None:
     start_date=datetime(2026, 10, 1),
     catchup=False,
     max_active_runs=1,
+    dagrun_timeout=timedelta(minutes=14),
+    default_args={"execution_timeout": timedelta(minutes=10)},
     tags=["dq"],
 )
 def dq_checks() -> None:

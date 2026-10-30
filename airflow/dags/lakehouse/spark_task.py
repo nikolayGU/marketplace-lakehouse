@@ -21,7 +21,7 @@ def spark_job_kwargs(pool: str, **extra: Any) -> dict[str, Any]:
         "mem_limit": "2g",
         # Airflow runs in a container: a host temp dir to mount does not exist.
         "mount_tmp_dir": False,
-        "auto_remove": "success",
+        "auto_remove": "force",
         "pool": pool,
         "do_xcom_push": False,
         **extra,

@@ -2,6 +2,11 @@
 
 The merge is spark-silver, the same container as `make silver`, started by DockerOperator. A run
 without a new bronze snapshot skips the merge and publishes no Asset event, so dbt_build sleeps.
+
+auto_remove="force" makes the provider remove the container with force, so a timeout stops Spark
+(plain "success" gets a 409 from Docker on a running container and leaves it writing). The fixed
+container_name makes a second start fail with 409 while one exists: one Airflow merge at a time,
+and `make silver` refuses while the container exists.
 """
 
 import os
@@ -28,7 +33,12 @@ public_env, private_env = spark_silver_environment(os.environ)
     start_date=datetime(2026, 10, 1),
     catchup=False,
     max_active_runs=1,
-    default_args={"retries": 1, "retry_delay": timedelta(minutes=1)},
+    dagrun_timeout=timedelta(minutes=30),
+    default_args={
+        "retries": 1,
+        "retry_delay": timedelta(minutes=1),
+        "execution_timeout": timedelta(minutes=10),
+    },
     tags=["silver"],
 )
 def silver_upsert() -> None:
@@ -43,6 +53,7 @@ def silver_upsert() -> None:
 
     merge = DockerOperator(
         task_id="merge",
+        container_name="lakehouse-silver-merge",
         image=settings.spark_image,
         command=["silver_upsert"],
         network_mode=settings.lake_network,
@@ -51,7 +62,7 @@ def silver_upsert() -> None:
         mem_limit="2g",
         # Airflow runs in a container: a host temp dir to mount does not exist.
         mount_tmp_dir=False,
-        auto_remove="success",
+        auto_remove="force",
         pool=LAKE_WRITERS_POOL,
         outlets=[Asset(SILVER_ASSET_NAME)],
         do_xcom_push=False,

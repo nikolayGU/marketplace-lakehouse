@@ -38,6 +38,7 @@ from lakehouse.settings import (
     dbt_command,
     spark_silver_environment,
 )
+from lakehouse.spark_task import spark_job_kwargs
 from spark_jobs import maintenance
 
 REPO = Path(__file__).resolve().parents[2]
@@ -669,3 +670,187 @@ def test_bronze_orphans_always_go_to_the_metadata_location() -> None:
     assert command[command.index("--location-suffix") + 1] == "metadata"
     with pytest.raises(maintenance.PolicyError, match="ADR-021"):
         assert_accepted_by_the_job(rendered(orphans_command(["lake.bronze.cdc_events"])))
+
+
+# Timeouts and one writer of the silver checkpoint (REL-03, DATA-09). Airflow is not on the host,
+# so the DAG files are read; `make dags-check` repeats the timeout checks on the loaded DAGs.
+
+DAG_FILES = sorted(path.name for path in (REPO / "airflow" / "dags").glob("*.py"))
+
+
+def duration(node: ast.expr) -> timedelta:
+    """The value of a `timedelta(minutes=..)` written in a DAG file."""
+    assert isinstance(node, ast.Call), ast.unparse(node)
+    assert getattr(node.func, "id", None) == "timedelta" and not node.args, ast.unparse(node)
+    return timedelta(**{k.arg: ast.literal_eval(k.value) for k in node.keywords if k.arg})
+
+
+def default_arg(dag: dict[str, ast.expr], name: str) -> ast.expr | None:
+    default_args = dag.get("default_args")
+    if not isinstance(default_args, ast.Dict):
+        return None
+    for key, value in zip(default_args.keys, default_args.values, strict=True):
+        if isinstance(key, ast.Constant) and key.value == name:
+            return value
+    return None
+
+
+@pytest.mark.parametrize("dag_file", DAG_FILES)
+def test_every_dag_ends_a_run_that_hangs(dag_file: str) -> None:
+    # A hung run holds its pool slot, and max_active_runs=1 queues every later run behind it.
+    dag = dag_keywords(dag_file, "dag")
+
+    assert "dagrun_timeout" in dag, f"{dag_file}: dag(...) has no dagrun_timeout"
+    assert duration(dag["dagrun_timeout"]) > timedelta(0)
+
+
+@pytest.mark.parametrize("dag_file", DAG_FILES)
+def test_every_task_has_an_execution_timeout_within_the_dagrun_timeout(dag_file: str) -> None:
+    dag = dag_keywords(dag_file, "dag")
+    assert "dagrun_timeout" in dag, f"{dag_file}: dag(...) has no dagrun_timeout"
+    limit = duration(dag["dagrun_timeout"])
+
+    default = default_arg(dag, "execution_timeout")
+    assert default is not None, f"{dag_file}: default_args has no execution_timeout"
+    tree = ast.parse((REPO / "airflow" / "dags" / dag_file).read_text())
+    # A task may set its own, but not a longer one than the run lives.
+    own = [
+        duration(keyword.value)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        for keyword in node.keywords
+        if keyword.arg == "execution_timeout"
+    ]
+    for timeout in (duration(default), *own):
+        assert timedelta(0) < timeout <= limit, f"{dag_file}: {timeout} against {limit}"
+
+
+# What Airflow uses for a task that sets neither (airflow.sdk.bases.operator, DEFAULT_RETRIES and
+# DEFAULT_RETRY_DELAY; docker/airflow/airflow.env does not change them).
+NO_RETRIES = 0
+AIRFLOW_DEFAULT_RETRY_DELAY = timedelta(minutes=5)
+
+
+def task_setting(name: str, node: ast.expr) -> Any:
+    return ast.literal_eval(node) if name == "retries" else duration(node)
+
+
+@pytest.mark.parametrize("dag_file", DAG_FILES)
+def test_every_task_ends_all_its_attempts_before_the_dagrun_timeout(dag_file: str) -> None:
+    # A hung attempt that the dagrun_timeout ends gets SIGTERM, and on_kill races a SIGKILL a few
+    # seconds later: the container may survive. A hung task must end by its own execution_timeout
+    # on each attempt, so all attempts and the waits between them fit in the run.
+    dag = dag_keywords(dag_file, "dag")
+    assert "dagrun_timeout" in dag, f"{dag_file}: dag(...) has no dagrun_timeout"
+    limit = duration(dag["dagrun_timeout"])
+    base: dict[str, Any] = {
+        "retries": NO_RETRIES,
+        "retry_delay": AIRFLOW_DEFAULT_RETRY_DELAY,
+        "execution_timeout": None,
+    }
+    defaults = {
+        name: task_setting(name, value)
+        for name in base
+        if (value := default_arg(dag, name)) is not None
+    }
+    # The default_args alone, then every call that sets one of the three itself, as the mapped
+    # `.partial(retries=2, ...)` of the maintenance DAGs.
+    settings: list[tuple[str, dict[str, Any]]] = [("default_args", {**base, **defaults})]
+    tree = ast.parse((REPO / "airflow" / "dags" / dag_file).read_text())
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            own = {k.arg: task_setting(k.arg, k.value) for k in node.keywords if k.arg in base}
+            if own:
+                settings.append((f"line {node.lineno}", {**base, **defaults, **own}))
+
+    for where, task in settings:
+        retries, timeout, delay = task["retries"], task["execution_timeout"], task["retry_delay"]
+        assert timeout is not None, f"{dag_file} {where}: no execution_timeout"
+        needed = (retries + 1) * timeout + retries * delay
+        assert needed < limit, (
+            f"{dag_file} {where}: {retries + 1} attempts of {timeout} and {retries} waits of "
+            f"{delay} take {needed}, dagrun_timeout is {limit}"
+        )
+
+
+def docker_operator_calls(dag_file: str) -> list[ast.Call]:
+    """`DockerOperator(...)` and `DockerOperator.partial(...)` calls of a DAG file."""
+    tree = ast.parse((REPO / "airflow" / "dags" / dag_file).read_text())
+    calls = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if isinstance(func, ast.Attribute) and func.attr == "partial":
+            func = func.value
+        if isinstance(func, ast.Name) and func.id == "DockerOperator":
+            calls.append(node)
+    return calls
+
+
+def removes_container_with_force(call: ast.Call) -> bool:
+    for keyword in call.keywords:
+        if keyword.arg == "auto_remove":
+            return isinstance(keyword.value, ast.Constant) and keyword.value.value == "force"
+    # spark_job_kwargs sets "force" itself; an auto_remove given to it would override that.
+    return any(
+        keyword.arg is None
+        and isinstance(keyword.value, ast.Call)
+        and getattr(keyword.value.func, "id", None) == "spark_job_kwargs"
+        and not any(inner.arg == "auto_remove" for inner in keyword.value.keywords)
+        for keyword in call.keywords
+    )
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ('DockerOperator(task_id="a", auto_remove="force")', True),
+        ('DockerOperator(task_id="a", auto_remove="success")', False),
+        ('DockerOperator(task_id="a")', False),
+        ('DockerOperator(task_id="a", **spark_job_kwargs(POOL))', True),
+        ('DockerOperator(task_id="a", **spark_job_kwargs(POOL, retries=2))', True),
+        # **extra comes last in spark_job_kwargs and overrides its "force".
+        ('DockerOperator(task_id="a", **spark_job_kwargs(POOL, auto_remove="success"))', False),
+        ('DockerOperator(task_id="a", **spark_job_kwargs(POOL, auto_remove="force"))', False),
+        (
+            'DockerOperator.partial(task_id="a", **spark_job_kwargs(POOL, auto_remove="never"))',
+            False,
+        ),
+    ],
+)
+def test_the_force_check_catches_what_overrides_it(source: str, expected: bool) -> None:
+    call = ast.parse(source).body[0]
+    assert isinstance(call, ast.Expr) and isinstance(call.value, ast.Call)
+
+    assert removes_container_with_force(call.value) is expected
+
+
+def test_every_docker_operator_removes_its_container_with_force() -> None:
+    # With auto_remove="success" the provider's `finally` removes the container without force:
+    # after a timeout it is still running, Docker answers 409, the error replaces the timeout,
+    # and the Spark job keeps writing while the retry starts a second one.
+    calls = [(name, call) for name in DAG_FILES for call in docker_operator_calls(name)]
+
+    assert calls
+    wrong = [
+        f"{name}:{call.lineno}" for name, call in calls if not removes_container_with_force(call)
+    ]
+    assert not wrong, f"DockerOperator without auto_remove='force' or spark_job_kwargs: {wrong}"
+
+
+def test_spark_job_kwargs_remove_the_container_with_force(monkeypatch: pytest.MonkeyPatch) -> None:
+    for key in SPARK_SILVER_ENV:
+        monkeypatch.setenv(key, f"value of {key}")
+
+    assert spark_job_kwargs("lake_writers")["auto_remove"] == "force"
+
+
+def test_the_merge_container_has_a_fixed_name() -> None:
+    # One silver writer: while a container of this name exists, a second start gets 409 from
+    # Docker and fails instead of writing to the same checkpoint.
+    merge = dag_keywords("silver_upsert.py", "DockerOperator")
+
+    assert ast.literal_eval(merge["task_id"]) == "merge"
+    assert "container_name" in merge, "merge has no container_name"
+    assert ast.literal_eval(merge["container_name"]) == "lakehouse-silver-merge"

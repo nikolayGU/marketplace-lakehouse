@@ -31,6 +31,8 @@ settings = Settings()
     start_date=datetime(2026, 10, 1),
     catchup=False,
     max_active_runs=1,
+    dagrun_timeout=timedelta(hours=4),
+    default_args={"execution_timeout": timedelta(minutes=60)},
     params={"dry_run": True},
     tags=["maintenance"],
 )

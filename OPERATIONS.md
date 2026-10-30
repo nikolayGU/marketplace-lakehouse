@@ -454,17 +454,32 @@ DAGs live in `airflow/dags/`; their shared code is `airflow/dags/lakehouse/`, wh
 
 | DAG | Schedule | Does |
 |---|---|---|
-| `silver_upsert` | every 5 min, `max_active_runs=1`, 1 retry | `bronze_has_new_snapshot` skips the run when bronze has no snapshot silver has not merged; `merge` starts spark-silver (DockerOperator, pool `lake_writers`) and publishes the Asset `lake.silver`; `remember_snapshot` stores the merged snapshot id in the Variable `silver_upsert_last_bronze_snapshot` |
-| `dbt_build` | Asset `lake.silver` | `dbt build` of `lake.gold` from `/opt/dbt-venv`, no retries; a manual run takes dbt vars from its conf, `{"dbt_vars": "{...}"}` |
-| `dq_checks` | every 15 min | fails on a primary key twice in silver, or on silver differing from Postgres at rest; logs `dq <name>=<value>` lines: delivery repeats and source no-ops of the last hour, new quarantine rows, freshness of each silver table, `dbt source freshness`; sends the same values to Prometheus (see "Observability", `lakehouse_*`), except the quarantine count |
-| `iceberg_maintenance` | daily | `optimize` of each silver table through Trino, in pool `lake_writers`; the Spark steps (position deletes, `expire_snapshots` of silver and gold, compaction of past bronze days) only in a run with `{"expire_and_compact": true}`, see "Maintenance" |
-| `iceberg_orphans` | weekly | `remove_orphan_files` of silver, gold and bronze metadata; a dry run unless the run has `{"dry_run": false}` |
+| `silver_upsert` | every 5 min, `max_active_runs=1`, 1 retry; each task 10 min, the run 30 min | `bronze_has_new_snapshot` skips the run when bronze has no snapshot silver has not merged; `merge` starts spark-silver (DockerOperator, pool `lake_writers`) and publishes the Asset `lake.silver`; `remember_snapshot` stores the merged snapshot id in the Variable `silver_upsert_last_bronze_snapshot` |
+| `dbt_build` | Asset `lake.silver`; the task 15 min, the run 20 min | `dbt build` of `lake.gold` from `/opt/dbt-venv`, no retries; a manual run takes dbt vars from its conf, `{"dbt_vars": "{...}"}` |
+| `dq_checks` | every 15 min; each task 10 min, the run 14 min | fails on a primary key twice in silver, or on silver differing from Postgres at rest; logs `dq <name>=<value>` lines: delivery repeats and source no-ops of the last hour, new quarantine rows, freshness of each silver table, `dbt source freshness`; sends the same values to Prometheus (see "Observability", `lakehouse_*`), except the quarantine count |
+| `iceberg_maintenance` | daily; each task 60 min, the run 4 h | `optimize` of each silver table through Trino, in pool `lake_writers`; the Spark steps (position deletes, `expire_snapshots` of silver and gold, compaction of past bronze days) only in a run with `{"expire_and_compact": true}`, see "Maintenance" |
+| `iceberg_orphans` | weekly; each task 60 min, the run 4 h | `remove_orphan_files` of silver, gold and bronze metadata; a dry run unless the run has `{"dry_run": false}` |
 
 One silver writer. While `silver_upsert` is unpaused, `make silver` and `make verify` must not
 run: two processes on one checkpoint (`make verify` refuses while the scheduler runs). For a
 manual merge: `airflow dags pause silver_upsert` in the scheduler container, wait until its
 running `merge` ends, `make silver`, then `airflow dags unpause silver_upsert`. The first run from
 Airflow continues from the checkpoint of the last `make silver`.
+
+Timeouts (audit 30.10, B1). Every task has an `execution_timeout` and every DAG a
+`dagrun_timeout`; all attempts of a task fit in its run (`make dags-check` and
+`tests/unit/test_dags.py` check it). The Spark tasks remove their container with force, so a task
+that times out stops its Spark job. Such a failure reads `Process timed out` followed by
+`NotFound: No such container`: `on_kill` tries to stop a container the timeout already removed.
+The merge container has a fixed name, `lakehouse-silver-merge`: a second Airflow merge fails with
+409 while it exists, and `make silver` refuses too. After a killed scheduler or worker the
+container can stay behind and every merge fails with `name "/lakehouse-silver-merge" is already
+in use`. Check `docker ps -a --filter 'name=^/lakehouse-silver-merge$' --format '{{.Status}}'`:
+`Up` is a live writer, wait for it; `Exited` is a leftover, `docker rm lakehouse-silver-merge`
+with the owner's ok (never `rm -f` on an `Up` one). The name is global to the Docker host: a
+second stack of this repo on the same Docker would collide on it. Not proven live: a timeout on a
+real merge, and what `dagrun_timeout` does to a running container (SIGTERM, then SIGKILL after
+5 s; if the JVM is slower, the container stays and the next merge fails loudly with the 409).
 
 `reconcile_values` compares by value (`make reconcile` uses the same fingerprint since 2026-10-30,
 for the source-silver pairs only and without the at-rest check): a row
@@ -496,7 +511,8 @@ Host sleep pauses the Docker VM. A task in flight at that moment fails on wake: 
 abandoned its query (`ABANDONED_QUERY`), the scheduler fails task instances without a heartbeat,
 and the task's API token has expired (`Invalid auth token`). Before reading a red run as a
 pipeline failure, look for `Heartbeat recovered after <n> seconds` just before it in
-`docker logs lakehouse-airflow-scheduler-1`. Keep Windows sleep off while the stack runs
+`docker logs lakehouse-airflow-scheduler-1`. A sleep longer than a DAG's `dagrun_timeout` also
+fails its run by timeout on wake. Keep Windows sleep off while the stack runs
 (`powercfg /change standby-timeout-ac 0`, the same for `hibernate-timeout-ac`).
 
 ## Observability
@@ -893,7 +909,7 @@ branch cancels the older pull request run.
 | `lint-and-test` | `uv sync --locked`, ruff, `bash -n` on every tracked shell script, mypy, yamllint, sqlfluff, `dbt parse`, `pytest tests/unit`, compose config, gitleaks |
 | `hadolint` | one run per Dockerfile (matrix, a test compares it with `find`), fails on warning and above; accepted findings sit in the Dockerfile as `# hadolint ignore=` with the reason |
 | `spark-tests` | builds `lakehouse/spark:ci` (layer cache `type=gha`, scope `spark`) and runs `make test-spark SPARK_IMAGE=lakehouse/spark:ci`; `FAIL_ON_SKIP=1` (`tests/unit/conftest.py`) turns any skip, `pytest.skip()` and `importorskip` included, into a failure |
-| `airflow-image` | builds `lakehouse/airflow:ci` (scope `airflow`), imports Airflow, trino, psycopg and pydantic-settings, runs `dbt --version` in its venv, and `make dags-check`: every DAG file imports in the image, offline, with `docker/airflow/airflow.env` |
+| `airflow-image` | builds `lakehouse/airflow:ci` (scope `airflow`), imports Airflow, trino, psycopg and pydantic-settings, runs `dbt --version` in its venv, and `make dags-check`: every DAG file imports in the image, offline, with `docker/airflow/airflow.env`; every task has an `execution_timeout` whose attempts fit in the DAG's `dagrun_timeout`, every DockerOperator removes its container with force, and the merge has its fixed name |
 | `minio-images` | builds `lakehouse/minio:ci` and `lakehouse/mc:ci` from `docker/minio/Dockerfile` (scopes `minio`, `mc`) and runs `bash scripts/check-minio-images.sh`: the release and commit each binary prints, `sh` and `wget` in both images, a throwaway MinIO healthy on the compose healthcheck, `create-bucket.sh` (minio-init) twice |
 
 `.github/workflows/smoke.yml` (on demand and weekly, Monday 03:00 UTC, W6-D2; 45 minutes at most) walks the path

@@ -1,5 +1,6 @@
 .DEFAULT_GOAL := help
 COMPOSE := docker compose --env-file .env -f docker/compose.yaml
+DOCKER ?= docker
 PROFILE ?= core
 SPEED ?= 720
 comma := ,
@@ -91,13 +92,22 @@ kafka-topics: ## topics with partitions
 kafka-groups: ## consumer groups and lag
 	$(COMPOSE) exec kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --all-groups --describe
 
-silver: ## merge everything bronze committed since the last run into silver, then exit (refuses while the Airflow scheduler runs)
+silver: ## merge everything bronze committed since the last run into silver, then exit (refuses while the Airflow scheduler runs or a container of Airflow's merge exists)
 	@ids=$$($(COMPOSE) --profile '*' ps -q airflow-scheduler) || { \
 	  echo "docker compose ps failed: cannot tell whether airflow-scheduler runs, not merging" >&2; \
 	  exit 2; \
 	}; \
 	if [ -n "$$ids" ]; then \
 	  echo "airflow-scheduler is running and may merge silver at the same time: pause silver_upsert and stop the scheduler first, or trigger the DAG (OPERATIONS.md, Airflow)" >&2; \
+	  exit 2; \
+	fi
+	@found=$$($(DOCKER) ps -a --filter 'name=^/lakehouse-silver-merge$$' --format '{{.Names}}: {{.Status}}') || { \
+	  echo "docker ps failed: cannot tell whether a container of Airflow's merge exists, not merging" >&2; \
+	  exit 2; \
+	}; \
+	if [ -n "$$found" ]; then \
+	  echo "found $$found (the container silver_upsert's merge task starts, any status)" >&2; \
+	  echo "Up: a live writer of the silver checkpoint, wait until it exits. Exited: a leftover of a killed merge, remove it with 'docker rm lakehouse-silver-merge' (needs the owner's ok), then run make silver again." >&2; \
 	  exit 2; \
 	fi
 	$(COMPOSE) --profile core run --rm --no-deps spark-silver
@@ -159,12 +169,25 @@ test-spark: ## the Spark unit tests, inside $(SPARK_IMAGE) because the host has 
 
 AIRFLOW_IMAGE ?= lakehouse/airflow:dev
 
-dags-check: ## every DAG file imports in $(AIRFLOW_IMAGE), offline, with docker/airflow/airflow.env
+dags-check: ## every DAG file imports in $(AIRFLOW_IMAGE), offline, with docker/airflow/airflow.env; every DAG and task has a timeout that fits its retries, every Docker task removes its container with force
 	docker run --rm --network none -v "$(CURDIR)/airflow/dags":/opt/airflow/dags:ro \
 	  --env-file docker/airflow/airflow.env -e PYTHONPATH=/opt/airflow/dags \
 	  -e AIRFLOW__METRICS__STATSD_ON=False --entrypoint python $(AIRFLOW_IMAGE) -c \
-	  "from airflow.models.dagbag import DagBag; b = DagBag('/opt/airflow/dags'); \
-	  assert not b.import_errors, b.import_errors; print(len(b.dags), 'dags import:', sorted(b.dags))"
+	  "from airflow.models.dagbag import DagBag; \
+	  from airflow.providers.docker.operators.docker import DockerOperator; \
+	  b = DagBag('/opt/airflow/dags'); \
+	  assert not b.import_errors, b.import_errors; \
+	  pairs = [(d, t) for d in b.dags.values() for t in d.tasks]; \
+	  kw = lambda t: getattr(t, 'partial_kwargs', None) or vars(t); \
+	  docker = [(d, t) for d, t in pairs if issubclass(getattr(t, 'operator_class', type(t)), DockerOperator)]; \
+	  bad = [d.dag_id + ': no dagrun_timeout' for d in b.dags.values() if not d.dagrun_timeout]; \
+	  bad += [d.dag_id + '.' + t.task_id + ': no execution_timeout' for d, t in pairs if not t.execution_timeout]; \
+	  bad += [d.dag_id + '.' + t.task_id + ': execution_timeout above dagrun_timeout' for d, t in pairs if d.dagrun_timeout and t.execution_timeout and t.execution_timeout > d.dagrun_timeout]; \
+	  bad += [d.dag_id + '.' + t.task_id + ': all attempts do not fit in dagrun_timeout' for d, t in pairs if d.dagrun_timeout and t.execution_timeout and (t.retries + 1) * t.execution_timeout + t.retries * t.retry_delay >= d.dagrun_timeout]; \
+	  bad += [d.dag_id + '.' + t.task_id + ': auto_remove is not force' for d, t in docker if kw(t).get('auto_remove') != 'force']; \
+	  bad += [d.dag_id + '.merge: no container_name' for d, t in pairs if (d.dag_id, t.task_id) == ('silver_upsert', 'merge') and not t.container_name]; \
+	  assert not bad, bad; \
+	  print(len(b.dags), 'dags import, timeouts, retry budget and force removal checked:', sorted(b.dags))"
 
 watermark-demo: ## orders_per_minute on a lab topic: inside the watermark updates, behind it drops (needs make start)
 	bash scripts/demo/watermark.sh
