@@ -15,6 +15,36 @@ trino_value() { "${COMPOSE[@]}" exec -T trino trino --catalog lake --output-form
 psql_value() { "${COMPOSE[@]}" exec -T postgres-oltp psql -U "$OLTP_USER" -d "$OLTP_DB" -Atc "$1"; }
 kafka() { "${COMPOSE[@]}" exec -T kafka "/opt/kafka/bin/$1" --bootstrap-server localhost:9092 "${@:2}"; }
 
+# trino_up: Trino answers `select 1` within TRINO_PROBE_WAIT seconds (default 20); otherwise the
+# reason goes to stderr and the status is 1. Without it a down Trino fails every bronze query and
+# a caller that waits on bronze reads that as Kafka lagging for its whole limit. timeout runs the
+# probe as a process group of its own and kills the group, so a hung `docker compose` leaves no
+# child behind; the output goes to a file because a child that lived on would keep a pipe open.
+# Without --foreground a Ctrl+C does not reach timeout: verify.sh traps it and exits when the probe
+# ends, TRINO_PROBE_WAIT + 2 s at most. Called directly, not inside $(...), and without such a trap,
+# the script would go on: bash takes the probe for having handled the signal.
+trino_up() {
+  local limit=${TRINO_PROBE_WAIT:-20} out err rc=0
+  # timeout 0 means no limit, and a word is its own error: both are refused before any probe.
+  if ! [[ $limit =~ ^[0-9]+(\.[0-9]+)?$ ]] || ! awk -v n="$limit" 'BEGIN { exit !(n >= 1) }'; then
+    echo "TRINO_PROBE_WAIT must be a number of seconds, at least 1: got '$limit'" >&2
+    return 1
+  fi
+  out=$(mktemp -t trino_probe.XXXXXX.log)
+  timeout -k 2 "$limit" "${COMPOSE[@]}" exec -T trino trino --execute 'select 1' \
+    </dev/null >"$out" 2>&1 || rc=$?
+  err=$(cat "$out")
+  rm -f "$out"
+  # 124: the limit ended it, 137: it ignored that and was killed 2 s later. Anything else is an
+  # answer, an error such as a container that is not running.
+  case $rc in
+    0) return 0 ;;
+    124 | 137) echo "Trino does not answer within $limit s: ${err:-no output}" >&2 ;;
+    *) echo "Trino probe failed: ${err:-no output}" >&2 ;;
+  esac
+  return 1
+}
+
 # wait_until <seconds> <what> <command...>: run the command every 3 s until it succeeds. On a
 # timeout the last attempt's error output is shown, since that is usually the real cause.
 wait_until() {

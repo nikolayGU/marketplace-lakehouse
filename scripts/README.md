@@ -5,7 +5,8 @@
   connector, load unless a replay state exists, verify, protect. Safe to re-run, deletes nothing.
 - `verify.sh` (W3-T00, `make verify`): waits for bronze to catch up with Kafka, runs one silver
   merge, checks Kafka offsets in bronze, silver against Postgres and all seven tables in bronze;
-  prints `verify ok`. Refuses while `airflow-scheduler` runs or a replayer plays. `--no-merge`
+  prints `verify ok`. Refuses (exit 2) while `airflow-scheduler` runs or a replayer plays, and when
+  Trino does not answer `select 1` within `TRINO_PROBE_WAIT` seconds (default 20). `--no-merge`
   (`make verify-fast`) skips the merge. On success writes `.verify-stamp` (`agent_state.py`).
 - `report.sh` (`make report`): git state, the verify, check and review stamps, containers and the
   replay clock for a session report. Reads only.

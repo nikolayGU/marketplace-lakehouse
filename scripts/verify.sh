@@ -4,10 +4,16 @@
 # (`make reconcile`), all seven source tables reached bronze. Ends with
 # `verify ok` or the reason and a non-zero exit code. It runs one silver merge, so it refuses
 # while Airflow may run another (two writers on one checkpoint) and while a replayer plays
-# (reconcile would compare a moving source). `--no-merge` (make verify-fast) skips the merge and
-# writes nothing to the lake.
+# (reconcile would compare a moving source), and when Trino does not answer `select 1`. That probe
+# runs after the other two checks and ends within TRINO_PROBE_WAIT (default 20) + 2 s at most.
+# `--no-merge` (make verify-fast) skips the merge and writes nothing to the lake.
 # On success it stamps the working tree (.verify-stamp) for the agent hooks in .claude/hooks.
 . "$(dirname "$0")/chaos/lib.sh"
+
+# bash runs a trap once the foreground command ends: a Ctrl+C that only the script gets (the Trino
+# probe has a process group of its own) ends it right after that command, with this message and
+# exit code 130. TERM has no trap, so a kill still ends the script at once, even during a merge.
+trap 'echo "verify interrupted" >&2; exit 130' INT
 
 mode=full
 case "${1:-}" in
@@ -33,6 +39,11 @@ if [ "$mode" = full ]; then
   fi
 fi
 no_other_replayer
+# Every check below needs Trino: without this probe a down Trino shows as bronze not catching up.
+trino_err=$(trino_up 2>&1) || {
+  echo "verify failed: $trino_err" >&2
+  exit 2
+}
 wait="${VERIFY_WAIT:-900}"
 wait_until "$wait" "bronze to catch up with Kafka" bronze_caught_up ||
   fail "bronze did not catch up with Kafka in $wait s"
