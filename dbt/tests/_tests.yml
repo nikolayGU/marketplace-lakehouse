@@ -20,6 +20,14 @@ data_tests:
     description: >
       Source anomaly. 2 categories without an English name (2026-10-09). warn above 0, error
       above var untranslated_categories_error_if (default 5).
+  - name: assert_gold_has_no_deleted_entities
+    description: >
+      D4: fct_orders and the dim_* models hold live entities only; a row is a consumer that lost
+      its `where not is_deleted`. Error on any row. fct_order_items keeps deleted items on
+      purpose (D8) and is left out. On today's data silver holds no deleted order, customer,
+      product or seller (the replayer deletes only items and reviews), so this test is green
+      by construction; a lost filter is caught by tests/unit/test_dbt_soft_delete.py, and this
+      test holds the day such an entity is deleted.
   - name: assert_chaos_break_test
     description: >
       Chaos 9 switch: returns every order, so fails, only when dbt runs with

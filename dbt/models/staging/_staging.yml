@@ -1,9 +1,23 @@
+# relationships_live (dbt/tests/generic) checks live rows against live parents and is a warning, not
+# an error. Silver merges each table in a commit of its own, and in a batch `order_items` before
+# `orders` (merge_batch in streaming/spark_jobs/silver_upsert.py, ADR-021), so a child may reach
+# silver before its parent and be an orphan until the next run. Nothing in the source allows an
+# orphan, and the count was 0 on 2026-10-30, so a warning is a signal to look at, and a stopped
+# `dbt build` would be a stop for a gap that closes by itself. `make reconcile` is the hard check.
 models:
   - name: stg_orders
     description: One row per order in silver, deleted ones included (`is_deleted`, D4).
     columns:
       - name: order_id
         data_tests: [unique, not_null]
+      - name: customer_id
+        data_tests:
+          - relationships_live:
+              arguments:
+                to: ref('stg_customers')
+                field: customer_id
+              config:
+                severity: warn
       - name: order_status
         description: >
           A contract of the source: a status outside the eight of the dataset is an error, not
@@ -30,9 +44,45 @@ models:
             columns: [order_id, order_item_id]
     columns:
       - name: order_id
-        data_tests: [not_null]
+        data_tests:
+          - not_null
+          - relationships_live:
+              arguments:
+                to: ref('stg_orders')
+                field: order_id
+              config:
+                severity: warn
       - name: order_item_id
         data_tests: [not_null]
+      - name: product_id
+        data_tests:
+          - relationships_live:
+              arguments:
+                to: ref('stg_products')
+                field: product_id
+              config:
+                severity: warn
+      - name: seller_id
+        data_tests:
+          - relationships_live:
+              arguments:
+                to: ref('stg_sellers')
+                field: seller_id
+              config:
+                severity: warn
+      - name: price
+        description: >
+          Never negative, deleted items included: canceled GMV sums their price. The minimum in
+          the dataset is 0.85 (2026-10-30).
+        data_tests:
+          - value_in_range:
+              arguments:
+                min_value: 0
+      - name: freight_value
+        data_tests:
+          - value_in_range:
+              arguments:
+                min_value: 0
   - name: stg_payments
     description: One row per payment of an order.
     data_tests:
@@ -41,9 +91,30 @@ models:
             columns: [order_id, payment_sequential]
     columns:
       - name: order_id
-        data_tests: [not_null]
+        data_tests:
+          - not_null
+          - relationships_live:
+              arguments:
+                to: ref('stg_orders')
+                field: order_id
+              config:
+                severity: warn
       - name: payment_sequential
         data_tests: [not_null]
+      - name: payment_type
+        description: >
+          The CHECK of shop.payments (oltp/migrations/001_schema.sql): a type outside the five is
+          an error. `not_defined` is allowed: data/raw has 3 such payments, silver had none on
+          2026-10-30 (the replay may not have reached them).
+        data_tests:
+          - accepted_values:
+              arguments:
+                values:
+                  - credit_card
+                  - boleto
+                  - voucher
+                  - debit_card
+                  - not_defined
   - name: stg_reviews
     description: >
       One row per review and order: review_id repeats across orders in the source
@@ -56,7 +127,22 @@ models:
       - name: review_id
         data_tests: [not_null]
       - name: order_id
-        data_tests: [not_null]
+        data_tests:
+          - not_null
+          - relationships_live:
+              arguments:
+                to: ref('stg_orders')
+                field: order_id
+              config:
+                severity: warn
+      - name: review_score
+        description: >
+          The CHECK of shop.reviews is 1 to 5; deleted reviews are checked too.
+        data_tests:
+          - value_in_range:
+              arguments:
+                min_value: 1
+                max_value: 5
   - name: stg_customers
     description: >
       One row per customer_id. Olist issues a customer_id per order; the person is

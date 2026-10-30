@@ -17,7 +17,9 @@ run, test; needs `make start`).
   modelled (D5).
 - `macros`: `safe_divide`; `trino__reset_csv_table`, which makes a seed reload truncate the table
   instead of dropping it (D14).
-- `tests/generic/unique_combination.sql`: uniqueness of a composite key, without packages.
+- `tests/generic`: `unique_combination.sql` (uniqueness of a composite key),
+  `relationships_live.sql` (a live row points at a live row of its parent) and
+  `value_in_range.sql` (a lower and an optional upper bound), without packages.
 - `profiles.yml`: target `dev` (Trino at `TRINO_HOST`:`TRINO_PORT`, default 127.0.0.1:8080) and
   `ci` (parse only). No secrets: Trino has no authentication and listens on 127.0.0.1.
 
@@ -28,11 +30,15 @@ incremental run (D13).
 
 SQL is linted from this directory: `cd dbt && uv run sqlfluff lint models macros tests`.
 
-Tests: keys and relationships on every model; `assert_mart_daily_sales_matches_full_recompute`
-(D7); four tests on known anomalies of the source (`tests/assert_*.sql`), each warning above 0
-and failing above a threshold from a dbt var, with the number and the date in its description
-(`tests/_tests.yml`). `make dbt-docs` writes the docs, the metric glossary of `models/docs.md`
-included, to `target/`.
+Tests: keys and relationships on every model. Staging relationships compare live rows with live
+parents at severity `warn`: silver merges each table in a commit of its own, `order_items` before
+`orders`, so a child can precede its parent for one run; the hard comparison of keys is `make
+reconcile` and `dq_checks`. Ranges (`price`, `freight_value`, `review_score`) and `payment_type`
+are errors, and `assert_gold_has_no_deleted_entities` holds D4. Then
+`assert_mart_daily_sales_matches_full_recompute` (D7); four tests on known anomalies of the
+source (`tests/assert_*.sql`), each warning above 0 and failing above a threshold from a dbt var,
+with the number and the date in its description (`tests/_tests.yml`). `make dbt-docs` writes the
+docs, the metric glossary of `models/docs.md` included, to `target/`.
 
 Freshness: `dbt source freshness` checks `orders`, `order_items`, `payments` and `reviews`, the
 tables the replayer changes (`_updated_at`; warn after 30 minutes, error after 2 hours).

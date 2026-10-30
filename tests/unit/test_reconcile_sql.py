@@ -1,3 +1,6 @@
+import json
+import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -10,6 +13,7 @@ from scripts.reconcile_sql import queries, value_queries
 
 REPO = Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "scripts" / "reconcile_sql.py"
+CONTRACTS = REPO / "contracts" / "silver"
 
 
 def contract(**overrides: Any) -> dict[str, Any]:
@@ -133,3 +137,83 @@ def test_value_queries_cover_every_column_of_a_table_without_decimals() -> None:
 def test_table_the_fingerprint_does_not_know_fails_loudly() -> None:
     with pytest.raises(ValueError, match="no columns for 'refunds'"):
         value_queries(contract(**{"x-source-table": "shop.refunds"}))
+
+
+def contracts_copy(tmp_path: Path) -> Path:
+    shutil.copytree(CONTRACTS, tmp_path / "silver")
+    return tmp_path / "silver"
+
+
+def add_contract(directory: Path, name: str, source_table: str) -> None:
+    orders = json.loads((CONTRACTS / "orders.json").read_text())
+    orders["x-source-table"] = source_table
+    (directory / f"{name}.json").write_text(json.dumps(orders))
+
+
+def run_cli_on(directory: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, str(SCRIPT), str(directory)], capture_output=True, text=True
+    )
+
+
+def test_contracts_directory_of_the_repo_is_the_seven_tables_reconcile_knows() -> None:
+    assert sorted(p.stem for p in CONTRACTS.glob("*.json")) == sorted(by_value.TABLES)
+    assert run_cli_on(CONTRACTS).returncode == 0
+
+
+@pytest.mark.parametrize(
+    ("change", "said"),
+    [
+        (lambda d: (d / "payments.json").unlink(), "missing: payments"),
+        (lambda d: add_contract(d, "refunds", "shop.refunds"), "unknown: refunds"),
+        (lambda d: add_contract(d, "orders_copy", "shop.orders"), "repeated: orders"),
+        (lambda d: add_contract(d, "broken", "orders"), "not schema.table"),
+    ],
+    ids=["missing", "unknown", "duplicate", "source-table-without-schema"],
+)
+def test_cli_refuses_a_contract_set_that_is_not_the_seven_tables(
+    tmp_path: Path, change: Any, said: str
+) -> None:
+    directory = contracts_copy(tmp_path)
+    change(directory)
+
+    result = run_cli_on(directory)
+
+    assert result.returncode == 2
+    # One line that says what is wrong and which tables, not a traceback.
+    assert len(result.stderr.splitlines()) == 1, result.stderr
+    assert said in result.stderr
+    assert "Traceback" not in result.stderr
+    # Not one line of a partial reconcile: a caller that reads stdout must not see 6 tables.
+    assert result.stdout == ""
+
+
+def test_reconcile_exits_2_before_any_query_when_a_contract_is_missing(tmp_path: Path) -> None:
+    # `reconcile` in lib.sh: 6 lines and status 0 was what a deleted contract used to give.
+    root = tmp_path / "root"
+    (root / "scripts" / "chaos").mkdir(parents=True)
+    shutil.copy(REPO / "scripts" / "chaos" / "lib.sh", root / "scripts" / "chaos" / "lib.sh")
+    (root / "scripts" / "reconcile_sql.py").symlink_to(SCRIPT)
+    shutil.copytree(CONTRACTS, root / "contracts" / "silver")
+    (root / "contracts" / "silver" / "payments.json").unlink()
+    (root / ".env").write_text("OLTP_USER=user\nOLTP_DB=db\n")
+    calls = tmp_path / "calls"
+    calls.touch()
+    script = (
+        f'. "{root}/scripts/chaos/lib.sh"\n'
+        'psql_value() { echo "postgres $1" >>"$CALLS"; echo "5 same"; }\n'
+        'trino_value() { echo "trino $1" >>"$CALLS"; echo "5 same"; }\n'
+        "reconcile\n"
+    )
+
+    result = subprocess.run(
+        ["bash", "-c", script],
+        capture_output=True,
+        text=True,
+        env={"PATH": os.environ["PATH"], "CALLS": str(calls)},
+    )
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "payments" in result.stderr
+    assert result.stdout == ""
+    assert calls.read_text() == ""

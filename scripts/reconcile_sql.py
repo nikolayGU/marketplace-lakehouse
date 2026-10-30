@@ -93,11 +93,38 @@ def _concat(parts: list[str]) -> str:
     return f"concat_ws(':', {', '.join(parts)})"
 
 
+def load_contracts(contracts_dir: Path) -> list[dict[str, Any]]:
+    """Every contract in the directory, only if they are exactly one per table reconcile.py knows.
+
+    A deleted contract would otherwise shrink the comparison to six tables and still exit 0.
+    """
+    contracts = [json.loads(path.read_text()) for path in sorted(contracts_dir.glob("*.json"))]
+    found = [_source_table(contract)[1] for contract in contracts]
+    missing = sorted(set(by_value.TABLES) - set(found))
+    unknown = sorted(set(found) - set(by_value.TABLES))
+    repeated = sorted({table for table in found if found.count(table) > 1})
+    problems = [
+        f"{what}: {', '.join(tables)}"
+        for what, tables in (("missing", missing), ("unknown", unknown), ("repeated", repeated))
+        if tables
+    ]
+    if problems:
+        raise ValueError(
+            f"{contracts_dir} does not hold one contract for each of the {len(by_value.TABLES)} "
+            f"tables ({'; '.join(problems)})"
+        )
+    return contracts
+
+
 def main() -> None:
-    contracts_dir = Path(sys.argv[1])
-    for path in sorted(contracts_dir.glob("*.json")):
-        contract = json.loads(path.read_text())
-        print("\t".join((*queries(contract), *value_queries(contract))))
+    try:
+        contracts = load_contracts(Path(sys.argv[1]))
+    except ValueError as error:
+        # Status 2 like a failed query in `reconcile` (lib.sh): no comparison happened.
+        print(f"reconcile_sql.py: {error}", file=sys.stderr)
+        raise SystemExit(2) from None
+    lines = ["\t".join((*queries(contract), *value_queries(contract))) for contract in contracts]
+    print("\n".join(lines))
 
 
 if __name__ == "__main__":
