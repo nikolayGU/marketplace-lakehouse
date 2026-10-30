@@ -140,7 +140,8 @@ only the catalog row. On Lakekeeper both delete the files: Lakekeeper reads a RE
 `purgeRequested` as a purge, while the Iceberg REST spec defaults it to `false`. `unregister_table`
 or a plain REST `DELETE` looks like the safe way to undo a registration, and the registered tables
 share their files with the JDBC catalog. Hence a "what deletes files" table in OPERATIONS, and a
-matching item in the blast-radius list of `CLAUDE.md`, which the owner reviews with the cutover.
+matching item in the blast-radius list (then in `CLAUDE.md`, now in `AGENTS.md`), which the owner
+reviews with the cutover.
 
 (e) Cutover. Full cutover of Spark and Trino to Lakekeeper, behind two gates: a green side by side
 check (below) and the owner's approval of a cutover runbook. Side by side is a check, not an end
@@ -225,7 +226,7 @@ What changes with Lakekeeper as the live catalog:
   spec's default `false` (d), now applies to every engine: any `DROP TABLE` from Spark, Trino or
   dbt deletes files. Soft delete keeps them 7 days, except after Spark `DROP ... PURGE`, and
   protection makes Lakekeeper refuse the drop with 409 on the 9 bronze and silver tables; `demo`
-  and the coming `gold` stay unprotected. The blast-radius list in `CLAUDE.md` now names these
+  and the coming `gold` stay unprotected. The blast-radius list (now in `AGENTS.md`) names these
   drops, `unregister_table`, a REST `DELETE`, removing protection, `force=true`, a new delete
   profile, and deleting a warehouse or a namespace recursively.
 - Two schemes for good (a): the 9 registered tables on `s3a://`, every table Lakekeeper creates on

@@ -1,6 +1,6 @@
 # Правила агентов
 
-Версия 1.2, 29.10.2026 (1.1 от 17.10.2026; 1.0 от 19.09.2026 жила в `CLAUDE.md`). Полный свод правил для любого агента (Claude Code, Codex, Cursor). Карта и правила, которые действуют всегда, в `AGENTS.md` в корне; при расхождении главнее `AGENTS.md`.
+Версия 1.3, 30.10.2026 (1.2 от 29.10.2026; 1.1 от 17.10.2026; 1.0 от 19.09.2026 жила в `CLAUDE.md`). Полный свод правил для любого агента (Claude Code, Codex, Cursor). Карта и правила, которые действуют всегда, в `AGENTS.md` в корне; при расхождении главнее `AGENTS.md`.
 
 ## Что за проект
 
@@ -8,11 +8,10 @@ Marketplace Lakehouse (mini): учебная, но production-like Data Platform
 
 ## Порядок чтения перед любой задачей
 
-1. `docs/HANDOFF.md`: текущее состояние и следующий шаг; `docs/NEXT_SESSION.md`: стартовый промпт текущего блока.
-2. `docs/planning/00-mini-architecture-review.md`: архитектура и обоснования, приоритет над любыми другими описаниями.
-3. Спека и план текущего блока: по ссылкам из `docs/NEXT_SESSION.md`, как в `AGENTS.md` («Читать первым»). `docs/planning/01-roadmap.md` хранит историю задач `W<n>-T<nn>` с DoD.
-4. `DECISIONS.md`: принятые ADR. Код, противоречащий ADR, не пишется, сначала новый ADR.
-5. `OPERATIONS.md`: профили, порты, что можно запускать одновременно.
+Порядок один: `AGENTS.md`, «Читать первым». Текущая архитектура в `ARCHITECTURE.md`, решения в
+`DECISIONS.md`; `docs/planning/00-mini-architecture-review.md` хранит обоснования 19.09 и не главнее
+их. `docs/planning/01-roadmap.md` хранит историю задач `W<n>-T<nn>` с DoD; статус каждой спеки и
+плана: `docs/planning/README.md`.
 
 Сначала изучить архитектуру и существующий код, потом менять.
 
@@ -42,7 +41,7 @@ Marketplace Lakehouse (mini): учебная, но production-like Data Platform
 
 ## Правила compose и инфраструктуры
 
-Каждый сервис в `docker/compose.yaml` имеет: `profiles`, `healthcheck` с реальной проверкой, `restart: unless-stopped`, `logging: *logging`, `deploy.resources.limits.memory`, для JVM явный `-Xmx` через env, `depends_on` с `condition: service_healthy`, порты только на `127.0.0.1`. Образы закреплены тегом, не `latest`.
+Каждый долгоживущий сервис в `docker/compose.yaml` имеет: `profiles`, `healthcheck` с реальной проверкой, `restart: unless-stopped`, `logging: *logging`, `deploy.resources.limits.memory`, для JVM явный `-Xmx` через env, `depends_on` с `condition: service_healthy`, порты только на `${BIND_IP:?...}` (`127.0.0.1`). Разовые задачи: `restart: "no"`, без healthcheck. Исключения перечислены в `ARCHITECTURE.md`, «Resource model». Образы закреплены тегом, не `latest`.
 
 ## Правила безопасности
 
@@ -55,7 +54,7 @@ Marketplace Lakehouse (mini): учебная, но production-like Data Platform
 ## Правила коммитов
 
 - Формат: `<область>: <что сделано>`. Области: `oltp`, `cdc`, `stream`, `lake`, `dbt`, `orchestrate`, `obs`, `ci`, `docs`, `infra`.
-- Коммит только после явного «ок» владельца на diff и гейта `guard.py`: полный `make verify`, при изменённом коде ещё `make check` и вердикт `reviewer` (`docs/planning/13-harness.md`, раздел 5). Никогда `git push`, `git commit --amend` чужого коммита, `git reset --hard`.
+- Коммит только после явного «ок» владельца на diff и гейта `guard.py`: полный `make verify`, при изменённом коде ещё `make check` и вердикт `reviewer` (`docs/planning/13-harness.md`, раздел 5). `git push`, `git commit --amend` чужого коммита, `git reset --hard`: только по отдельному «ок» владельца (`AGENTS.md`, «Жёсткие запреты»).
 
 ## Understanding-гейты
 
@@ -66,7 +65,7 @@ Marketplace Lakehouse (mini): учебная, но production-like Data Platform
 - Общение с владельцем и `docs/planning/` на русском. Код, README, `ARCHITECTURE.md`, `OPERATIONS.md`, `DECISIONS.md`, `LEARNING.md`, docstring, имена файлов, сервисов, топиков, таблиц на английском.
 - Без длинного тире (em dash, en dash) нигде: запятая, двоеточие, точка или слово «это».
 - Без канцелярита и без формулировок «важно отметить», «данный», «в рамках». Коротко, как staff-инженер коллеге.
-- В репо нет имён владельца, названий работодателей, упоминаний, что текст писал AI.
+- В репо нет имён владельца и названий работодателей. Что проект строили агенты, публичные документы говорят только в разделе «How it was built» в `docs/evidence.md` и одной строкой README (W6-D15, `AGENTS.md`, «Язык и стиль»).
 
 ## Плагины агента
 

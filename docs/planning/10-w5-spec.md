@@ -1,5 +1,7 @@
 # 10. Спека: неделя 5, stateful job, CI, сверка значений, обслуживание Iceberg
 
+> Статус: закрыт, неделя 5 закрыта 23.10.2026, W5-T05b закрыта 29.10.2026 по спеке 14; решения W5-D* действуют. Исторический документ: не исполнять как задачу. Действующие правила: `AGENTS.md`; бэклог: `docs/planning/14-closeout-spec.md`; индекс: `docs/planning/README.md`.
+
 Версия 0.1, 23.10.2026. Решения раздела 2 приняты исполнителем 23.10 (владелец делегировал исполнение недели, «делай все сам»; решения W5-D1..D15 он увидит в диффе и в ADR-024 и ADR-025). Формат по `06-spec-standard.md`, структура как у `09-w4-spec.md`. Исходные задачи в `01-roadmap.md` (неделя 5 и список «Спека недели 5 обязана закрыть»), архитектура в `00-mini-architecture-review.md` (§6 RAM, §8 сценарии). Сверено 23.10: код `streaming/spark_jobs/*`, `airflow/dags/*`, `docker/compose.yaml`, `Makefile`, `.github/workflows/ci.yml`, `scripts/chaos/lib.sh`, живой стек (read-only запросы Trino, листинг MinIO, `gh api`), документация Spark 3.5.6, Iceberg (latest), Trino (current), docker/build-push-action, hadolint (context7), `pyspark==3.5.9` из `.venv`. Что не проверено, помечено «не проверено» с командой проверки или оформлено шагом «проверить первым».
 
 ## 1. Цель и границы

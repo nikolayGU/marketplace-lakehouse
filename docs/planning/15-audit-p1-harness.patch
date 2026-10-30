@@ -1,0 +1,941 @@
+diff --git a/.claude/hooks/guard.py b/.claude/hooks/guard.py
+index b66418a..01bd4d0 100644
+--- a/.claude/hooks/guard.py
++++ b/.claude/hooks/guard.py
+@@ -15,13 +15,19 @@ and docs/), also `make check` (.check-stamp) and a reviewer verdict other than "
+ Markdown and docs/ changed since it.
+ ask (a permission prompt, so the owner's ok is a click): replay and scenarios, source, silver and
+ other lake writes, Iceberg maintenance and its DAGs, push, rebase, history rewrites, discarded work,
+-volume, image and recursive deletes, stopped, removed or recreated containers (not the scheduler
+-stop of the verify cycle), Kafka topic settings, connector, catalog and Postgres settings, DDL,
+-actions on GitHub, Windows and WSL settings, edits of the agent roles, skills and rules and of
+-scripts/agent_state.py, which decides what a stamp means.
++volume, image and recursive deletes, stopped, removed or recreated containers (`make down` as well;
++not the scheduler stop of the verify cycle), Kafka topic settings, connector, catalog and Postgres
++settings, DDL, actions on GitHub, Windows and WSL settings, edits of the agent roles, skills and
++rules and of scripts/agent_state.py, which decides what a stamp means; and a command that shows a
++secret: a read of .env (cat, grep, jq, source, a `<` redirect, `$(<.env)`, inline Python and the
++like; not .env.example and not `--env-file .env`), `docker compose config` without -q or a listing
++flag (--services, --profiles, --images, --volumes), `docker inspect` without a --format or with one
++that prints Env or the whole object (`json`, a lone dot, `.Config` with no field), and `env` or
++`printenv` run by `docker exec` or `compose exec|run`, or a read of /proc/<pid>/environ.
+ The match is on the command text. A command made only of searches and reads (grep, rg, git log,
+-cat and the like, no substitution or redirect) runs none of these words and passes. If the guard
+-itself fails, it asks instead of letting the call through.
++cat and the like, no substitution or redirect) runs none of these words and passes, except that
++the secret check runs before that exit. If the guard itself fails, it asks instead of letting the
++call through.
+ """
+
+ import json
+@@ -215,9 +221,11 @@ ASK = [
+         "stops or removes stack containers (the scheduler stop of the verify cycle is free)",
+     ),
+     # A changed image recreates spark-bronze, and its start sets the bronze metadata property.
++    # `make down` runs `compose down`, which the rule above asks for by its own words.
+     (
+-        re.compile(r"\bmake\b[^;&|\n]*\s(start|up)(\s|$)|\bcompose\b[^\n;&|]*\sup(\s|$)"),
+-        "may recreate spark-bronze or minio (ADR-025 bronze metadata property, MinIO image)",
++        re.compile(r"\bmake\b[^;&|\n]*\s(start|up|down)(\s|$)|\bcompose\b[^\n;&|]*\sup(\s|$)"),
++        "make start and up may recreate spark-bronze or minio (ADR-025 bronze metadata property,"
++        " MinIO image), make down removes the stack containers",
+     ),
+     (
+         re.compile(
+@@ -289,6 +297,81 @@ RUNS_MORE = re.compile(r"\$[(\x27\"]|`|<\(|\n")
+ # program; git log and diff --output write a file.
+ RUNS_PROGRAM = re.compile(r"--pre|--hostname-bin|--op|--output|-[a-zA-Z]*O")
+
++# Showing a secret: a read of .env, the compose file with the values of .env filled in, the Env of
++# a container. Checked on the words of each command: `--env-file .env` hands the file to compose
++# and `grep .env docs` only searches for the name, neither shows what is in it.
++ENV_FILE = re.compile(r"(^|/)\.env(\.(?!example$)[^/]*)?$")
++ENV_TEXT = re.compile(r"(?:^|[\s\"'=/(])\.env(?:\.(?!example\b)\w+)?(?![\w.-])")
++# `--env-file .env` hands the file to compose; the command does not read it.
++ENV_FILE_OPTION = re.compile(r"--env-file[=\s]+\S+")
++INLINE_CODE = re.compile(
++    r"\b(python[\d.]*|perl|ruby|node)\b[^\n;|&]*(\s-[a-zA-Z]*[ce]\b|<<|\s-(\s|$))"
++)
++# The text of $(...) and of a backtick pair, which a quoted word hides from the word split.
++SUBSTITUTION = re.compile(r"\$\(([^()]*)\)|`([^`]*)`")
++PROC_ENVIRON = re.compile(r"/proc/[^\s/]+/environ")
++# Commands that print a file, search it, edit it, or copy it somewhere a later read can reach.
++SECRET_READERS = re.compile(
++    r"cat|tac|nl|head|tail|less|more|most|cut|sort|uniq|paste|column|fold|rev|grep|egrep|fgrep"
++    r"|rg|ag|awk|gawk|mawk|sed|jq|yq|diff|cmp|comm|strings|od|xxd|hexdump|base64|bat|batcat|view"
++    r"|vi|vim|nvim|nano|emacs|source|\.|cp|mv|rsync|tar|zip"
++)
++# The first word after these is the pattern or script, not a file.
++PATTERN_FIRST = {"grep", "egrep", "fgrep", "rg", "ag", "awk", "gawk", "mawk", "sed", "jq", "yq"}
++SHELLS = {"bash", "sh", "zsh", "dash", "ksh"}
++# Words that run the next command, and keywords that start one.
++WRAPPERS = {"sudo", "env", "time", "command", "exec", "nohup", "nice", "xargs"}
++KEYWORDS = {"{", "!", "if", "then", "else", "elif", "do", "while", "until"}
++ASSIGNMENT = re.compile(r"[A-Za-z_]\w*=")
++DOCKER_VALUE_OPTIONS = {"--config", "--context", "-c", "-H", "--host", "-l", "--log-level"}
++COMPOSE_VALUE_OPTIONS = {
++    "-f",
++    "--file",
++    "-p",
++    "--project-name",
++    "--profile",
++    "--env-file",
++    "--project-directory",
++    "--ansi",
++    "--parallel",
++    "--progress",
++    "--context",
++    "-c",
++    "-H",
++    "--host",
++}
++CONFIG_LISTINGS = {"-q", "--quiet", "--services", "--profiles", "--images", "--volumes"}
++# Options of `exec` and `run` that take a value, so that the word after them is not the container.
++EXEC_VALUE_OPTIONS = {
++    "-e",
++    "--env",
++    "-u",
++    "--user",
++    "-w",
++    "--workdir",
++    "--index",
++    "--detach-keys",
++    "--entrypoint",
++    "-v",
++    "--volume",
++    "-p",
++    "--publish",
++    "--name",
++    "-l",
++    "--label",
++}
++# In an action of a docker inspect format: the whole object (a lone dot) or .Config with no field.
++WHOLE_OBJECT = re.compile(r"(?<![\w.])\.(?![\w.])|(?<!\w)\.Config(?![\w.])")
++SECRET_ENV = "reads .env, which holds every password of the stack (a secret)"
++SECRET_ENVIRON = "prints the environment of a process or container, with its passwords (a secret)"
++SECRET_CONFIG = (
++    "docker compose config prints the passwords of .env (a secret); -q or --services is enough"
++)
++SECRET_INSPECT = (
++    "docker inspect prints the Env of the container with its passwords (a secret);"
++    " use --format with fields other than Env"
++)
++
+
+ def deny(reason: str, fix: str = "ask the owner for an explicit ok") -> None:
+     print(f"blocked by .claude/hooks/guard.py: {reason}; {fix}", file=sys.stderr)
+@@ -331,6 +414,175 @@ def reads_only(command: str) -> bool:
+     )
+
+
++def shell_words(command: str) -> tuple[list[list[str]], list[str]] | None:
++    """The words of each simple command in the text, and the files a `<` redirect reads. A
++    separator, a subshell, a substitution, a backtick or a newline starts a new command. None when
++    the quotes do not balance."""
++    lexer = shlex.shlex(
++        command.replace("\n", " ; ").replace("`", " ( "), posix=True, punctuation_chars=True
++    )
++    lexer.whitespace_split = True
++    lexer.commenters = ""  # bash reads `#` inside a word as text, shlex as a comment
++    try:
++        tokens = list(lexer)
++    except ValueError:
++        return None
++    segments: list[list[str]] = [[]]
++    stdin_files: list[str] = []
++    redirect = ""
++    for token in tokens:
++        if redirect:  # the word after a redirect operator is its target, not an argument
++            if redirect == "<":
++                stdin_files.append(token)
++            redirect = ""
++        elif token and set(token) <= set("();<>|&"):  # an operator; a quoted `f(x)` is a word
++            if set(token) <= set("<>&") and set(token) & set("<>"):
++                redirect = token
++            else:
++                segments.append([])
++        else:
++            segments[-1].append(token)
++    return segments, stdin_files
++
++
++def subcommand(args: list[str], value_options: set[str]) -> int | None:
++    """Index of the first word that is not an option or the value of one."""
++    skip = False
++    for at, arg in enumerate(args):
++        if skip:
++            skip = False
++        elif arg in value_options:
++            skip = True
++        elif not arg.startswith("-"):
++            return at
++    return None
++
++
++def format_prints_env(text: str) -> bool:
++    """A docker inspect format that prints Env, or the whole object or its Config, which hold it:
++    `json` (the shortcut for the whole object), a lone dot, `.Config` with no field after it."""
++    if text.strip() == "json" or re.search(r"\bEnv\b", text):
++        return True
++    return any(WHOLE_OBJECT.search(action) for action in re.findall(r"\{\{(.*?)\}\}", text))
++
++
++def inspect_prints_env(options: list[str]) -> bool:
++    """`docker inspect` options: no --format, or one that prints Env or the whole object."""
++    formats = []
++    for at, option in enumerate(options):
++        if option in ("-f", "--format") and at + 1 < len(options):
++            formats.append(options[at + 1])
++        elif option.startswith("--format="):
++            formats.append(option.removeprefix("--format="))
++        elif option.startswith("-f") and not option.startswith("--"):
++            formats.append(option[2:])
++    return not formats or any(format_prints_env(text) for text in formats)
++
++
++def prints_environment(words: list[str]) -> bool:
++    """The command given to a container prints its environment: printenv, env with no command to
++    run, or a shell script that does either."""
++    if not words:
++        return False
++    name, args = words[0], words[1:]
++    if name == "printenv":
++        return True
++    if name == "env":
++        return not [arg for arg in args if not arg.startswith("-") and "=" not in arg]
++    script = next(
++        (at for at, arg in enumerate(args[:-1]) if re.fullmatch(r"-[a-zA-Z]*c", arg)), None
++    )
++    if name in SHELLS and script is not None:
++        return bool(
++            re.search(r"(?:^|[;&|(]\s*)(?:printenv\b|env\s*(?:$|[;&|)]))", args[script + 1])
++        )
++    return False
++
++
++def exec_prints_environment(args: list[str]) -> bool:
++    """The words after `exec` or `run`: options, the container or service, then its command."""
++    at = subcommand(args, EXEC_VALUE_OPTIONS)
++    return at is not None and prints_environment(args[at + 1 :])
++
++
++def secret_in_segment(words: list[str]) -> str | None:
++    wrapped = False
++    while words:
++        word = words[0]
++        if word in WRAPPERS:
++            wrapped = True
++        elif not (word in KEYWORDS or ASSIGNMENT.match(word) or (wrapped and word[:1] == "-")):
++            break
++        del words[0]
++    if not words:
++        return None
++    name, args = words[0], words[1:]
++    script = next(
++        (at for at, arg in enumerate(args[:-1]) if re.fullmatch(r"-[a-zA-Z]*c", arg)), None
++    )
++    if name in SHELLS and script is not None:
++        return secret_shown(args[script + 1])
++    if name == "eval":
++        return secret_shown(" ".join(args))
++    if SECRET_READERS.fullmatch(name):
++        files = [arg for arg in args if not arg.startswith("-")]
++        if name in PATTERN_FIRST and not any(arg in ("-f", "--file") for arg in args):
++            files = files[1:]
++        return SECRET_ENV if any(ENV_FILE.search(file) for file in files) else None
++    if name in ("docker-compose", "$COMPOSE", "${COMPOSE}"):
++        return compose_secret(args)
++    if name == "docker":
++        at = subcommand(args, DOCKER_VALUE_OPTIONS)
++        if at is None:
++            return None
++        sub, rest = args[at], args[at + 1 :]
++        if sub == "container" and rest[:1] == ["inspect"]:
++            sub, rest = "inspect", rest[1:]
++        if sub == "compose":
++            return compose_secret(rest)
++        if sub == "inspect" and inspect_prints_env(rest):
++            return SECRET_INSPECT
++        if sub == "exec" and exec_prints_environment(rest):
++            return SECRET_ENVIRON
++    return None
++
++
++def compose_secret(args: list[str]) -> str | None:
++    at = subcommand(args, COMPOSE_VALUE_OPTIONS)
++    if at is None:
++        return None
++    sub, rest = args[at], args[at + 1 :]
++    if sub in ("config", "convert"):
++        return None if CONFIG_LISTINGS & set(rest) else SECRET_CONFIG
++    if sub in ("exec", "run") and exec_prints_environment(rest):
++        return SECRET_ENVIRON
++    return None
++
++
++def secret_shown(command: str) -> str | None:
++    """Why the command shows a secret (the reason for the owner), None when it does not."""
++    if PROC_ENVIRON.search(command):
++        return SECRET_ENVIRON
++    text = ENV_FILE_OPTION.sub(" ", command)
++    if INLINE_CODE.search(text) and ENV_TEXT.search(text):
++        return SECRET_ENV
++    for found in SUBSTITUTION.finditer(command):
++        reason = secret_shown(found[1] or found[2] or "")
++        if reason:
++            return reason
++    parsed = shell_words(command)
++    if parsed is None:
++        return SECRET_ENV if ENV_TEXT.search(text) else None
++    segments, stdin_files = parsed
++    if any(ENV_FILE.search(file) for file in stdin_files):
++        return SECRET_ENV
++    for segment in segments:
++        reason = secret_in_segment(segment)
++        if reason:
++            return reason
++    return None
++
++
+ def commit_gap(low: str) -> list[str]:
+     """What a `git commit` still lacks on this working tree, empty when it may go ahead: a full
+     verify always, and for changed code also a check and a reviewer verdict that is not `return`."""
+@@ -346,7 +598,9 @@ def commit_gap(low: str) -> list[str]:
+     current = tree_hash(ROOT)
+
+     def covers(stamp: Stamp | None) -> bool:
+-        # Markdown and docs/ edited after the stamp need no new one, as in stop_gate.py.
++        # The commit gate is more lenient than stop_gate.py, which wants a verify stamp that is
++        # exactly fresh whenever code changed: here a stamp also covers a tree that differs from
++        # the stamped one only in Markdown and docs/.
+         if stamp is None:
+             return False
+         try:
+@@ -406,6 +660,10 @@ def check(event: dict[str, Any]) -> None:
+         return
+     command = args.get("command", "")
+     if reads_only(command):
++        # The one read that is not free: its words are data, but the file it opens is a secret.
++        secret = secret_shown(command)
++        if secret:
++            ask(secret)
+         return
+     low = command.lower()
+     if FORCE_PUSH.search(low):
+@@ -445,6 +703,9 @@ def check(event: dict[str, Any]) -> None:
+             )
+     if SHELL_WRITE_RULES.search(command):
+         ask("edits the agent roles or rules")
++    secret = secret_shown(command)
++    if secret:
++        ask(secret)
+     for pattern, reason in ASK:
+         if pattern.search(low):
+             ask(reason)
+diff --git a/.claude/hooks/session_context.py b/.claude/hooks/session_context.py
+index 9e36192..0edb5d1 100644
+--- a/.claude/hooks/session_context.py
++++ b/.claude/hooks/session_context.py
+@@ -1,8 +1,8 @@
+ #!/usr/bin/env python3
+ """SessionStart hook: the facts a session starts from, so it does not depend on the agent reading
+ them first. Git state, the verify stamp, the current state section of docs/HANDOFF.md, the goal
+-in docs/NEXT_SESSION.md and the running containers. Reads only; a missing piece is reported as
+-such, never fatal."""
++in docs/NEXT_SESSION.md, the running containers and the ones that should run but do not. Reads
++only; a missing piece is reported as such, never fatal."""
+
+ import json
+ import os
+@@ -14,6 +14,10 @@ ROOT = Path(os.environ.get("CLAUDE_PROJECT_DIR") or Path(__file__).resolve().par
+ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+ from scripts.agent_state import describe_stamp  # noqa: E402
+
++COMPOSE_PROJECT = os.environ.get("COMPOSE_PROJECT_NAME") or "lakehouse"
++# Docker brings these back after a daemon restart, unless they were stopped by hand.
++RESTARTED = ("unless-stopped", "always")
++
+
+ def run(*cmd: str) -> str:
+     try:
+@@ -23,6 +27,57 @@ def run(*cmd: str) -> str:
+     return result.stdout.rstrip() if result.returncode == 0 else "unavailable"
+
+
++def docker_lines(*args: str) -> list[str] | None:
++    """The lines `docker <args>` prints, None when docker is missing, stuck or fails."""
++    try:
++        result = subprocess.run(
++            ("docker", *args), cwd=ROOT, capture_output=True, text=True, timeout=10
++        )
++    except (OSError, subprocess.TimeoutExpired):
++        return None
++    return result.stdout.splitlines() if result.returncode == 0 else None
++
++
++def stopped_containers() -> list[str]:
++    """One line per stopped container of the stack that a restart policy should have kept up
++    (27.10 and 30.10: prometheus stayed in Exited (255) after a Docker restart and nobody saw
++    it). Run-once jobs have restart `no` and are left out."""
++    ids = docker_lines(
++        "ps",
++        "-a",
++        "--filter",
++        f"label=com.docker.compose.project={COMPOSE_PROJECT}",
++        "--filter",
++        "status=exited",
++        "--filter",
++        "status=dead",
++        "--filter",
++        "status=created",
++        "--format",
++        "{{.ID}}",
++    )
++    if not ids:
++        return []
++    rows = docker_lines(
++        "inspect",
++        "--format",
++        "{{.Name}} {{.HostConfig.RestartPolicy.Name}} {{.State.Status}} {{.State.ExitCode}}",
++        *ids,
++    )
++    lines = []
++    for row in rows or []:
++        parts = row.split()
++        if len(parts) != 4 or parts[1] not in RESTARTED:
++            continue
++        name, policy, state, code = parts
++        name = name.removeprefix("/")
++        lines.append(
++            f"{name}: {state} ({code}), {policy} did not bring it back; "
++            f"docker start {name} only with the owner's ok"
++        )
++    return lines
++
++
+ def handoff_state() -> str:
+     path = ROOT / "docs" / "HANDOFF.md"
+     if not path.exists():
+@@ -58,6 +113,21 @@ def stamp_line() -> str:
+         return f"unreadable ({error.__class__.__name__})"
+
+
++def containers_section() -> str:
++    running = run("docker", "ps", "--format", "{{.Names}} {{.Status}}") or "none"
++    if running.startswith("unavailable"):  # no point in asking a docker that does not answer
++        return running
++    try:
++        stopped = stopped_containers()
++    except Exception as error:  # a surprise from docker must not block the session start
++        stopped = [f"stopped containers unreadable ({error.__class__.__name__})"]
++    if not stopped:
++        return running
++    return (
++        running + "\n\nNot running, restart policy unless-stopped or always:\n" + "\n".join(stopped)
++    )
++
++
+ status = run("git", "status", "--short")
+ context = "\n\n".join(
+     [
+@@ -67,7 +137,7 @@ context = "\n\n".join(
+         "Verify stamp: " + stamp_line(),
+         "HANDOFF:\n" + handoff_state(),
+         "NEXT_SESSION:\n" + next_session_goal(),
+-        "Containers:\n" + (run("docker", "ps", "--format", "{{.Names}} {{.Status}}") or "none"),
++        "Containers:\n" + containers_section(),
+     ]
+ )
+ output = {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": context}}
+diff --git a/.claude/settings.json b/.claude/settings.json
+index 023b6a6..2fb9739 100644
+--- a/.claude/settings.json
++++ b/.claude/settings.json
+@@ -15,7 +15,14 @@
+     "claude-md-management@claude-plugins-official": true
+   },
+   "permissions": {
+-    "deny": ["Edit(.env)", "Edit(**/*.pem)", "Edit(**/*.key)"]
++    "deny": [
++      "Edit(.env)",
++      "Edit(**/*.pem)",
++      "Edit(**/*.key)",
++      "Read(./.env)",
++      "Read(**/*.pem)",
++      "Read(**/*.key)"
++    ]
+   },
+   "hooks": {
+     "PreToolUse": [
+diff --git a/scripts/agent_state.py b/scripts/agent_state.py
+index 08f9b63..f45b943 100644
+--- a/scripts/agent_state.py
++++ b/scripts/agent_state.py
+@@ -68,15 +68,21 @@ def _phrases(values: Iterable[str]) -> str:
+     )
+
+
+-def _field(name: str, values: str) -> tuple[re.Pattern[str], re.Pattern[str]]:
++def _field(name: str, values: str, tail: str = r"\b.*") -> tuple[re.Pattern[str], re.Pattern[str]]:
+     """The head of a report line (`<name>:` after markup) and the whole line with a valid value."""
+     head = rf"{_MARKUP}{name}{_MARKUP}:"
+-    line = rf"{head}{_MARKUP}({values})\b(.*)"
++    line = rf"{head}{_MARKUP}({values})({tail})"
+     return re.compile(head, re.IGNORECASE), re.compile(line, re.IGNORECASE)
+
+
++# After a verdict only the end of the line, spaces, a full stop, Markdown marks and one remark in
++# parentheses may follow, so "принять нельзя, вернуть" is no accept. A line that goes on is garbled,
++# and so is a remark with a word that takes the verdict back: "принять (нельзя, вернуть)".
++_TAKES_BACK = r"верн|нельзя|\bне\b|\bнет\b|отклон|отказ"  # noqa: RUF001
++_VERDICT_TAIL = rf"(?![^\W_])[\s.*_`]*(?:\((?![^()|]*(?:{_TAKES_BACK}))[^()|]*\)[\s.*_`]*)?$"
++
+ _FIELDS = {
+-    "verdict": _field("вердикт", _phrases(VERDICTS)),
++    "verdict": _field("вердикт", _phrases(VERDICTS), _VERDICT_TAIL),
+     "subject": _field("предмет", _phrases(SUBJECTS)),
+     "tree": _field("дерево", r"[0-9a-f]{64}|[0-9a-f]{40}"),
+ }
+diff --git a/tests/unit/test_agent_hooks.py b/tests/unit/test_agent_hooks.py
+index 43db2d0..36e99b7 100644
+--- a/tests/unit/test_agent_hooks.py
++++ b/tests/unit/test_agent_hooks.py
+@@ -1,5 +1,6 @@
+ import json
+ import os
++import shutil
+ import subprocess
+ import sys
+ from pathlib import Path
+@@ -307,6 +308,11 @@ def test_guard_denies_every_file_tool_on_a_gate_stamp(tool: str, name: str) -> N
+         "sed -i s/a/b/ scripts/agent_state.py",
+         "cp /tmp/x scripts/agent_state.py",
+         f"cat /tmp/x > {REPO}/scripts/agent_state.py",
++        # Stopping the stack by make is the same act as stopping it by compose.
++        "make down",
++        "make down PROFILE=tools",
++        "make down PROFILE=obs,query",
++        "PROFILE=bi make down",
+     ],
+ )
+ def test_guard_asks_the_owner(command: str) -> None:
+@@ -316,6 +322,176 @@ def test_guard_asks_the_owner(command: str) -> None:
+     assert "AGENTS.md hard rule" in result.stdout
+
+
++@pytest.mark.parametrize(
++    "command",
++    [
++        # A read of .env is a read of every password of the stack, even though it only reads.
++        "cat .env",
++        "cat ./.env",
++        f"cat {REPO}/.env",
++        "cat .env.local",
++        'cat "$PWD/.env"',
++        "less .env",
++        "more .env",
++        "head -5 .env",
++        "tail -n 3 .env",
++        "tac .env | head -2",
++        "grep REPLAY .env",
++        "grep -n PASSWORD ./.env",
++        "grep -f .env README.md",
++        "rg POSTGRES .env",
++        "awk -F= '{print $1}' .env",
++        "sed -n 1,5p .env",
++        "source .env",
++        ". .env",
++        "set -a; . ./.env; set +a",
++        "cat < .env",
++        "cat<.env",
++        "export $(cat .env | xargs)",
++        "echo `cat .env`",
++        "bash -c 'cat .env'",
++        "cd /tmp && cat .env",
++        "git status\ncat .env",
++        "diff .env .env.example",
++        "cp .env /tmp/copy",
++        "env X=1 cat .env",
++        "python3 -c \"print(open('.env').read())\"",
++        "uv run python -c \"from pathlib import Path; print(Path('.env').read_text())\"",
++        "python3 - <<'EOF'\nprint(open('.env').read())\nEOF",
++        # The compose file with the values of .env filled in, and the environment of a container.
++        "docker compose --env-file .env -f docker/compose.yaml config",
++        "docker compose --env-file .env -f docker/compose.yaml --profile '*' config",
++        "docker compose --env-file .env -f docker/compose.yaml --profile core config | head -20",
++        "$COMPOSE --profile core config",
++        "docker-compose -f docker/compose.yaml config",
++        "docker --context x compose -f docker/compose.yaml config",
++        "docker compose -f docker/compose.yaml config --format json",
++        "docker compose -f docker/compose.yaml config -o /tmp/resolved.yaml",
++        "docker compose -f docker/compose.yaml config --no-interpolate --format json",
++        "docker inspect lakehouse-postgres-oltp-1",
++        "docker container inspect lakehouse-postgres-oltp-1",
++        "docker inspect lakehouse-postgres-oltp-1 | jq '.[0].Config.Env'",
++        "docker inspect lakehouse-trino-1 -f '{{.Config.Env}}'",
++        "docker inspect --format '{{json .Config.Env}}' lakehouse-trino-1",
++        "docker inspect --format='{{range .Config.Env}}{{println .}}{{end}}' lakehouse-trino-1",
++        "docker inspect --format '{{json .}}' lakehouse-trino-1",
++        "docker inspect -f '{{json .Config}}' lakehouse-trino-1",
++        "docker inspect -f '{{.State.Status}}' a -f '{{.Config.Env}}' b",
++        # The whole object, which holds Config.Env, by the json shortcut or a pipe.
++        "docker inspect --format json lakehouse-trino-1",
++        "docker inspect --format=json lakehouse-trino-1",
++        "docker inspect -f json lakehouse-trino-1",
++        "docker inspect -f '{{.Config | json}}' lakehouse-trino-1",
++        "docker inspect -f '{{ . | json }}' lakehouse-trino-1",
++        "docker inspect -f '{{(index . 0).Config}}' lakehouse-trino-1",
++        # The first segment is a free cp; the read of .env after it is not. The command must come
++        # out as ask: a deny of the cp (a SHELL_WRITE_ENV that reaches over `&&`) is a wrong answer.
++        "cp .env.example /tmp/a && grep REPLAY .env",
++        # A quoted word with parentheses is an argument, not the start of another command.
++        "grep 'foo(' .env",
++        'grep "print(1)" ./.env',
++        "cat 'a (b)' .env",
++        # More ways to open .env, and to print the environment of a container.
++        "jq -R . .env",
++        "jq -Rr 'split(\"=\")[1]' ./.env",
++        "yq . .env",
++        'echo "$(<.env)"',
++        "echo $(<.env)",
++        'echo "$(cat .env)"',
++        'x="$(head -1 .env)"; echo "$x"',
++        'echo "`cat .env`"',
++        "docker exec lakehouse-postgres-oltp-1 env",
++        "docker exec lakehouse-postgres-oltp-1 printenv",
++        "docker exec -it lakehouse-postgres-oltp-1 printenv POSTGRES_PASSWORD",
++        "docker exec -e A=b lakehouse-postgres-oltp-1 env",
++        "docker exec lakehouse-postgres-oltp-1 sh -c env",
++        "docker exec lakehouse-postgres-oltp-1 cat /proc/1/environ",
++        "docker compose --env-file .env -f docker/compose.yaml exec postgres-oltp env",
++        "docker compose --env-file .env -f docker/compose.yaml exec -T trino printenv",
++        "docker compose --env-file .env -f docker/compose.yaml exec -T -u root kafka printenv",
++        "$COMPOSE exec -T kafka env",
++        "docker compose --env-file .env -f docker/compose.yaml run --rm spark-silver env",
++    ],
++)
++def test_guard_asks_before_a_command_shows_a_secret(command: str) -> None:
++    result = bash(command)
++
++    assert decision(result) == "ask"
++    assert "AGENTS.md hard rule" in result.stdout
++    assert "secret" in result.stdout
++
++
++@pytest.mark.parametrize(
++    "command",
++    [
++        # The example file holds no secret, and `--env-file .env` hands the file to compose.
++        "cat .env.example",
++        "head -5 .env.example",
++        "grep -n BIND_IP .env.example",
++        "sed -n 1,5p .env.example",
++        "cat < .env.example",
++        "diff .env.example /tmp/other",
++        "cp .env.example /tmp/a && grep REPLAY .env.example",
++        "cat docker/airflow/airflow.env",
++        "ls -la .env",
++        "git check-ignore .env",
++        # A pattern that names .env is not a file that is read.
++        "grep -rn '.env' docs",
++        'grep -rn "\\.env" docs',
++        "rg -n '.env' Makefile",
++        'echo "copy .env.example to .env"',
++        "docker compose --env-file .env -f docker/compose.yaml config -q",
++        "docker compose --env-file .env -f docker/compose.yaml --profile '*' config --quiet",
++        "$COMPOSE --profile '*' config -q",
++        "docker compose --env-file .env -f docker/compose.yaml config --services",
++        "docker compose --env-file .env -f docker/compose.yaml config --profiles",
++        "docker compose --env-file .env -f docker/compose.yaml config --images",
++        "docker compose --env-file .env -f docker/compose.yaml config --volumes",
++        "docker compose --env-file .env -f docker/compose.yaml --profile core ps",
++        "docker compose --env-file .env -f docker/compose.yaml logs --tail=50 config",
++        "docker inspect lakehouse-trino-1 -f '{{.State.Status}}'",
++        "docker inspect --format '{{.State.Health.Status}}' lakehouse-trino-1 lakehouse-kafka-1",
++        "docker inspect --format='{{.HostConfig.RestartPolicy.Name}}' lakehouse-trino-1",
++        "docker container inspect -f '{{.State.ExitCode}} {{.State.OOMKilled}}' lakehouse-trino-1",
++        "docker inspect -f '{{.Config.Image}}' lakehouse-trino-1",
++        "docker inspect -f '{{.HostConfig.RestartPolicy.Name}}' lakehouse-trino-1",
++        "docker inspect -f '{{json .State}}' lakehouse-trino-1",
++        "docker inspect -f '{{.Config.Labels | json}}' lakehouse-trino-1",
++        # `--env-file .env` hands the file to compose; it does not make the command read it.
++        "docker compose --env-file .env -f docker/compose.yaml exec -T airflow-scheduler "
++        "python -c 'print(1)'",
++        "docker compose --env-file=.env -f docker/compose.yaml exec -T airflow-scheduler "
++        "python -c 'print(1)'",
++        "docker compose --env-file .env -f docker/compose.yaml exec -T airflow-scheduler "
++        "airflow dags list",
++        # Running something in a container is not printing its environment.
++        "docker exec lakehouse-postgres-oltp-1 pg_isready",
++        "docker exec lakehouse-postgres-oltp-1 psql -c 'select 1'",
++        "docker exec lakehouse-postgres-oltp-1 env PGOPTIONS=x psql -c 'select 1'",
++        "docker compose --env-file .env -f docker/compose.yaml exec -T trino trino --version",
++        "make status",
++        "make downstream",
++        "grep down Makefile",
++        "make -n downgrade",
++    ],
++)
++def test_guard_lets_a_command_that_shows_no_secret_pass(command: str) -> None:
++    assert decision(bash(command)) == "allow"
++
++
++def test_a_secret_read_is_asked_before_the_early_exit_of_read_only_commands() -> None:
++    # cat is a reader and passes on its own words; .env is what makes the difference.
++    assert decision(bash("cat Makefile")) == "allow"
++    assert decision(bash("cat Makefile .env")) == "ask"
++    assert decision(bash("git log -1 && cat .env")) == "ask"
++
++
++def test_a_shell_write_to_env_is_still_denied_not_asked() -> None:
++    assert decision(bash("cp /tmp/x .env")) == "deny"
++    assert decision(bash("grep KEY f > .env")) == "deny"
++    assert decision(bash("sed -i s/a/b/ .env")) == "deny"
++
++
+ @pytest.mark.parametrize(
+     "command",
+     [
+@@ -327,7 +503,6 @@ def test_guard_asks_the_owner(command: str) -> None:
+         "git status && git log -1",
+         'psql -c "delete from cdc.debezium_signal where id = 1"',
+         "truncate -s 0 /tmp/x.log",
+-        "cp .env.example /tmp/a && grep REPLAY .env",
+         "rm /tmp/one-file",
+         'grep -rn "DROP TABLE" docs',
+         'grep -rnE "make silver|delete from shop.orders" docs 2>/dev/null | head -5',
+@@ -527,6 +702,153 @@ def test_session_context_survives_missing_docs(repo: Path) -> None:
+     assert "docs/HANDOFF.md is missing" in context
+
+
++def fake_docker(
++    bin_dir: Path, monkeypatch: pytest.MonkeyPatch, *, running: str, stopped: str, rows: str
++) -> None:
++    """A `docker` first on PATH: `ps` lists the running containers, `ps -a` the ids of the stopped
++    ones and `inspect` one row per id (name, restart policy, state, exit code). Every call is
++    appended to calls.txt next to it."""
++    bin_dir.mkdir()
++    for name, text in (("ps.txt", running), ("ps_all.txt", stopped), ("inspect.txt", rows)):
++        (bin_dir / name).write_text(text)
++    script = bin_dir / "docker"
++    script.write_text(
++        '#!/bin/sh\nd=$(dirname "$0")\necho "$*" >> "$d/calls.txt"\ncase "$1" in\n'
++        '  ps) case " $* " in *" -a "*) cat "$d/ps_all.txt";; *) cat "$d/ps.txt";; esac;;\n'
++        '  inspect) cat "$d/inspect.txt";;\n  *) exit 1;;\nesac\n'
++    )
++    script.chmod(0o755)
++    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
++
++
++def session_context(repo: Path) -> str:
++    result = hook("session_context.py", {"source": "startup"}, repo)
++    assert result.returncode == 0
++    return str(json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"])
++
++
++def test_session_context_names_a_stopped_container_that_should_run(
++    repo: Path, tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    # 27.10 and 30.10: prometheus stayed in Exited (255) after a Docker restart and nobody saw it.
++    fake_docker(
++        tmp_path_factory.mktemp("bin") / "bin",
++        monkeypatch,
++        running="lakehouse-kafka-1 Up 2 hours (healthy)\n",
++        stopped="aaa\nbbb\nccc\nddd\n",
++        rows=(
++            "/lakehouse-prometheus-1 unless-stopped exited 255\n"
++            "/lakehouse-minio-init-1 no exited 0\n"
++            "/lakehouse-grafana-1 always exited 137\n"
++            "/lakehouse-spark-silver-1 on-failure exited 1\n"
++        ),
++    )
++
++    context = session_context(repo)
++
++    assert "lakehouse-kafka-1 Up 2 hours (healthy)" in context
++    stopped = [line for line in context.splitlines() if "docker start" in line]
++    assert len(stopped) == 2
++    assert stopped[0].startswith("lakehouse-prometheus-1: exited (255)")
++    assert "unless-stopped did not bring it back" in stopped[0]
++    assert "docker start lakehouse-prometheus-1 only with the owner's ok" in stopped[0]
++    assert stopped[1].startswith("lakehouse-grafana-1: exited (137)") and "always" in stopped[1]
++    assert "minio-init" not in context and "spark-silver" not in context
++
++
++def test_session_context_has_no_stopped_line_when_everything_runs(
++    repo: Path, tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    fake_docker(
++        tmp_path_factory.mktemp("bin") / "bin",
++        monkeypatch,
++        running="lakehouse-kafka-1 Up 2 hours (healthy)\n",
++        stopped="",
++        rows="",
++    )
++
++    context = session_context(repo)
++
++    assert "lakehouse-kafka-1 Up 2 hours (healthy)" in context
++    assert "docker start" not in context and "Not running" not in context
++
++
++def test_session_context_asks_for_the_compose_project_of_the_environment(
++    repo: Path, tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    monkeypatch.delenv("COMPOSE_PROJECT_NAME", raising=False)
++    default = tmp_path_factory.mktemp("default") / "bin"
++    fake_docker(default, monkeypatch, running="", stopped="", rows="")
++    session_context(repo)
++    assert "label=com.docker.compose.project=lakehouse " in (default / "calls.txt").read_text()
++
++    monkeypatch.setenv("COMPOSE_PROJECT_NAME", "otherstack")
++    named = tmp_path_factory.mktemp("named") / "bin"
++    fake_docker(
++        named,
++        monkeypatch,
++        running="",
++        stopped="aaa\n",
++        rows="/otherstack-prometheus-1 unless-stopped exited 255\n",
++    )
++    context = session_context(repo)
++
++    calls = (named / "calls.txt").read_text()
++    assert "label=com.docker.compose.project=otherstack " in calls
++    assert "project=lakehouse" not in calls
++    assert "docker start otherstack-prometheus-1 only with the owner's ok" in context
++
++    monkeypatch.setenv("COMPOSE_PROJECT_NAME", "")
++    empty = tmp_path_factory.mktemp("empty") / "bin"
++    fake_docker(empty, monkeypatch, running="", stopped="", rows="")
++    session_context(repo)
++    assert "label=com.docker.compose.project=lakehouse " in (empty / "calls.txt").read_text()
++
++
++def test_session_context_inspects_nothing_when_the_project_has_no_containers(
++    repo: Path, tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    # `docker inspect` with no id is an error, and its output must never be read as a container.
++    bin_dir = tmp_path_factory.mktemp("none") / "bin"
++    fake_docker(
++        bin_dir,
++        monkeypatch,
++        running="",
++        stopped="",
++        rows="/lakehouse-ghost-1 always exited 255\n",
++    )
++
++    context = session_context(repo)
++
++    calls = (bin_dir / "calls.txt").read_text().splitlines()
++    assert not [call for call in calls if call.startswith("inspect")]
++    assert "ghost" not in context and "Not running" not in context and "docker start" not in context
++
++
++def test_session_context_survives_a_docker_that_fails_or_is_missing(
++    repo: Path, tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    broken = tmp_path_factory.mktemp("broken") / "bin"
++    fake_docker(broken, monkeypatch, running="", stopped="", rows="")
++    (broken / "docker").write_text("#!/bin/sh\nexit 1\n")
++    assert "docker start" not in session_context(repo)
++
++    # The listing works and the inspect after it fails.
++    half = tmp_path_factory.mktemp("half") / "bin"
++    fake_docker(half, monkeypatch, running="", stopped="", rows="")
++    (half / "docker").write_text('#!/bin/sh\ncase "$1" in ps) echo aaa;; *) exit 1;; esac\n')
++    context = session_context(repo)
++    assert "Containers:\naaa" in context and "docker start" not in context
++
++    # Nothing but git on PATH: no docker at all.
++    only_git = tmp_path_factory.mktemp("only-git")
++    (only_git / "git").symlink_to(shutil.which("git") or "git")
++    monkeypatch.setenv("PATH", str(only_git))
++    context = session_context(repo)
++
++    assert "Containers:" in context and "docker start" not in context
++
++
+ def test_commit_of_code_lists_every_step_of_the_gate_it_lacks(repo: Path) -> None:
+     (repo / "job.py").write_text("x = 2\n")
+
+@@ -824,6 +1146,17 @@ def test_the_review_hook_never_fails_the_session(
+     assert list(outside.iterdir()) == []
+
+
++def test_settings_deny_reading_the_secret_files_but_not_the_example() -> None:
++    deny = json.loads((REPO / ".claude" / "settings.json").read_text())["permissions"]["deny"]
++
++    assert {"Read(./.env)", "Read(**/*.pem)", "Read(**/*.key)"} <= set(deny)
++    assert {"Edit(.env)", "Edit(**/*.pem)", "Edit(**/*.key)"} <= set(deny)
++    # A rule such as Read(./.env*) would also close .env.example, which holds no secret.
++    assert [rule for rule in deny if rule.startswith("Read(") and ".env" in rule] == [
++        "Read(./.env)"
++    ]
++
++
+ def test_settings_wire_the_review_hook_and_make_the_guard_fail_closed() -> None:
+     settings = json.loads((REPO / ".claude" / "settings.json").read_text())
+     hooks = settings["hooks"]
+diff --git a/tests/unit/test_agent_state.py b/tests/unit/test_agent_state.py
+index e61fcf0..62c18ca 100644
+--- a/tests/unit/test_agent_state.py
++++ b/tests/unit/test_agent_state.py
+@@ -273,6 +273,18 @@ def test_only_a_return_verdict_is_not_accepted() -> None:
+         ("## ВЕРДИКТ:  Принять", "accept"),
+         (f"> _Вердикт_: {WIDE_NOTES}", "accept-with-notes"),
+         ("`Вердикт: вернуть`", "return"),
++        # Only the end of the line, spaces, a full stop, Markdown marks and one remark in
++        # parentheses may follow the value.
++        ("Вердикт: принять.", "accept"),
++        (f"Вердикт: **{WITH_NOTES}**", "accept-with-notes"),
++        ("**Вердикт: принять**", "accept"),
++        ("Вердикт: `принять`", "accept"),
++        ("Вердикт: принять   ", "accept"),
++        (f"_Вердикт: {WITH_NOTES}_.", "accept-with-notes"),
++        ("Вердикт: вернуть.", "return"),
++        ("Вердикт: принять (1 низкое)", "accept"),
++        (f"Вердикт: {WITH_NOTES} (1 низкое)", "accept-with-notes"),
++        (f"**Вердикт:** {WITH_NOTES} (2 средних, 1 низкое).", "accept-with-notes"),
+     ],
+ )
+ def test_record_review_writes_the_verdict_for_the_reported_tree(
+@@ -311,6 +323,20 @@ def test_record_review_ignores_a_line_that_is_not_a_verdict(repo: Path, line: st
+         "Вердикт:",
+         "Вердикт: возможно, принять",
+         "Вердикт: вернуться",
++        # The first word is a verdict, the rest of the line takes it back.
++        "Вердикт: принять нельзя, вернуть",
++        "Вердикт: принять, но вернуть",
++        "Вердикт: принять - нельзя",
++        f"Вердикт: {WITH_NOTES}, но лучше вернуть",
++        "Вердикт: принять (нельзя | вернуть)",
++        "Вердикт: принять; вернуть",
++        # A remark in parentheses must not take the verdict back either.
++        "Вердикт: принять (нельзя, вернуть)",
++        "Вердикт: принять (не принимать)",
++        f"Вердикт: {WITH_NOTES} (нет, вернуть)",
++        f"Вердикт: {WITH_NOTES} (НЕЛЬЗЯ)",
++        "Вердикт: принять (отклонить)",
++        "Вердикт: принять (вернуть автору)",
+     ],
+ )
+ def test_record_review_revokes_on_a_garbled_verdict_line(repo: Path, line: str) -> None:
+@@ -322,6 +348,18 @@ def test_record_review_revokes_on_a_garbled_verdict_line(repo: Path, line: str)
+     assert_revoked(repo, message)
+
+
++def test_record_review_never_accepts_a_verdict_that_words_after_it_take_back(repo: Path) -> None:
++    tree = tree_hash(repo)
++
++    message = record_review(
++        repo, lines("Вердикт: принять нельзя, вернуть", "Предмет: код", f"Дерево: {tree}")
++    )
++
++    assert_revoked(repo, message)
++    stamp = read_stamp(repo, "review")
++    assert stamp is not None and stamp.mode not in ACCEPTED
++
++
+ def test_record_review_revokes_on_two_different_verdicts(repo: Path) -> None:
+     tree = tree_hash(repo)
+     record_review(repo, reviewer_report("принять", tree))

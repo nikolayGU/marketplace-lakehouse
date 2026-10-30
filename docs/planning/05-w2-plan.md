@@ -1,5 +1,7 @@
 # 05. План реализации: остаток недели 2
 
+> Статус: закрыт, неделя 2 закрыта 08.10.2026; указания про skills исполнения в шапке ниже не действуют (CLAUDE.md). Исторический документ: не исполнять как задачу. Действующие правила: `AGENTS.md`; бэклог: `docs/planning/14-closeout-spec.md`; индекс: `docs/planning/README.md`.
+
 > **Для агента-исполнителя:** обязательный sub-skill `superpowers:executing-plans` (исполнение в этой сессии) или `superpowers:subagent-driven-development`. Шаги отмечаются чекбоксами `- [ ]`.
 
 **Цель:** закрыть W2 по спеке: `source_sequence` в bronze, раскладка silver, карантин, chaos 1-4, Iceberg-демо, schema evolution в реплеере, попытка Lakekeeper.

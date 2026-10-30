@@ -30,7 +30,7 @@ make secrets                                          # generates .env from .env
 sed -i 's/^REPLAY_DATA=.*/REPLAY_DATA=sample/' .env   # the sample slice in data/sample
 make bootstrap                                        # start, migrate, connector, load, verify, protect
 make replay-burst SECONDS=60                          # plays about 12 virtual hours of the remaining history, then stops
-make verify                                           # bronze holds every Kafka record once, silver equals Postgres
+make verify                                           # bronze holds every Kafka record once, silver matches Postgres (rows, keys, decimal sums)
 ```
 
 `make bootstrap` is the one command: it starts the stack, migrates the source, registers the
@@ -116,8 +116,8 @@ Components:
 | Component | Status | Evidence |
 |---|---|---|
 | CDC: Postgres, Debezium, Kafka, bronze (at-least-once, resumes from the checkpoint) | measured | Spark kill resumed 28 s after the kill, 0 duplicate or missing offsets in 21 partitions (2026-10-07): [scenario 1](OPERATIONS.md#1-spark-bronze-killed-mid-batch) |
-| Silver: typed state, soft deletes, MERGE guarded by LSN | measured | `make reconcile` 7 of 7 tables equal Postgres, 2026-10-29: [reconciliation](docs/evidence.md#reconciliation-source-against-silver) |
-| Gold: dbt staging, intermediate, marts on Trino | measured | `make dbt-build` `PASS=51 WARN=0 ERROR=0` twice, 2026-10-17 ([HANDOFF](docs/HANDOFF.md), ru); models in [`dbt/models`](dbt/models) |
+| Silver: typed state, soft deletes, MERGE guarded by LSN | measured | `make reconcile` 7 of 7 tables match Postgres on rows, keys and decimal sums, 2026-10-29: [reconciliation](docs/evidence.md#reconciliation-source-against-silver) |
+| Gold: dbt staging, intermediate, marts on Trino | measured | `make dbt-build` `PASS=51 WARN=0 ERROR=0` twice, 2026-10-17 ([session log](docs/planning/archive/HANDOFF-2026-10-24-and-earlier.md), ru); models in [`dbt/models`](dbt/models) |
 | Orchestration: Airflow DAGs `silver_upsert`, `dbt_build`, `dq_checks`, `iceberg_maintenance`, `iceberg_orphans` | done | [`airflow/dags`](airflow/dags), `make dags-check` in CI; live runs 2026-10-29 in [maintenance](docs/evidence.md#maintenance-before-and-after) |
 | Stateful job `orders_per_minute` (watermark, update mode) | measured | 2026-10-23: per-minute counts against `count(*)` of `silver.orders` over a 60 s burst, 164 windows, 0 differing; `make watermark-live` dropped the late order once (`dropped 0 -> 1`); 495 MiB at rest, 842 MiB while reading 24 h of the topic: [OPERATIONS](OPERATIONS.md#stateful-job), [ADR-024](DECISIONS.md) |
 | Data quality: reconcile, `dq_checks`, quarantine | measured | `dq_checks` 2026-10-29 16:45: every `reconcile_*_differing` 0; one poison record, one quarantine row (2026-10-23): [scenario 7](OPERATIONS.md#7-corrupted-event-in-topic) |
@@ -143,8 +143,8 @@ offset or difference from Postgres; write-ups in [OPERATIONS.md](OPERATIONS.md#f
 |---|---|---|---|
 | 1 | Spark bronze killed mid-batch | measured, 2026-10-07 | replayed 28 s after the kill, nothing lost or doubled |
 | 2a | Kafka Connect restart | measured, 2026-10-07 | 32 s, 0 repeated events |
-| 2b | Kafka Connect killed | measured, 2026-10-07 | 253 repeats absorbed, silver equals Postgres |
-| 3 | Duplicate events from the source | measured, 2026-10-07 | 95 no-op repeats in 2267 events, silver equals Postgres |
+| 2b | Kafka Connect killed | measured, 2026-10-07 | 253 repeats absorbed, silver matches Postgres (rows, keys, sums) |
+| 3 | Duplicate events from the source | measured, 2026-10-07 | 95 no-op repeats in 2267 events, silver matches Postgres (rows, keys, sums) |
 | 4 | Late events | measured, 2026-10-07 | older change dropped by the LSN guard |
 | 5 | PostgreSQL restart | measured, 2026-10-23 | connector back in 13 s, no failed task |
 | 6 | Connector stopped for 30 minutes | measured, 2026-10-23 and 2026-10-29 | `CdcStalledSourceWrites` firing 18:20:04 on 2026-10-29, `dq_checks` said `in flight` during the stall, nothing lost; sources: W6-T07 result in the [closeout spec](docs/planning/14-closeout-spec.md) and [HANDOFF](docs/HANDOFF.md) approval log, 29.10 18:22 (ru) |

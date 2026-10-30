@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Только для Claude Code
 
 - Плагины и триггеры: `docs/planning/03-agent-tooling.md`, раздел «Плагины агента» в `docs/agent-rules.md`; версии и флаги инструментов сначала через `context7`, не по памяти.
-- Модели и роли: основная сессия Opus; поиск `Explore` (Haiku), анализ `scout` (Sonnet, effort medium), код `implementer` (Sonnet), ревью `reviewer` (Opus). Сканеры только читают; `model` при вызове не переопределять. Цикл задачи: `/task <ID карточки | фраза>`.
+- Модели и роли: `AGENTS.md`, «Подагенты» (у `scout` effort medium). Цикл задачи: `/task <ID карточки | фраза>`.
 - `superpowers`: спеки и планы в `docs/planning/` на русском; без коммита после каждого шага, без worktrees, `finishing-a-development-branch`, `subagent-driven-development`, `executing-plans` и `requesting-code-review` (цикл задают роли и `/task`).
 - Хуки и разрешения в `.claude/settings.json` меняются только с «ок» владельца.
 

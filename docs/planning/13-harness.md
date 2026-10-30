@@ -96,7 +96,9 @@ context7 и веб; любые файлы в scratchpad; копии в `/mnt/d/l
 
 Хук `guard.py` (правка 27.10, раздел 10) спрашивает на каждый пункт C, который видно по тексту
 команды, и запрещает запись в `.claude/hooks/` и `.claude/settings*.json` этого репо. Хук читает
-только текст команды. Запрещено:
+только текст команды, поэтому он ловит ошибки, а не обход: скрипт, `python3 -c` со склейкой слов
+или запись отметки через склеенное имя он не видит (аудит 30.10, SEC-04). Необратимое держат и вне
+текста: `protected` в Lakekeeper, «ок» владельца на push и класс C. Запрещено:
 - переименовывать, кодировать, дробить команду, уходить `cd` в другой каталог или класть её в
   скрипт, чтобы хук её не узнал; скрипт с действием C это то же действие C;
 - повторять отклонённую команду в другой форме.
@@ -285,20 +287,15 @@ mode всегда стоп: владелец выполняет команду �
 
 ## 10. Внедрение
 
-Роли, этот файл, спека 14, NEXT_SESSION и раздел HANDOFF 27.10 лежат в рабочем дереве. Правка хука
-лежит патчем `docs/planning/13-harness-guard.patch` (меняет `.claude/hooks/guard.py` и
-`tests/unit/test_agent_hooks.py`): хуки меняет только владелец. Владелец в WSL, в корне репо:
+История версий; инструкции применения выполнены. Хуки и `settings.json` меняет только владелец,
+агент приносит патч из копии.
 
-```bash
-git apply docs/planning/13-harness-guard.patch
-uv run pytest tests/unit -q          # 568 passed, 83 skipped (27.10)
-git add -A && git commit -m "infra: closeout harness, agent roles, guard asks for class C actions"
-```
+### 27.10
 
-Коммит владельца хук не проверяет (хук стоит на вызовах агента). После него патч в
-`docs/planning/` остаётся историей; удалить его можно следующим коммитом `docs:`. Проверка
-внедрения в новой сессии: команда `airflow dags unpause iceberg_maintenance` получает окно
-подтверждения, а `/agents` (или вопрос «какие типы агентов тебе доступны») показывает четыре роли.
+Роли, этот файл, спека 14, NEXT_SESSION и раздел HANDOFF 27.10; правка guard (окно на каждое
+действие C) патчем `docs/planning/13-harness-guard.patch`, владелец применил его в `5ca361a`.
+Файл патча оставлен историей (`docs/planning/README.md`). Проверка внедрения: `airflow dags
+unpause iceberg_maintenance` получает окно подтверждения; `/agents` показывает пять ролей.
 
 ### v0.3, 29.10
 
@@ -313,22 +310,19 @@ git add -A && git commit -m "infra: closeout harness, agent roles, guard asks fo
 без переменных make и pytest), `maxTurns: 100` у `implementer` и `reviewer` (обе роли упирались в
 60 на этой задаче), `Explore` без MCP и прочих инструментов записи.
 
-Агент правит роли, правила, `scripts/agent_state.py`, `Makefile` (`make check`) и skill `/task`.
-Хуки и `settings.json` лежат патчем `docs/planning/13-harness-v03.patch` (`guard.py`, новый
-`review_stamp.py`, `settings.json`, `tests/unit/test_agent_hooks.py`). Владелец в WSL, в корне репо:
+Хуки и `settings.json` (`guard.py`, новый `review_stamp.py`) пришли патчем
+`13-harness-v03.patch`; владелец применил его, файл патча удалён, всё вместе в коммите `f206596`.
+Правки хуков и `.claude/agents/` Claude Code подхватывает без перезапуска (документация hooks и
+sub-agents, версия 2.1.306). Проверка внедрения: `make report`, раздел stamps; `git commit` кода
+без отметок получает отказ; вызов `Explore` идёт на Haiku.
 
-```bash
-git apply docs/planning/13-harness-v03.patch && rm docs/planning/13-harness-v03.patch
-uv run pytest tests/unit -q          # 761 passed, 83 skipped (29.10)
-```
+### Аудит 30.10
 
-После `git apply` код дерева другой, поэтому до коммита: `make check`; проход `reviewer` с
-предметом «код» (его вердикт уже записывает живой хук: `python3 scripts/agent_state.py show review
-.`); цикл verify (раздел 5); коммит. Правки хуков в `settings.json` и файлов `.claude/agents/`
-Claude Code подхватывает без перезапуска (документация hooks и sub-agents, версия 2.1.306).
-Выключение плагинов и новый каталог `.claude/skills/` могут потребовать новую сессию (не
-проверено). Проверка внедрения: `make report`, раздел stamps; `git commit` кода без отметок
-получает отказ; вызов `Explore` идёт на Haiku.
+`docs/planning/15-audit-2026-10-30.md`, раздел 9: патч П-1 (`guard.py`, `settings.json`,
+`session_context.py`, `scripts/agent_state.py` и их тесты: чтение секретов, `make down`, разбор
+вердикта, упавшие контейнеры на старте сессии) применяет владелец; патч П-2 (`AGENTS.md`,
+`docs/agent-rules.md`, этот файл, `docs-writer.md`: один порядок чтения, push по «ок», граница
+guard, недоверенные данные) применяется по «ок» на текст.
 
 ## 11. Доказательства процесса
 

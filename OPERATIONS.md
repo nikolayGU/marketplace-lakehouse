@@ -7,7 +7,7 @@
 | Daily work on ingestion | `make start` | ~11 GB limits, ~7 GB real |
 | Working on dbt / Airflow | `make start && make up PROFILE=orchestrate` (Trino `Xmx` drops to 2g via `TRINO_XMX`); stop `orchestrate` when not working on batch | ~13 GB limits, ~9 GB real |
 | Full pipeline with monitoring | `TRINO_XMX=2g make start && make up PROFILE=orchestrate,obs` | 13.7 GB limits (sum of `deploy` limits, grafana 384M since 2026-10-29), 5.2 GB real at rest (2026-10-19, before the Trino plugin) |
-| Demo dashboard (optional Superset) | `make down PROFILE=orchestrate && make up PROFILE=bi` | swap orchestrate for bi |
+| Demo dashboard (optional Superset, not runnable today) | `make down PROFILE=orchestrate && make up PROFILE=bi` | swap orchestrate for bi; compose mounts `docker/superset/superset_config.py`, which the repo does not have, so `bi` does not start from a clean clone (README: planned) |
 | Stateful job (`orders_per_minute`) | `make up PROFILE=stateful` on top of `core` | +1.75 GB limit; 495 MiB at rest, 842 MiB while reading 24 h of the topic (2026-10-23) |
 | Debugging Kafka visually | `make up PROFILE=tools` for 15 minutes, then `make down PROFILE=tools` | +0.4 GB |
 
@@ -75,7 +75,11 @@ make replay-start              # plays until ctrl-c at REPLAY_SPEED (1 day / 30 
 ```
 
 `replay-load` refuses to touch non-empty tables. Starting over means `make replay-reset`, which
-empties every `shop` table and drops staging; it asks before doing it.
+empties every `shop` table and drops staging; it asks before doing it. The emptying is a
+`TRUNCATE`, and Debezium 3.5 skips truncate events by default (`skipped.operations=t`, not
+overridden in `connect/shop-connector.json`): bronze and silver keep every row, and the next
+`make reconcile` is red on row counts. A real start over is the lake too, which today means
+`make nuke && make bootstrap` (blast radius, owner's ok).
 
 ```
 make status          # docker compose ps with health
@@ -168,7 +172,10 @@ bronze snapshot committed since the previous run in micro-batches of about 200 0
   quarantined delete is not delivered again by anything and needs a hand fix the owner approves.
 - Payload fields the contract does not declare are ignored and logged once per table and batch
   (`payloads carry fields contracts/silver/<table>.json does not declare: [...]`): the source
-  gained a column (schema evolution, W2-T07). The row still merges.
+  gained a column (schema evolution, W2-T07). The row still merges. Proven by the Spark unit tests
+  (`tests/unit/test_silver_upsert.py`), not live: migration
+  `oltp/migrations/evolution/003_orders_sales_channel.sql` has not run on the stack (`shop.orders`
+  has no `sales_channel` on 2026-10-30; the contract change is the owner's Modify gate).
 - Soft delete: `_is_deleted = true` keeps the last values. Live rows are `where not _is_deleted`.
 - Layout (ADR-010): `silver.orders` is merge-on-read and partitioned by month, the other tables
   copy-on-write. An older table converges on the next run (`lake.silver.orders: set ...` and
@@ -552,7 +559,12 @@ curl -s 127.0.0.1:3000/api/health
   for `kafka_brokers` above 0 and `pg_up 1`, since `/metrics` answers 200 with the broker or the
   database down; without `core` both should stay unhealthy (not run live: `core` was up).
 - `observability/prometheus` is mounted read-only as a directory. After editing rules or scrape
-  configs: `docker kill -s HUP lakehouse-prometheus-1`.
+  configs: `docker exec lakehouse-prometheus-1 kill -HUP 1` (busybox `kill` is in the image).
+  Never `docker kill -s HUP`: the daemon records any `docker kill` as a manual stop, and after the
+  next Docker restart `unless-stopped` leaves the container down. That is the likely cause of
+  Prometheus staying `Exited (255)` after the Docker restarts of 2026-10-27 and 2026-10-30, both
+  after a `docker kill -s HUP` (inferred from moby's `killWithSignal`, not reproduced).
+  `make report` lists such containers.
 - Kafka Connect: `/kafka/config` is an anonymous volume of the Debezium image, and a recreated
   container keeps the old one. A file the image layer adds there is hidden, so `metrics.yaml` is
   bind-mounted; without it the agent stops the JVM and Connect restarts in a loop (2026-10-19,
@@ -575,9 +587,17 @@ Eleven alerts in `observability/prometheus/alerts.yml`, tested by `make alerts-t
 cases first). The first six are each shown firing in their own scenario; the next three, added after
 the review of weeks 4 and 5, watch for a source that went silent, and the last two (week 6) catch a
 slot that holds WAL on an idle source and a Spark restart loop. These five are proven by promtool;
-`SparkRestartLoop` was also run over the stored chaos 8 data (below), never live. No Alertmanager (ADR-023):
+`CdcStalledSourceWrites` also fired live in chaos 6 (2026-10-29), and `SparkRestartLoop` was run
+over the stored chaos 8 data (below), never live. Eleven names make 14 rules: `SparkNoBatch5m`,
+`FreshnessAbove15m` and `DqChecksStale` have two each. No Alertmanager (ADR-023):
 read them in the Prometheus UI (`/alerts`), `curl 127.0.0.1:9090/api/v1/alerts` or the "Firing
-alerts" panel. After editing the file: `docker kill -s HUP lakehouse-prometheus-1`.
+alerts" panel. After editing the file: `docker exec lakehouse-prometheus-1 kill -HUP 1` (see above
+why not `docker kill`).
+
+Nothing watches the watcher: when Prometheus itself is down, no rule is evaluated, Grafana has no
+alerting set up (`provisioning/alerting` is empty) and nothing is delivered anywhere. A host that
+slept or a Docker restart shows only to someone who looks. After either, run `make report`: it
+lists project containers that are down although their restart policy is `unless-stopped`.
 
 | Alert | Expression | `for` | Why this threshold | Shown in | Time to fire (2026-10-23) |
 |---|---|---|---|---|---|
@@ -650,7 +670,7 @@ change needs internet and a recreated container (limit 384M). A synchronous inst
 halts Grafana as a whole: with a new or empty `grafana` volume and no network, Grafana does not
 start at all, the Prometheus dashboards included. Once the pinned version is in the volume, a
 restart does not ask the catalog and works offline. Datasource
-`trino` is provisioned from `provisioning/datasources/trino.yml`; the plugin has no catalog
+`trino` is provisioned from `observability/grafana/provisioning/datasources/trino.yml`; the plugin has no catalog
 setting, so panels name `lake_ro.gold.<table>`, the read-only twin of `lake` that the user
 `grafana` may read ("Access control" under "Query"). Trino returns decimal as a string: the panels
 convert the field to a number with a transformation and the SQL keeps the decimal. Check:
@@ -1263,7 +1283,7 @@ it says `in flight` for the whole stall and raises `CdcStalledSourceWrites` afte
 Run 2026-10-29 (full 1800 s hold, `make chaos-connect-pause`, exit 0): connector stopped
 17:47:02 to 18:17:06 UTC; `dq_checks` at 18:00 and 18:15 green with "in flight: CDC
 stands, no verdict"; `CdcStalledSourceWrites` firing at 18:20:04; after the resume nothing lost and
-silver equal to Postgres in all 7 tables.
+silver matching Postgres (rows, keys, sums) in all 7 tables.
 Data at risk: none while the slot lives; Postgres keeps every WAL file it has not confirmed
 (`max_slot_wal_keep_size = -1`), so the disk of the VM is the limit, and nothing but this alert
 watches it (runbook `docs/runbooks/slot-wal-growth.md`). Replay alone writes ~1.1 MB of WAL per
@@ -1347,7 +1367,7 @@ ingest" (`failOnDataLoss=true`).
 Recovery: automatic, 25 s after Kafka returned.
 Why no loss or duplication: offsets are per topic partition in Kafka and in the checkpoint; the 21
 partitions hold no duplicate and no missing offset after the outage (`bronze_offsets_report`),
-silver equals Postgres (7 of 7 ok).
+silver matches Postgres (rows, keys, sums) (7 of 7 ok).
 
 ### 9. Airflow task failure (dbt test)
 
@@ -1384,7 +1404,7 @@ order by committed_at desc limit 3;
 | Retained WAL growing | `docs/runbooks/slot-wal-growth.md` |
 | Spark job no batch for 5 minutes | `docs/runbooks/spark-stalled.md` |
 | Freshness above 15 minutes | `docs/runbooks/freshness.md` |
-| Disk full | `docs/runbooks/disk-full.md` (week 4) |
+| Disk full | `docs/runbooks/disk-full.md` |
 | Catalog cutover to Lakekeeper, or its rollback (owner only) | `docs/runbooks/catalog-cutover.md` |
 | Reset everything | `make nuke` (asks for confirmation; deletes volumes, checkpoints, data) |
 
@@ -1394,3 +1414,22 @@ Local laptop, nothing irreplaceable: the dataset is re-downloadable, the platfor
 re-creatable from the repo. `make nuke && make bootstrap` is the restore procedure and is itself
 a test that the repo is complete. There is no regular backup; the one-off copy of `warehouse/`
 taken before the first maintenance run is described in "Maintenance".
+
+No RPO or RTO is defined. What a rebuild loses: the replay position (virtual clock and pending
+events), the Airflow history, Grafana state outside the provisioned dashboards, and any CDC still
+in Kafka (24 h retention). What each piece of state has:
+
+| State | Copy | Restore tested |
+|---|---|---|
+| Postgres `shop` | none; `make bootstrap` and the replay rebuild it | the rebuild of the initial state, by every clean-clone run (smoke); the current state: no |
+| `postgres-meta`: the `lakekeeper` catalog, Airflow | none | no |
+| MinIO `warehouse/` | the one-off file copy of 2026-10-29 on `/mnt/d` | no; files alone do not restore the catalog pointers in `lakekeeper` |
+| Spark checkpoints (`checkpoints/` in MinIO) | none | no |
+| `.env` | none in the repo, by design | no |
+
+`.env` is the one piece the repo cannot regenerate: `LAKEKEEPER_ENCRYPTION_KEY` encrypts the S3
+keys inside the `lakekeeper` database, so a lost `.env` leaves an intact warehouse whose catalog
+cannot be read. Keep a copy of `.env` outside the repo (owner's step, never committed).
+
+Not proven live: losing a Spark checkpoint, MinIO or Lakekeeper down while a job writes, a full
+disk, killing `spark-silver` mid-merge, and a restore from the copy above.
