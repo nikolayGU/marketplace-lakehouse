@@ -22,12 +22,18 @@ def test_every_dockerfile_is_in_the_hadolint_matrix() -> None:
     assert matrix == _dockerfiles()
 
 
-def test_third_party_actions_have_a_version_tag() -> None:
+def test_third_party_actions_are_pinned_to_a_commit() -> None:
+    # SEC-09: a tag moves, a commit does not. Every action counts, the old check saw only
+    # docker/ and hadolint/. The version comment is checked in test_pinning.py.
+    seen = 0
     for workflow in WORKFLOWS.glob("*.yml"):
         for line in workflow.read_text().splitlines():
-            match = re.search(r"uses:\s*((?:docker|hadolint)/[\w.-]+)@(\S+)", line)
+            match = re.search(r"uses:\s*(?!\./)(\S+)@(\S+)", line)
             if match:
-                assert re.fullmatch(r"v\d+(\.\d+)*", match.group(2)), line
+                seen += 1
+                assert re.fullmatch(r"[0-9a-f]{40}", match.group(2)), line
+
+    assert seen
 
 
 def test_workflows_use_no_secret_but_the_github_token() -> None:

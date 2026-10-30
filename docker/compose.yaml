@@ -7,6 +7,10 @@
 # healthcheck; the one-shot jobs minio-init, lakekeeper-migrate, lakekeeper-bootstrap and
 # spark-silver have no healthcheck and no restart (restart: "no", minio-init the default), and
 # minio-init has no memory limit.
+# Images: every one taken from a registry is name:tag@sha256:<digest>; the tag is for the
+# reader and the digest is what runs (OPERATIONS.md, "Pinned images and actions"). The
+# lakehouse/* images are built from this repo, carry no digest and have pull_policy: never
+# (ADR-026): without the image compose would ask a registry whose `lakehouse` is not ours.
 
 x-logging: &logging
   driver: json-file
@@ -36,7 +40,7 @@ services:
   # ---------------------------------------------------------------- core
   postgres-oltp:
     <<: *common
-    image: postgres:17
+    image: postgres:17@sha256:f4c66b820c6f974249089d3d16d86a3698eae11e8746eb6644b2271031e91232
     profiles: [core]
     command: >
       postgres -c wal_level=logical -c max_wal_senders=4 -c max_replication_slots=4
@@ -65,7 +69,7 @@ services:
 
   kafka:
     <<: *common
-    image: apache/kafka:4.3.1
+    image: apache/kafka:4.3.1@sha256:77e3df9054047a88b520d0cc46e16696d3b22022e1d580aeccd2632df6532837
     profiles: [core]
     environment:
       KAFKA_NODE_ID: 1
@@ -106,6 +110,7 @@ services:
     build:
       context: ./connect   # quay.io/debezium/connect:3.5 + JMX exporter agent (W4-D1)
     image: lakehouse/connect:dev
+    pull_policy: never
     profiles: [core]
     depends_on:
       kafka:
@@ -289,6 +294,7 @@ services:
       additional_contexts:
         contracts: ../contracts
     image: lakehouse/spark:dev
+    pull_policy: never
     profiles: [core]
     depends_on:
       kafka:
@@ -446,6 +452,7 @@ services:
     build:
       context: ../oltp
     image: lakehouse/replayer:dev
+    pull_policy: never
     profiles: [core]
     depends_on:
       postgres-oltp:
@@ -478,7 +485,7 @@ services:
   # ---------------------------------------------------------------- query
   trino:
     <<: *common
-    image: trinodb/trino:483
+    image: trinodb/trino:483@sha256:db58cc93e593a2706553745f276bb119c9810e69918be56ecde088ba7ccb0534
     profiles: [query]
     depends_on:
       postgres-meta:
@@ -525,7 +532,7 @@ services:
   # ---------------------------------------------------------------- orchestrate
   postgres-meta:
     <<: *common
-    image: postgres:17
+    image: postgres:17@sha256:f4c66b820c6f974249089d3d16d86a3698eae11e8746eb6644b2271031e91232
     profiles: [core, orchestrate, bi]   # core: lakekeeper's database and the JDBC rollback catalog
     environment:
       POSTGRES_USER: ${META_USER}
@@ -552,6 +559,7 @@ services:
     build:
       context: ../airflow   # apache/airflow:3.3.2 + dbt-trino + docker provider
     image: lakehouse/airflow:dev
+    pull_policy: never
     profiles: [orchestrate]
     depends_on:
       postgres-meta:
@@ -578,6 +586,7 @@ services:
   airflow-scheduler:
     <<: *common
     image: lakehouse/airflow:dev
+    pull_policy: never
     profiles: [orchestrate]
     depends_on:
       airflow-api-server:
@@ -607,6 +616,7 @@ services:
   airflow-dag-processor:
     <<: *common
     image: lakehouse/airflow:dev
+    pull_policy: never
     profiles: [orchestrate]
     depends_on:
       airflow-api-server:
@@ -630,7 +640,7 @@ services:
   # ---------------------------------------------------------------- obs
   prometheus:
     <<: *common
-    image: prom/prometheus:v3.14.0
+    image: prom/prometheus:v3.14.0@sha256:5ce7540c3c00ef4ab0c9d2c995c6a5b9c421f44b4a115d97a2c7af3b1c21cbb0
     profiles: [obs]
     command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.retention.time=7d"]
     volumes:
@@ -653,7 +663,7 @@ services:
 
   grafana:
     <<: *common
-    image: grafana/grafana:13.2.2
+    image: grafana/grafana:13.2.2@sha256:ac461fb352abc50da10a51c7d02462e9c05488f11f53f14b3ad79a8145f638a0
     profiles: [obs]
     environment:
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
@@ -685,7 +695,8 @@ services:
 
   kafka-exporter:
     <<: *common
-    image: danielqsj/kafka-exporter:v1.10.0   # verified 2026-10-19
+    # verified 2026-10-19
+    image: danielqsj/kafka-exporter:v1.10.0@sha256:346a53c2489a3530790d01f7b96632496d0d58926662f4c35bb65f569db2ab42
     profiles: [obs]
     # Pinned to the newest protocol sarama knows; 2.0.0 (default) also reads broker 4.3.1 (2026-10-19).
     command: ["--kafka.server=kafka:9092", "--kafka.version=4.0.0"]
@@ -708,7 +719,8 @@ services:
 
   postgres-exporter:
     <<: *common
-    image: prometheuscommunity/postgres-exporter:v0.17.1   # verified 2026-10-19
+    # verified 2026-10-19
+    image: prometheuscommunity/postgres-exporter:v0.17.1@sha256:38606faa38c54787525fb0ff2fd6b41b4cfb75d455c1df294927c5f611699b17
     profiles: [obs]
     environment:
       DATA_SOURCE_NAME: postgresql://${OLTP_USER}:${OLTP_PASSWORD}@postgres-oltp:5432/${OLTP_DB}?sslmode=disable
@@ -733,7 +745,8 @@ services:
 
   statsd-exporter:
     <<: *common
-    image: prom/statsd-exporter:v0.28.0   # verified 2026-10-19; Airflow and dq_checks metrics
+    # verified 2026-10-19; Airflow and dq_checks metrics
+    image: prom/statsd-exporter:v0.28.0@sha256:4e7a1f00b9b23ef0c5b4fdbb7f4748bdc218cfdff04acc8033bc5b9f7c15009d
     profiles: [obs]
     volumes:
       - ../observability/statsd/mapping.yml:/tmp/mapping.yml:ro
@@ -756,6 +769,7 @@ services:
     build:
       context: ../observability/container-exporter
     image: lakehouse/container-exporter:dev
+    pull_policy: never
     profiles: [obs]
     environment:
       COMPOSE_PROJECT_NAME: ${COMPOSE_PROJECT_NAME:-lakehouse}
@@ -777,7 +791,7 @@ services:
   # ---------------------------------------------------------------- bi
   superset:
     <<: *common
-    image: apache/superset:6.1.0   # TODO(W6): tags are not semver on Docker Hub, pin by digest
+    image: apache/superset:6.1.0@sha256:16b50bbef6648912a79e3293d418fefa743ce555d36c5af6b85d859119ed7f88
     profiles: [bi]
     depends_on:
       postgres-meta:
@@ -805,7 +819,8 @@ services:
   # ---------------------------------------------------------------- tools
   kafka-ui:
     <<: *common
-    image: ghcr.io/kafbat/kafka-ui:v1.3.0   # TODO: verify tag when first used
+    # TODO: verify tag when first used
+    image: ghcr.io/kafbat/kafka-ui:v1.3.0@sha256:edd59f51a992cf79c16a394fd141a6ab47eb9c1deeb77a3e360035ac3e7bc30c
     profiles: [tools]
     environment:
       KAFKA_CLUSTERS_0_NAME: lakehouse

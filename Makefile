@@ -144,9 +144,11 @@ lint: ## ruff, mypy, yamllint, sqlfluff, compose config, bash -n on the shell sc
 	cd dbt && uv run sqlfluff lint models macros tests
 	$(COMPOSE) --profile '*' config -q
 
+# promtool of the Prometheus image compose runs, by the same digest (tests/unit/test_pinning.py).
+PROMETHEUS_IMAGE ?= prom/prometheus:v3.14.0@sha256:5ce7540c3c00ef4ab0c9d2c995c6a5b9c421f44b4a115d97a2c7af3b1c21cbb0
 alerts-test: ## promtool: check the alert rules and run observability/prometheus/alerts_test.yml
-	docker run --rm -v "$(CURDIR)/observability/prometheus:/etc/prometheus:ro" --entrypoint promtool prom/prometheus:v3.14.0 check rules /etc/prometheus/alerts.yml
-	docker run --rm -v "$(CURDIR)/observability/prometheus:/etc/prometheus:ro" --entrypoint promtool prom/prometheus:v3.14.0 test rules /etc/prometheus/alerts_test.yml
+	docker run --rm -v "$(CURDIR)/observability/prometheus:/etc/prometheus:ro" --entrypoint promtool $(PROMETHEUS_IMAGE) check rules /etc/prometheus/alerts.yml
+	docker run --rm -v "$(CURDIR)/observability/prometheus:/etc/prometheus:ro" --entrypoint promtool $(PROMETHEUS_IMAGE) test rules /etc/prometheus/alerts_test.yml
 
 test: ## unit tests (Spark ones skip on a host without Java)
 	uv run pytest tests/unit -q

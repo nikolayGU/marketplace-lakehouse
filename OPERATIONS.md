@@ -961,6 +961,71 @@ Monday schedule): red at `make start`, the MinIO images are gone from quay.io an
 are built from source since ADR-026. First green run 2026-10-29 (40907438614, `workflow_dispatch`
 on `664a7e6`); the schedule (`0 3 * * 1`) is back since then.
 
+### Pinned images and actions
+
+Every image compose takes from a registry and every `FROM` is `name:tag@sha256:<digest>` (the
+index of the multi-arch image); every third-party action is `owner/repo@<commit sha> # vX.Y.Z`.
+The tag is for the reader, the digest and the SHA are what runs. `make alerts-test` runs promtool
+from the same Prometheus digest as compose (`PROMETHEUS_IMAGE` in the Makefile).
+`tests/unit/test_pinning.py` fails on:
+- a tag alone in compose, in a `FROM`, in a `COPY --from` or in a `RUN --mount ...,from=`;
+- a `lakehouse/*` image no service builds, or one without `pull_policy: never`;
+- a `pip install` in a Dockerfile of a bare package name or of a `==` with a wildcard;
+- an action without a SHA or without its version in the comment;
+- a promtool image in the Makefile that is not the one compose runs.
+
+How it is kept:
+- Changing a version: edit the tag and the digest together. Digest of an image already pulled:
+  `docker image inspect --format '{{json .RepoDigests}}' <image>:<tag>`; otherwise the `Digest:`
+  at the top of `docker buildx imagetools inspect <image>:<tag>`. A registry may serve another
+  digest under the same tag today (`postgres:17` does), so the pinned one is the one that ran.
+  For an action: `gh api repos/<owner>/<repo>/git/ref/tags/<tag>` (and `git/tags/<sha>` when the
+  tag is annotated) gives the commit; the comment names the exact tag that points at it. Nothing
+  moves a digest or a SHA by itself (no Dependabot, no Renovate): updates are by hand.
+- `airflow/Dockerfile` also names `pydantic-settings`, `trino` and `psycopg`: the versions the
+  constraints file of the base image carries. Another base image means other numbers there; pip
+  stops the build if they disagree.
+- `lakehouse/*` images carry no digest: compose builds them (`--build`), and `pull_policy: never`
+  keeps compose from asking a registry for one that is missing, because `lakehouse` on Docker Hub
+  is not ours (ADR-026). The `FROM` of each of them carries a digest, so a rebuild keeps its base.
+
+On a running stack this commit changes the config hash of 11 services. The command that next
+converges one of them recreates it; volumes stay:
+- `make start` (and `make bootstrap`, which runs it): `postgres-oltp`, `kafka`, `postgres-meta`
+  (Lakekeeper catalog and Airflow metadata) and `trino`;
+- `make up PROFILE=orchestrate` and `make up PROFILE=bi`: `postgres-meta`, and `superset` on its
+  first start;
+- `make lakekeeper-bootstrap` (`compose run` without `--no-deps`): `postgres-meta`, through
+  `lakekeeper-migrate`;
+- `make replay-live`: `postgres-oltp`, which `oltp-replayer` depends on;
+- `make up PROFILE=obs`: `prometheus`, `grafana`, `kafka-exporter`, `postgres-exporter`,
+  `statsd-exporter`;
+- `make up PROFILE=tools`: `kafka-ui` on its first start.
+
+Recreating `postgres-oltp`, `kafka`, `postgres-meta` or `trino` on a live stack is a restart of
+the source, of the log, of the catalog and the Airflow metadata, of the dbt queries in flight: each
+needs its own "ok". `superset` and `kafka-ui` have no container and no local image yet, their
+digests come from the registry and they are pulled on their first start. The digests of the other
+nine are the ones in the local store on 2026-10-30, so nothing is pulled for them.
+
+The rebuild that `--build` runs after this commit:
+- The `RUN pip install` text in `airflow/Dockerfile` changed, so BuildKit builds that layer and
+  the ones after it again, the dbt venv among them; its transitive dependencies are not pinned
+  (only the four dbt packages are), so they may resolve to newer versions. The three Airflow
+  containers are then recreated from the new image.
+- `container-exporter` (`make up PROFILE=obs`) and `oltp-replayer` (`make replay-live`) get the
+  `python:3.12-slim` of 2026-10-30, not the base the running replayer (2026-09-21) and exporter
+  (2026-10-23) were built from.
+- The `FROM` of the Connect and Spark images only gained the digest of the base they already have,
+  so their layers should come from the cache (expected, not run: no build was done).
+
+Not covered:
+- the jars of `streaming/Dockerfile` are checked against a `.sha1` from the same origin;
+- pip installs have no `--require-hashes`, and the transitive dependencies of the dbt venv float;
+- `rev:` in `.pre-commit-config.yaml` is a tag, and no uv version is pinned for `setup-uv`;
+- the DockerOperator of `silver_upsert` pulls `lakehouse/spark:dev` from a registry when the image
+  is missing locally (`pull_policy` is compose's, not the operator's).
+
 ### MinIO and mc images (ADR-026)
 
 `docker/minio/Dockerfile` builds both from the source of the tags of ADR-004

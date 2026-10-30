@@ -19,7 +19,7 @@ jobs:
     env:
       COMPOSE: docker compose --env-file .env -f docker/compose.yaml
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: the runner
         run: |
           nproc
@@ -31,7 +31,7 @@ jobs:
         run: |
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
           df -h /
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
         with:
           python-version: "3.12"
       - run: uv sync --locked --group dev
@@ -63,7 +63,7 @@ jobs:
         run: |
           $COMPOSE --profile '*' ps -a | tee containers.txt
           $COMPOSE --profile '*' logs --tail=200 > containers.log 2>&1
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure()
         with:
           name: smoke-logs
