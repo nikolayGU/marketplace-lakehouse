@@ -1,8 +1,9 @@
 # The six alerts of week 4 (W4-T05), plus the alerts on a source that went silent (review of W4
 # and W5): a gauge that stops coming must not read as "all quiet". Week 6 adds SlotWalHeldIdle
-# (W6-T05) and SparkRestartLoop (W6-T06). No Alertmanager (W4-D6): state
-# is read from the Prometheus UI, /api/v1/alerts and the Pipeline health dashboard. Tests: alerts_test.yml (make alerts-test);
-# live proof per alert: OPERATIONS.md, "Observability".
+# (W6-T05) and SparkRestartLoop (W6-T06); the audit of 30.10 adds SilverGoldNotCompared (B3).
+# No Alertmanager (W4-D6): state is read from the Prometheus UI, /api/v1/alerts and the Pipeline
+# health dashboard. Tests: alerts_test.yml (make alerts-test); live proof per alert: OPERATIONS.md,
+# "Observability".
 groups:
   - name: lakehouse
     rules:
@@ -103,6 +104,20 @@ groups:
         expr: >-
           min_over_time(lakehouse_dq_cdc_stalled[20m]) == 1
           and count_over_time(lakehouse_dq_cdc_stalled[20m]) >= 70
+        labels:
+          severity: warn
+
+      # dq_checks compares silver with gold only once bronze is in silver and gold has caught up with
+      # it (audit 30.10, DATA-02): a deleted order or payment leaves gold behind until the next
+      # change, and a continuous replay never rests. Every run counts the runs in a row that did not
+      # compare gold in the Airflow Variable dq_gold_not_compared_runs and sends the count; a
+      # comparison resets it to 0. 24 runs of 15 minutes are 6 hours of dq_checks work, so a host
+      # that sleeps does not count and a replay in bursts, which rests between them, resets it. A
+      # continuous 24 hour run (B6) raises it. No `for`: the count already is the wait.
+      # last_over_time holds the last count through a pause in the scrape, and for an hour after
+      # the series is gone; then a dq_checks that does not run is DqChecksStale's.
+      - alert: SilverGoldNotCompared
+        expr: last_over_time(lakehouse_dq_gold_not_compared_runs[1h]) >= 24
         labels:
           severity: warn
 

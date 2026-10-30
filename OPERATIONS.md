@@ -557,6 +557,8 @@ stops instead of showing its last value for ever.
 | `lakehouse_dq_reconcile_in_flight` | none | 1 while work is in flight and no verdict was made, or while a stalled CDC keeps the source-silver pairs out (the silver-gold pairs are still compared) |
 | `lakehouse_dq_cdc_stalled` | none | 1 while CDC stands: the source wrote since the previous run (write counter of schema `shop` in `pg_stat_user_tables`) and `confirmed_flush_lsn` of `shop_slot` did not move; it stays 1 until the slot moves. 0 without a slot, and for one run after a reset of the statistics (1 again at the next write while the slot stands). Sent every run, whether or not counts differ |
 | `lakehouse_dq_reconcile_verdict_timestamp_seconds` | none | Unix time of the last verdict |
+| `lakehouse_dq_reconcile_gold_compared` | none | 1 when the run compared silver and gold, 0 when it did not: nothing at rest, or gold behind silver |
+| `lakehouse_dq_gold_not_compared_runs` | none | runs in a row without a silver-gold comparison (Airflow Variable `dq_gold_not_compared_runs`), 0 after a comparison |
 
 Values come at the cadence of `dq_checks` (15 minutes), so an alert on them can lag by that long.
 A negative value is never sent (StatsD would read it as a decrement). The quarantine count stays
@@ -601,12 +603,14 @@ curl -s 127.0.0.1:3000/api/health
   shows as a new `docker_container_start_time_seconds`.
 ### Alerts
 
-Eleven alerts in `observability/prometheus/alerts.yml`, tested by `make alerts-test` (promtool, failure
+Twelve alerts in `observability/prometheus/alerts.yml`, tested by `make alerts-test` (promtool, failure
 cases first). The first six are each shown firing in their own scenario; the next three, added after
-the review of weeks 4 and 5, watch for a source that went silent, and the last two (week 6) catch a
-slot that holds WAL on an idle source and a Spark restart loop. These five are proven by promtool;
+the review of weeks 4 and 5, watch for a source that went silent, two more (week 6) catch a
+slot that holds WAL on an idle source and a Spark restart loop, and `SilverGoldNotCompared` (audit
+30.10) says `dq_checks` has not compared silver and gold for 24 runs in a row. These six are proven
+by promtool;
 `CdcStalledSourceWrites` also fired live in chaos 6 (2026-10-29), and `SparkRestartLoop` was run
-over the stored chaos 8 data (below), never live. Eleven names make 14 rules: `SparkNoBatch5m`,
+over the stored chaos 8 data (below), never live. Twelve names make 15 rules: `SparkNoBatch5m`,
 `FreshnessAbove15m` and `DqChecksStale` have two each. No Alertmanager (ADR-023):
 read them in the Prometheus UI (`/alerts`), `curl 127.0.0.1:9090/api/v1/alerts` or the "Firing
 alerts" panel. After editing the file: `docker exec lakehouse-prometheus-1 kill -HUP 1` (see above
@@ -631,6 +635,7 @@ lists project containers that are down although their restart policy is `unless-
 | `ScrapeTargetDown` | `up{job!="spark-orders-per-minute"} == 0` | 2m | an exporter that is down silences its own alerts (ADR-023); the stateful job runs only with `PROFILE=stateful` | promtool | |
 | `SlotWalHeldIdle` | `min_over_time(lakehouse_slot_retained_bytes[1h])` over 64 MiB, slot active, now at most 512 MiB | 0 | an active slot moves only when the source writes (about 24 MB held after a day idle), so a whole hour above 64 MiB (at least 200 samples in the hour) means no traffic reached it; inactive or over 512 MiB is `SlotWalRetainedHigh` | promtool | |
 | `SparkRestartLoop` | `changes(docker_container_start_time_seconds{name="lakehouse-spark-bronze-1"}[10m]) > 2` | 0 | a driver that dies before its first batch keeps both `SparkNoBatch5m` rules inside their window; one planned restart stays under the threshold | chaos 8 data, TSDB replay | 51 s after the first restart (23.10 data, rule not loaded then) |
+| `SilverGoldNotCompared` | `last_over_time(lakehouse_dq_gold_not_compared_runs[1h]) >= 24` | 0 | `dq_checks` compares silver and gold only at rest; a continuous replay or a deleted order keeps it from comparing, silently. 24 runs of every 15 minutes are 6 hours of `dq_checks` working: counted in runs, so host sleep and scrape gaps do not reset or stall it, and the 60 s replay bursts leave rest between them; the 24 h run of B6 fires it by design. A dead `dq_checks` is `DqChecksStale`, not this | promtool only | not shown live |
 
 Limits worth knowing: `absent()` alerts also burn when the source is off (obs up, core down); a
 crash-looping Spark driver (Kafka stopped, 15 restarts) dies before its first batch, its last-batch

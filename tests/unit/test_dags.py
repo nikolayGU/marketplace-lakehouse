@@ -26,6 +26,7 @@ from lakehouse.maintenance_commands import (
 )
 from lakehouse.settings import (
     CDC_STATE_SEEN,
+    GOLD_NOT_COMPARED_RUNS,
     GOLD_WRITERS_POOL,
     LAST_BRONZE_SNAPSHOT,
     MAINTENANCE_TABLES,
@@ -250,6 +251,8 @@ class DqChecks:
         self.cdc: tuple[int | None, str | None] | None = (10, "0/10")
         self.bronze: list[list[Any]] = [[5, datetime(2026, 10, 1, tzinfo=UTC)]]
         self.gold_differs = False
+        self.gold_updated = "2026-10-01 00:00:00"
+        self.trino_fails_on: str | None = None
         variables = self.variables
 
         class Variable:
@@ -322,6 +325,8 @@ class DqChecks:
 
     def trino_value(self, _settings: object, query: str) -> Any:
         self.queries.append(query)
+        if query == self.trino_fails_on:
+            raise RuntimeError("trino is down")
         for table in SOURCE_TABLES:
             if query == sql.silver_live_rows(table):
                 return 10
@@ -331,7 +336,9 @@ class DqChecks:
             return "10 other"
         if query in (reconcile.SILVER_CUSTOMERS_WITH_ORDERS, reconcile.GOLD_CUSTOMERS):
             return 4
-        if query in (reconcile.GOLD_UPDATED, reconcile.SILVER_UPDATED):
+        if query == reconcile.GOLD_UPDATED:
+            return self.gold_updated
+        if query == reconcile.SILVER_UPDATED:
             return "2026-10-01 00:00:00"
         return "10 fp"
 
@@ -466,6 +473,93 @@ def test_nothing_is_compared_while_bronze_is_moving(dq: DqChecks) -> None:
     assert not dq.queried_source_values()
     assert not dq.queried_gold_values()
     assert dq.gauge("lakehouse.dq.reconcile_in_flight") == 1
+
+
+def test_a_run_without_a_verdict_counts_one_more_run_without_gold(dq: DqChecks) -> None:
+    # SilverGoldNotCompared reads these gauges. They come in every run, also in the early return:
+    # a series that only came when gold was reached would vanish at the statsd TTL during a
+    # continuous replay and the alert would stay quiet.
+    dq.variables[LAST_BRONZE_SNAPSHOT] = "4"
+    dq.variables[GOLD_NOT_COMPARED_RUNS] = "3"
+
+    dq.run("reconcile_values", False)
+
+    assert dq.gauge("lakehouse.dq.reconcile_in_flight") == 1
+    assert dq.gauge("lakehouse.dq.reconcile_gold_compared") == 0
+    assert dq.gauge("lakehouse.dq.gold_not_compared_runs") == 4
+    assert dq.variables[GOLD_NOT_COMPARED_RUNS] == "4"
+
+
+def test_gold_behind_silver_counts_one_more_run_without_gold(dq: DqChecks) -> None:
+    dq.at_rest()
+    dq.gold_updated = "2026-09-30 00:00:00"
+    dq.variables[GOLD_NOT_COMPARED_RUNS] = "3"
+
+    dq.run("reconcile_values", False)
+
+    assert not dq.queried_gold_values()
+    assert dq.gauge("lakehouse.dq.reconcile_gold_compared") == 0
+    assert dq.gauge("lakehouse.dq.gold_not_compared_runs") == 4
+    assert dq.variables[GOLD_NOT_COMPARED_RUNS] == "4"
+
+
+def test_a_run_that_compared_gold_resets_the_count(dq: DqChecks) -> None:
+    dq.at_rest()
+    dq.variables[GOLD_NOT_COMPARED_RUNS] = "23"
+
+    dq.run("reconcile_values", False)
+
+    assert dq.gauge("lakehouse.dq.reconcile_gold_compared") == 1
+    assert dq.gauge("lakehouse.dq.gold_not_compared_runs") == 0
+    assert dq.variables[GOLD_NOT_COMPARED_RUNS] == "0"
+
+
+def test_a_stalled_cdc_still_compares_gold_and_resets_the_count(dq: DqChecks) -> None:
+    dq.at_rest()
+    dq.variables[GOLD_NOT_COMPARED_RUNS] = "23"
+
+    dq.run("reconcile_values", True)
+
+    assert dq.queried_gold_values()
+    assert dq.gauge("lakehouse.dq.reconcile_in_flight") == 1
+    assert dq.gauge("lakehouse.dq.reconcile_gold_compared") == 1
+    assert dq.gauge("lakehouse.dq.gold_not_compared_runs") == 0
+    assert dq.variables[GOLD_NOT_COMPARED_RUNS] == "0"
+
+
+@pytest.mark.parametrize("remembered", [None, "", "garbage", "-5"])
+def test_a_count_that_is_missing_or_unreadable_starts_from_zero(
+    dq: DqChecks, remembered: str | None
+) -> None:
+    dq.variables[LAST_BRONZE_SNAPSHOT] = "4"
+    if remembered is not None:
+        dq.variables[GOLD_NOT_COMPARED_RUNS] = remembered
+
+    dq.run("reconcile_values", False)
+
+    assert dq.gauge("lakehouse.dq.gold_not_compared_runs") == 1
+    assert dq.variables[GOLD_NOT_COMPARED_RUNS] == "1"
+
+
+@pytest.mark.parametrize(
+    "failing_query",
+    [
+        reconcile.GOLD_UPDATED,  # before gold is known to be at rest
+        reconcile.gold_sql_trino(next(iter(reconcile.GOLD_PAIRS))),  # inside the pair comparison
+        reconcile.GOLD_CUSTOMERS,  # after the pairs, the last gold query
+    ],
+    ids=["gold_updated", "first_gold_pair", "gold_customers"],
+)
+def test_a_comparison_that_fails_does_not_reset_the_count(dq: DqChecks, failing_query: str) -> None:
+    dq.at_rest()
+    dq.variables[GOLD_NOT_COMPARED_RUNS] = "23"
+
+    dq.trino_fails_on = failing_query
+
+    with pytest.raises(RuntimeError, match="trino is down"):
+        dq.run("reconcile_values", False)
+
+    assert dq.variables[GOLD_NOT_COMPARED_RUNS] == "23"
 
 
 def test_count_differences_lists_only_tables_that_differ() -> None:

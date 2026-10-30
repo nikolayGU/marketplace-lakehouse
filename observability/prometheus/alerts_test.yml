@@ -417,6 +417,108 @@ tests:
         alertname: CdcStalledSourceWrites
         exp_alerts: []
 
+  # The count of dq_checks runs in a row that did not compare gold grows by one every 15 minutes
+  # (15 samples at 1 m): 23 is quiet, the 24th run (6 hours of dq_checks) fires, with no `for`.
+  - interval: 1m
+    input_series:
+      - series: 'lakehouse_dq_gold_not_compared_runs{job="statsd-exporter"}'
+        values: '22x14 23x14 24x14'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: SilverGoldNotCompared
+        exp_alerts: []
+      - eval_time: 29m
+        alertname: SilverGoldNotCompared
+        exp_alerts: []
+      - eval_time: 31m
+        alertname: SilverGoldNotCompared
+        exp_alerts:
+          - exp_labels:
+              severity: warn
+              job: statsd-exporter
+
+  # A host that sleeps leaves holes in the scrape, but not in the count: 30 runs, then a 40 minute
+  # pause (samples missing, no stale marker, as after a sleep), then 30 again. Fires inside the
+  # pause (the last value holds) and after it. The count does not need the samples in between.
+  - interval: 1m
+    input_series:
+      - series: 'lakehouse_dq_gold_not_compared_runs{job="statsd-exporter"}'
+        values: '30x10 _x40 30x10'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: SilverGoldNotCompared
+        exp_alerts:
+          - exp_labels:
+              severity: warn
+              job: statsd-exporter
+      - eval_time: 30m
+        alertname: SilverGoldNotCompared
+        exp_alerts:
+          - exp_labels:
+              severity: warn
+              job: statsd-exporter
+      - eval_time: 55m
+        alertname: SilverGoldNotCompared
+        exp_alerts:
+          - exp_labels:
+              severity: warn
+              job: statsd-exporter
+
+  # The series is gone (dq_checks stopped, statsd-exporter dropped the gauge at the TTL): the last
+  # count holds for an hour, as in the rules above, then this goes quiet and DqChecksStale (tested
+  # above) speaks for a dq_checks that does not run. The last sample is at minute 10: still read
+  # at 1h05m (55 minutes on), no longer at 1h15m (65 minutes on).
+  - interval: 1m
+    input_series:
+      - series: 'lakehouse_dq_gold_not_compared_runs{job="statsd-exporter"}'
+        values: '30x10 stale'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: SilverGoldNotCompared
+        exp_alerts:
+          - exp_labels:
+              severity: warn
+              job: statsd-exporter
+      - eval_time: 1h5m
+        alertname: SilverGoldNotCompared
+        exp_alerts:
+          - exp_labels:
+              severity: warn
+              job: statsd-exporter
+      - eval_time: 1h15m
+        alertname: SilverGoldNotCompared
+        exp_alerts: []
+      - eval_time: 2h
+        alertname: SilverGoldNotCompared
+        exp_alerts: []
+
+  # No series at all (dq_checks never ran): not this alert's.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="statsd-exporter"}'
+        values: '1x500'
+    alert_rule_test:
+      - eval_time: 7h
+        alertname: SilverGoldNotCompared
+        exp_alerts: []
+
+  # A run compared gold and the count went back to 0: quiet with the next value, not an hour later
+  # (last_over_time reads the newest sample, not the highest).
+  - interval: 1m
+    input_series:
+      - series: 'lakehouse_dq_gold_not_compared_runs{job="statsd-exporter"}'
+        values: '30x14 0x30'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: SilverGoldNotCompared
+        exp_alerts:
+          - exp_labels:
+              severity: warn
+              job: statsd-exporter
+      - eval_time: 16m
+        alertname: SilverGoldNotCompared
+        exp_alerts: []
+
   # No stamp at all: gone after 15 minutes.
   - interval: 1m
     input_series:

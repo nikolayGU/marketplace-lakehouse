@@ -4,10 +4,11 @@ Fails the run: a primary key twice in a silver table; live row counts that diffe
 while nothing is in flight (checks.at_rest) and CDC is not stalled; a value that differs between
 the source and silver, or silver and gold, at rest (reconcile_values, W5-T04). A CDC that stands
 (the source wrote and the slot moved no further, checks.cdc_state) is "in flight, no verdict" for
-the source-silver comparisons and the gauge `lakehouse.dq.cdc_stalled` (W6-D9). Every value is
-logged as a `dq <name>=<value>` line and sent to statsd-exporter as a `lakehouse.*` gauge
-(lakehouse/metrics.py, observability/statsd/mapping.yml). Not exported: new quarantine rows,
-a Modify gate of the owner (W4-D8).
+the source-silver comparisons and the gauge `lakehouse.dq.cdc_stalled` (W6-D9). The runs in a
+row that did not compare silver with gold are counted in `lakehouse.dq.gold_not_compared_runs`
+(alert SilverGoldNotCompared). Every value is logged as a `dq <name>=<value>` line and sent to
+statsd-exporter as a `lakehouse.*` gauge (lakehouse/metrics.py, observability/statsd/mapping.yml).
+Not exported: new quarantine rows, a Modify gate of the owner (W4-D8).
 """
 
 import json
@@ -22,6 +23,7 @@ from lakehouse import checks, metrics, reconcile, sql
 from lakehouse.clients import postgres_rows, postgres_value, trino_rows, trino_value
 from lakehouse.settings import (
     CDC_STATE_SEEN,
+    GOLD_NOT_COMPARED_RUNS,
     LAST_BRONZE_SNAPSHOT,
     SILVER_KEYS,
     SOURCE_TABLES,
@@ -37,6 +39,21 @@ def export(*gauges: tuple[str, object, dict[str, str]]) -> None:
     """Send (name, value, tags) gauges to statsd-exporter; a failure is printed, not raised."""
     lines = [metrics.gauge_line(name, value, tags) for name, value, tags in gauges]
     metrics.send(lines, settings.statsd_host, settings.statsd_port)
+
+
+def count_gold_run(compared: bool) -> int:
+    """Runs in a row that did not compare silver with gold, kept in an Airflow Variable: 0 after a
+    comparison, one more after a run without. A Variable that is missing or unreadable counts as
+    0. The Variable is written here, after the comparison, so a run that fails in between leaves
+    the count as it was."""
+    remembered = Variable.get(GOLD_NOT_COMPARED_RUNS, default=None)
+    try:
+        before = max(int(remembered or 0), 0)
+    except ValueError:
+        before = 0
+    runs = 0 if compared else before + 1
+    Variable.set(GOLD_NOT_COMPARED_RUNS, str(runs))
+    return runs
 
 
 @dag(
@@ -139,7 +156,14 @@ def dq_checks() -> None:
         if not resting:
             print("dq reconcile_in_flight=1")
             print("in flight: bronze or silver has not caught up yet, no verdict")
-            export(("lakehouse.dq.reconcile_in_flight", 1, {}))
+            runs = count_gold_run(compared=False)
+            print(f"dq gold_not_compared_runs={runs}")
+            # Gold is not compared either: the alert needs the count, not a gap in the series.
+            export(
+                ("lakehouse.dq.reconcile_in_flight", 1, {}),
+                ("lakehouse.dq.reconcile_gold_compared", 0, {}),
+                ("lakehouse.dq.gold_not_compared_runs", runs, {}),
+            )
             return
 
         started = time.time()
@@ -242,6 +266,9 @@ def dq_checks() -> None:
                     {**tags, "side": "left"},
                 ),
             ]
+        runs = count_gold_run(compared=gold_ready)
+        print(f"dq gold_not_compared_runs={runs}")
+        gauges.append(("lakehouse.dq.gold_not_compared_runs", runs, {}))
         gauges.append(("lakehouse.dq.reconcile_verdict_timestamp_seconds", time.time(), {}))
         export(*gauges)
         print(f"dq reconcile_seconds={time.time() - started:.1f}")

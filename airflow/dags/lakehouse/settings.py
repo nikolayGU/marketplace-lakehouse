@@ -12,6 +12,9 @@ LAST_BRONZE_SNAPSHOT = "silver_upsert_last_bronze_snapshot"
 # Where the previous dq_checks run left the write counter of schema shop and the position the
 # slot had confirmed (sql.CDC_PROGRESS, JSON); checks.cdc_state tells from them whether CDC stands.
 CDC_STATE_SEEN = "dq_checks_cdc_state"
+# How many dq_checks runs in a row did not compare silver with gold (bronze not yet in silver, or
+# gold behind silver); a comparison resets it to 0. The alert SilverGoldNotCompared reads it.
+GOLD_NOT_COMPARED_RUNS = "dq_gold_not_compared_runs"
 # The replication slot Debezium reads (connect/shop-connector.json, slot.name).
 SHOP_SLOT = "shop_slot"
 LAKE_WRITERS_POOL = "lake_writers"

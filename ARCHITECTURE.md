@@ -45,7 +45,7 @@ flowchart TB
   OPM --> S
 
   subgraph OBS["Observability"]
-    EX["Connect JMX, postgres-exporter (slot lag),<br/>kafka-exporter, Spark listener,<br/>Airflow and dq_checks StatsD, container-exporter"] --> PR["Prometheus<br/>14 alert rules"]
+    EX["Connect JMX, postgres-exporter (slot lag),<br/>kafka-exporter, Spark listener,<br/>Airflow and dq_checks StatsD, container-exporter"] --> PR["Prometheus<br/>15 alert rules"]
     PR --> GF2["Grafana<br/>Pipeline health, Infra"]
   end
 ```
@@ -99,7 +99,7 @@ docker run --rm -v "$T:/in" -v "$PWD/docs/img:/out" minlag/mermaid-cli:11.4.2 \
 8. Prometheus scrapes Kafka, Connect, PostgreSQL (slot lag, retained WAL), the Spark driver
    (custom `StreamingQueryListener` metrics: input rows, batch duration, Kafka lag), Airflow
    (StatsD) and a small `container-exporter` on the Docker API (ADR-023). Grafana shows
-   "Pipeline health" and "Infra". 14 alert rules in `observability/prometheus/alerts.yml`, tested
+   "Pipeline health" and "Infra". 15 alert rules in `observability/prometheus/alerts.yml`, tested
    by promtool (`make alerts-test`); no Alertmanager, alerts are read in Prometheus and Grafana.
 9. Grafana with a Trino datasource shows the "Marketplace" dashboard: four panels over
    `lake_ro.gold` (daily sales, GMV by category, delivery SLA by state, cancellations). `lake_ro`

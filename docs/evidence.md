@@ -91,8 +91,8 @@ objects and 482 441 040 bytes before and after (`mc du --json`), `mc admin info`
 
 ## Alerts and time to fire
 
-14 rules in [`observability/prometheus/alerts.yml`](../observability/prometheus/alerts.yml) (11 named
-alerts, some with two expressions), tested by `make alerts-test` (promtool; `SUCCESS: 14 rules found`, 2026-10-29; failure cases first). No Alertmanager
+15 rules in [`observability/prometheus/alerts.yml`](../observability/prometheus/alerts.yml) (12 named
+alerts, some with two expressions), tested by `make alerts-test` (promtool; `SUCCESS: 15 rules found`, 2026-10-30; failure cases first). No Alertmanager
 (ADR-023): the alerts are read in Prometheus and in the Grafana "Firing alerts" panel. The table is
 in [OPERATIONS, Alerts](../OPERATIONS.md#alerts).
 
@@ -106,7 +106,7 @@ in [OPERATIONS, Alerts](../OPERATIONS.md#alerts).
 | `ContainerRestarting` | live, scenarios 5 and 8 (2026-10-23) | 15 s after the restart |
 | `CdcStalledSourceWrites` | live, scenario 6 (2026-10-29) | firing 18:20:04; `cdc_stalled` was 1 from 18:01 (W6-T07 result in [the W6 spec](planning/14-closeout-spec.md), [HANDOFF](HANDOFF.md) log 29.10 18:22) |
 | `SparkRestartLoop` | rule run over the stored data of scenario 8, not a live firing | true from 17:11:15, 51 s after the first restart (17:10:24) |
-| `SlotWalHeldIdle`, `DqChecksStale`, `ScrapeTargetDown` | promtool only | not shown live |
+| `SlotWalHeldIdle`, `DqChecksStale`, `ScrapeTargetDown`, `SilverGoldNotCompared` | promtool only | not shown live |
 
 `SparkNoBatch5m` did not fire in scenario 8: a crash-looping driver dies before its first batch and
 Kafka came back inside the 5 minutes of the `gone` rule. That gap is why `SparkRestartLoop` exists
