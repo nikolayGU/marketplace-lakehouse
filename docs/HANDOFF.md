@@ -20,7 +20,8 @@ Prometheus, применение П-2, цикл verify, коммиты и push.
 | Prometheus | `docker start lakehouse-prometheus-1` по «ок» | 14:04 UTC healthy, 14 правил загружены |
 | Б2 сверка значений | ревью 2 круга; цикл verify по «ок» владельца (классификатор auto mode сначала отказал) | `8164afe`: `make verify` 7 из 7 `values ok` |
 | Б1 таймауты Airflow | DAG поставлены при паузе трёх DAG; `airflow dags list-import-errors` пусто; ревью 2 круга; цикл verify | `e2ae619`; живой таймаут merge не проверен |
-| Б3 алерт сверки silver-gold | счётчик прогонов в Variable вместо окна 6 ч (ревью); DAG поставлен на паузе `dq_checks`; ревью «принять»; цикл verify; HUP через `docker exec` | правило `SilverGoldNotCompared`, 15 правил; живое срабатывание не показано |
+| Б3 алерт сверки silver-gold | счётчик прогонов в Variable вместо окна 6 ч (ревью); DAG поставлен на паузе `dq_checks`; ревью «принять»; цикл verify; HUP через `docker exec` | `c2d711c`; правило `SilverGoldNotCompared`, 15 правил загружены; 16:33 UTC серия `lakehouse_dq_gold_not_compared_runs` 0, `dq_checks` 16:30 success; живое срабатывание не показано |
+| CI на `bac8047` | `gh run view 41088594070` | все job success, в том числе `alerts-test`, `spark-tests`, `airflow-image` (новый `dags-check`) |
 
 Открыто: «Действия владельца» строка 14 (копия `.env`); в новой сессии проверить, что Read `.env`
 получает отказ по deny в `settings.json`; бэклог аудита Б1..Б12;
