@@ -18,6 +18,9 @@ Prometheus, применение П-2, цикл verify, коммиты и push.
 | Правки дерева | `make check`; `make verify-fast`; `reviewer` | 899 passed, 83 skipped; `verify ok` 7 из 7; «принять с замечаниями», замечания закрыты кругом 1 |
 | Патчи | `git apply --check`; ревью | П-1 (хуки, settings, `agent_state.py`) применил владелец, коммит `8577de1`; живой guard: `cat .env` и `make down` получают окно; П-2 (правила агента) применён по «ок» |
 | Prometheus | `docker start lakehouse-prometheus-1` по «ок» | 14:04 UTC healthy, 14 правил загружены |
+| Б2 сверка значений | ревью 2 круга; цикл verify по «ок» владельца (классификатор auto mode сначала отказал) | `8164afe`: `make verify` 7 из 7 `values ok` |
+| Б1 таймауты Airflow | DAG поставлены при паузе трёх DAG; `airflow dags list-import-errors` пусто; ревью 2 круга; цикл verify | `e2ae619`; живой таймаут merge не проверен |
+| Б3 алерт сверки silver-gold | счётчик прогонов в Variable вместо окна 6 ч (ревью); DAG поставлен на паузе `dq_checks`; ревью «принять»; цикл verify; HUP через `docker exec` | правило `SilverGoldNotCompared`, 15 правил; живое срабатывание не показано |
 
 Открыто: «Действия владельца» строка 14 (копия `.env`); в новой сессии проверить, что Read `.env`
 получает отказ по deny в `settings.json`; бэклог аудита Б1..Б12;
@@ -155,6 +158,8 @@ unit), smoke красный (образы MinIO), W5-T05b не начата, г�
 
 | Дата UTC | Действие | Кто дал | Где видно |
 |---|---|---|---|
+| 30.10 ~16:00 | Б3: пауза `dq_checks` и установка патча DAG, цикл verify, коммиты `obs:` и `docs:`, push, `docker exec lakehouse-prometheus-1 kill -HUP 1` | владелец в Claude Code, вопрос с вариантами | `git log`, `/api/v1/rules` |
+| 30.10 ~14:40 | Цикл verify (пауза трёх DAG, остановка scheduler, `make verify`) для коммитов Б2 и Б1, установка DAG Б1 при паузе, push | владелец в Claude Code, вопрос с вариантами, после отказа классификатора auto mode | `git log` |
 | 30.10 ~14:20 | П-1 применён владельцем; ревью «принять» по дереву `7bf92f9`, цикл verify, коммит `8577de1`, push; SEC-11: email в истории оставить | владелец в чате: «пусть видно мейл, патч применил, продолжаем» | `git log` |
 | 30.10 14:04 | Коммиты `infra:` и `docs:` правок аудита после цикла verify (пауза трёх DAG, остановка scheduler), push `origin main` без force | владелец в Claude Code, вопрос с вариантами | `git log`, `gh run list` |
 | 30.10 14:04 | П-2 применён `git apply` (AGENTS.md, CLAUDE.md, agent-rules, 13-harness, docs-writer) | там же | коммит `docs:` аудита |
