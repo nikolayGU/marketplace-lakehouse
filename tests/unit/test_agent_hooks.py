@@ -3,6 +3,7 @@ import os
 import shutil
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -479,6 +480,125 @@ def test_guard_lets_a_command_that_shows_no_secret_pass(command: str) -> None:
     assert decision(bash(command)) == "allow"
 
 
+# B11 was rolled back: the guard pairs inline code with .env over the whole command, so a
+# mention of .env in another command still opens the window (an accepted false positive). A
+# pairing per command missed the forms below, each of which reads .env and must ask.
+@pytest.mark.parametrize(
+    "command",
+    [
+        # The `;` inside the quotes of the code does not split the command.
+        "python3 -c \"import os; print(open('.env').read())\"",
+        "python3 -c 'import os; print(open(\".env\").read())' && echo done",
+        "echo start; python3 -c \"import os; print(open('.env').read())\"; echo done",
+        "python3 -c 'print(1)'; python3 -c \"import os; print(open('.env').read())\"",
+        "python3 -c 'print(1)'\npython3 -c \"import os; print(open('.env').read())\"",
+        "python3 -c 'print(1)' | python3 -c \"import os; print(open('.env').read())\"",
+        "python3 -c 'a=1' && node -e \"require('fs').readFileSync('.env')\" || true",
+        "perl -e 'open(F, \".env\"); print <F>' && echo done",
+        "env X=1 python3 -c \"import os; print(open('.env').read())\"",
+        # A `$(...)`, a backtick pair or `&&` inside the code, or the code inside a substitution.
+        "python3 -c \"x = '$(date)'; print(open('.env').read())\"",
+        "python3 -c \"print(1 and 2 or 3 | 4); print(open('.env').read())\"",
+        "echo $(python3 -c \"print(open('.env').read())\")",
+        "echo `python3 -c \"print(open('.env').read())\"`",
+        "x=$(python3 -c \"import os; print(open('.env').read())\"); echo done",
+        # A here-document or a here-string: the code is not among the words of the interpreter.
+        "python3 - <<'EOF'\nimport os; print(open('.env').read())\nEOF",
+        "python3 <<EOF\nprint(open('.env').read())\nEOF\necho done",
+        "git status; python3 - <<'EOF'\nprint(open('.env').read())\nEOF",
+        "python3 - <<-EOF\n\tprint(open('.env').read())\n\tEOF",
+        "python3 - <<< \"print(open('.env').read())\"",
+        # Code piped to the interpreter, or a file name handed to it by xargs, comes from an
+        # earlier command of the line.
+        "echo \"print(open('.env').read())\" | python3 -",
+        "printf 'print(open(\".env\").read())' | python3 - && echo done",
+        "echo .env | xargs python3 -c 'import sys; print(open(sys.argv[1]).read())'",
+        # Quotes that do not balance: the segments are unknown, the whole line counts.
+        "echo done; python3 -c \"print(open('.env').read())",
+        # The name is in a variable, an `export` or a `for`, or the code runs in another shell.
+        "f=.env; python3 -c \"print(open('$f').read())\"",
+        "F=.env && python3 -c \"print(open('$F').read())\"",
+        "export F=.env; python3 -c \"import os; print(open(os.environ['F']).read())\"",
+        "export F=.env\npython3 -c \"import os; print(open(os.environ['F']).read())\"",
+        "for f in .env; do python3 -c \"print(open('$f').read())\"; done",
+        'bash -c "python3 -c \\"print(open(\'.env\').read())\\""',
+        'sh -c \'f=.env; python3 -c "print(open(\\"$f\\").read())"\'',
+        "eval 'f=.env'; python3 -c \"print(open('$f').read())\"",
+        'eval "python3 -c \\"print(open(\'.env\').read())\\""',
+        "env F=.env python3 -c \"import os; print(open(os.environ['F']).read())\"",
+        "F=.env python3 -c \"import os; print(open(os.environ['F']).read())\"",
+        "f=.env; python3 <<< \"print(open('$f').read())\"",
+        ("cd /work/lakehouse; F=.env; uv run python -c \"import os; print(open('$F').read())\""),
+        "ENV_FILE=$(pwd)/.env && python3 -c \"print(open('$ENV_FILE').read())\"",
+        "python3 -c \"print(open('$HOME/marketplace-lakehouse/'+'.env').read())\"",
+        # A `$(...)` or a backtick pair before the path, a process substitution.
+        'python3 -c "import sys; print(open(sys.argv[1]).read())" $(pwd)/.env',
+        "python3 -c 'import sys; print(open(sys.argv[1]).read())' `pwd`/.env",
+        (
+            "python3 -c 'import sys; print(open(sys.argv[1]).read())' "
+            "$(git rev-parse --show-toplevel)/.env"
+        ),
+        "python3 -c 'import sys; print(open(sys.argv[1]).read())' \"$(pwd)/.env\"",
+        "python3 -c 'import sys; print(open(sys.argv[1]).read())' $(echo .env)",
+        "python3 -c 'import sys; print(open(sys.argv[1]).read())' `echo .env`",
+        "python3 -c 'import sys; print(open(sys.argv[1]).read())' <(cat .env)",
+        "python3 -c 'import sys; print(open(sys.argv[1]).read())' <(< .env)",
+        "python3 -c 'import sys; print(sys.stdin.read())' < <(tr a a < .env)",
+        (
+            'uv run python -c "import sys; '
+            'print(open(sys.argv[1]).read())" \\\n    $(git rev-parse '
+            "--show-toplevel)/.env"
+        ),
+        # The name is on the stdin of the code, from an earlier command of the pipeline.
+        ('echo .env | python3 -c "import sys; print(open(sys.stdin.read().strip()).read())"'),
+        "printf .env | python3 -c 'import sys; print(open(input()).read())'",
+        "dd if=.env 2>/dev/null | python3 -c 'import sys; print(sys.stdin.read())'",
+        "base64 .env | python3 -c 'import sys; print(sys.stdin.read())'",
+        (
+            'git check-ignore .env | python3 -c "import sys; '
+            'print(open(sys.stdin.read().strip()).read())"'
+        ),
+        (
+            'ls -a | grep -x .env | python3 -c "import sys; '
+            'print(open(sys.stdin.read().strip()).read())"'
+        ),
+        # A backslash and a newline inside the command, or the flag glued to the code.
+        "echo hi\\\n; python3 -c \"print(open('.env').read())\"",
+        "python3 -c \\\n\"print(open('.env').read())\"",
+        "python3 -c 'import sys; print(open(sys.argv[1]).read())' \\\n  .env",
+        "python3 -c \\\n  'import sys; print(open(sys.argv[1]).read())' .env",
+        "python3 -c\"print(open('.env').read())\"",
+        "python3 -c'print(open(\".env\").read())'",
+        "node -e\"console.log(require('fs').readFileSync('.env','utf8'))\"",
+        "python3 -c \"import os\nprint(open('.env').read())\"",
+        # Another command before, after or around the code, a here-document, quoting forms.
+        "python3 -c \"print(open('.env').read())\" &",
+        "sleep 1 & python3 -c \"print(open('.env').read())\"",
+        "cat <<'A'\nhello\nA\npython3 - <<'B'\nprint(open('.env').read())\nB",
+        "python3 - <<'A'\nprint(1)\nA\ncat <<'B'\n.env\nB",
+        "python3 /dev/stdin <<'EOF'\nprint(open('.env').read())\nEOF",
+        "python3 -c \"$(cat <<'EOF'\nprint(open('.env').read())\nEOF\n)\"",
+        "python3 -c 'print(open(\".env\").read())'",
+        "python3 -c $'print(open(\".env\").read())'",
+        "uv run python - <<'EOF'\nprint(open('.env').read())\nEOF",
+        "ruby -e 'puts File.read(\".env\")'",
+        # The name as an argument of the code, in a group, a condition, `time`, `find`, `xargs`.
+        "python3 -c 'import sys; print(open(sys.argv[1]).read())' .env",
+        "python3 -c 'import sys; print(open(sys.argv[1]).read())' ./.env",
+        "{ python3 -c 'import sys; print(open(sys.argv[1]).read())' .env; }",
+        ("if true; then python3 -c 'import sys; print(open(sys.argv[1]).read())' .env; fi"),
+        "time python3 -c 'import sys; print(open(sys.argv[1]).read())' .env",
+        "xargs -a <(echo .env) python3 -c 'import sys; print(open(sys.argv[1]).read())'",
+        ("find . -name .env -exec python3 -c 'import sys; print(open(sys.argv[1]).read())' {} \\;"),
+    ],
+)
+def test_inline_code_that_names_env_is_still_asked(command: str) -> None:
+    result = bash(command)
+
+    assert decision(result) == "ask"
+    assert "secret" in result.stdout
+
+
 def test_a_secret_read_is_asked_before_the_early_exit_of_read_only_commands() -> None:
     # cat is a reader and passes on its own words; .env is what makes the difference.
     assert decision(bash("cat Makefile")) == "allow"
@@ -677,6 +797,128 @@ def test_stop_gate_lets_the_turn_end(repo: Path) -> None:
     assert hook("stop_gate.py", {}, repo).stdout == ""
 
 
+@pytest.mark.parametrize("mode", ["fast", "full"])
+def test_stop_gate_lets_markdown_edited_after_a_verify_end_the_turn(repo: Path, mode: str) -> None:
+    # B12 (RT-S3, AI-05): code is verified, then only the notes change. The turn must end without
+    # another verify, as it does for the commit gate.
+    (repo / "job.py").write_text("x = 2\n")
+    write_stamp(repo, mode)
+    (repo / "NOTES.md").write_text("report\n")
+    (repo / "docs").mkdir()
+    (repo / "docs" / "plan.txt").write_text("plan\n")
+
+    assert hook("stop_gate.py", {}, repo).stdout == ""
+
+
+@pytest.mark.parametrize(
+    ("edit", "named"),
+    [
+        (lambda root: (root / "job.py").write_text("x = 3\n"), "job.py"),
+        (lambda root: (root / "extra.py").write_text("y = 1\n"), "extra.py"),
+        (lambda root: (root / "job.py").unlink(), "job.py"),
+    ],
+    ids=["code edited", "new code file", "code removed"],
+)
+def test_stop_gate_blocks_code_changed_after_a_verify(
+    repo: Path, edit: Callable[[Path], object], named: str
+) -> None:
+    (repo / "job.py").write_text("x = 2\n")
+    write_stamp(repo, "fast")
+    (repo / "NOTES.md").write_text("report\n")
+    edit(repo)
+
+    result = hook("stop_gate.py", {}, repo)
+
+    assert json.loads(result.stdout)["decision"] == "block"
+    assert named in json.loads(result.stdout)["reason"]
+
+
+MOVED_OUT = pytest.mark.parametrize(
+    "target", ["docs/job.txt", "job.md"], ids=["code moved to docs", "code renamed to md"]
+)
+
+
+def move_code_out(repo: Path, target: str) -> None:
+    """`job.py` leaves the code paths with its content: git shows it as a rename."""
+    (repo / target).parent.mkdir(exist_ok=True)
+    (repo / "job.py").rename(repo / target)
+
+
+@MOVED_OUT
+def test_stop_gate_blocks_code_moved_out_of_the_code_paths_after_a_verify(
+    repo: Path, target: str
+) -> None:
+    # B12 review: git lists a rename by its new name only, a Markdown or docs/ path.
+    (repo / "job.py").write_text("x = 2\n")
+    write_stamp(repo, "fast")
+    move_code_out(repo, target)
+
+    result = hook("stop_gate.py", {}, repo)
+
+    assert json.loads(result.stdout)["decision"] == "block"
+    assert "job.py" in json.loads(result.stdout)["reason"]
+
+
+@MOVED_OUT
+def test_stop_gate_blocks_a_staged_move_of_code_out_of_the_code_paths(
+    repo: Path, target: str
+) -> None:
+    (repo / target).parent.mkdir(exist_ok=True)
+    git(repo, "mv", "job.py", target)
+
+    result = hook("stop_gate.py", {}, repo)
+
+    assert json.loads(result.stdout)["decision"] == "block"
+    assert "job.py" in json.loads(result.stdout)["reason"]
+
+
+@MOVED_OUT
+def test_commit_of_a_staged_move_of_code_out_of_the_code_paths_needs_check_and_review(
+    repo: Path, target: str
+) -> None:
+    (repo / target).parent.mkdir(exist_ok=True)
+    git(repo, "mv", "job.py", target)
+    write_stamp(repo, "full")
+
+    result = bash("git commit -m move", repo)
+
+    assert decision(result) == "deny"
+    assert "git commit without make check and a reviewer verdict" in result.stderr
+
+
+@MOVED_OUT
+def test_commit_is_refused_when_code_moved_out_of_the_code_paths_after_the_stamps(
+    repo: Path, target: str
+) -> None:
+    (repo / "job.py").write_text("x = 2\n")
+    gate_stamps(repo)
+    move_code_out(repo, target)
+
+    result = bash(COMMIT, repo)
+
+    assert decision(result) == "deny"
+    assert "a full make verify, make check and a reviewer verdict" in result.stderr
+
+
+def test_stop_gate_names_only_the_code_changed_after_the_verify(repo: Path) -> None:
+    (repo / "job.py").write_text("x = 2\n")
+    write_stamp(repo, "fast")
+    (repo / "extra.py").write_text("y = 1\n")
+
+    reason = json.loads(hook("stop_gate.py", {}, repo).stdout)["reason"]
+
+    assert "extra.py" in reason and "job.py" not in reason
+
+
+def test_stop_gate_blocks_a_stamp_of_a_tree_that_is_gone(repo: Path) -> None:
+    (repo / "job.py").write_text("x = 2\n")
+    (repo / ".verify-stamp").write_text(f"fast 2026-10-30T10:00:00Z {'0' * 40}\n")
+
+    result = hook("stop_gate.py", {}, repo)
+
+    assert json.loads(result.stdout)["decision"] == "block"
+
+
 def test_session_context_reports_state_goal_and_stamp(repo: Path) -> None:
     (repo / "docs").mkdir()
     (repo / "docs" / "HANDOFF.md").write_text(
@@ -703,18 +945,38 @@ def test_session_context_survives_missing_docs(repo: Path) -> None:
 
 
 def fake_docker(
-    bin_dir: Path, monkeypatch: pytest.MonkeyPatch, *, running: str, stopped: str, rows: str
+    bin_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    running: str,
+    stopped: str,
+    rows: str,
+    stack: str | None = None,
+    others: str = "",
 ) -> None:
-    """A `docker` first on PATH: `ps` lists the running containers, `ps -a` the ids of the stopped
-    ones and `inspect` one row per id (name, restart policy, state, exit code). Every call is
-    appended to calls.txt next to it."""
+    """A `docker` first on PATH: `ps` lists the running containers, `ps -a` with a status filter
+    the ids of the stopped ones, with the label filter alone the ids of the stack (`stack`, the
+    stopped ones by default) and with no filter the ids of every container (`others`), and
+    `inspect` one row per id (name, restart policy, state, exit code). Every call is appended to
+    calls.txt next to it."""
     bin_dir.mkdir()
-    for name, text in (("ps.txt", running), ("ps_all.txt", stopped), ("inspect.txt", rows)):
+    files = (
+        ("ps.txt", running),
+        ("ps_all.txt", stopped),
+        ("ps_stack.txt", stopped if stack is None else stack),
+        ("ps_any.txt", others),
+        ("inspect.txt", rows),
+    )
+    for name, text in files:
         (bin_dir / name).write_text(text)
     script = bin_dir / "docker"
     script.write_text(
         '#!/bin/sh\nd=$(dirname "$0")\necho "$*" >> "$d/calls.txt"\ncase "$1" in\n'
-        '  ps) case " $* " in *" -a "*) cat "$d/ps_all.txt";; *) cat "$d/ps.txt";; esac;;\n'
+        '  ps) case " $* " in\n'
+        '    *" -a "*status=*) cat "$d/ps_all.txt";;\n'
+        '    *" -a "*label=*) cat "$d/ps_stack.txt";;\n'
+        '    *" -a "*) cat "$d/ps_any.txt";;\n'
+        '    *) cat "$d/ps.txt";;\n  esac;;\n'
         '  inspect) cat "$d/inspect.txt";;\n  *) exit 1;;\nesac\n'
     )
     script.chmod(0o755)
@@ -773,36 +1035,88 @@ def test_session_context_has_no_stopped_line_when_everything_runs(
     assert "docker start" not in context and "Not running" not in context
 
 
-def test_session_context_asks_for_the_compose_project_of_the_environment(
-    repo: Path, tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("project", [None, "otherstack", ""])
+def test_session_context_finds_the_stack_by_its_compose_directory_not_a_project_name(
+    repo: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+    project: str | None,
 ) -> None:
-    monkeypatch.delenv("COMPOSE_PROJECT_NAME", raising=False)
-    default = tmp_path_factory.mktemp("default") / "bin"
-    fake_docker(default, monkeypatch, running="", stopped="", rows="")
-    session_context(repo)
-    assert "label=com.docker.compose.project=lakehouse " in (default / "calls.txt").read_text()
-
-    monkeypatch.setenv("COMPOSE_PROJECT_NAME", "otherstack")
-    named = tmp_path_factory.mktemp("named") / "bin"
+    # B11: the project name may come from .env, which the hook does not read and the hook's own
+    # environment does not hold. The working_dir label of the containers does not depend on it.
+    if project is None:
+        monkeypatch.delenv("COMPOSE_PROJECT_NAME", raising=False)
+    else:
+        monkeypatch.setenv("COMPOSE_PROJECT_NAME", project)
+    bin_dir = tmp_path_factory.mktemp("stack") / "bin"
     fake_docker(
-        named,
+        bin_dir,
         monkeypatch,
         running="",
         stopped="aaa\n",
-        rows="/otherstack-prometheus-1 unless-stopped exited 255\n",
+        rows="/renamed-prometheus-1 unless-stopped exited 255\n",
     )
+
     context = session_context(repo)
 
-    calls = (named / "calls.txt").read_text()
-    assert "label=com.docker.compose.project=otherstack " in calls
-    assert "project=lakehouse" not in calls
-    assert "docker start otherstack-prometheus-1 only with the owner's ok" in context
+    listings = [
+        call
+        for call in (bin_dir / "calls.txt").read_text().splitlines()
+        if call.startswith("ps -a") and "--filter" in call
+    ]
+    label = f"label=com.docker.compose.project.working_dir={repo}/docker"
+    assert len(listings) == 2
+    for listing in listings:
+        assert listing.split().count(label) == 1
+        assert "label=com.docker.compose.project=" not in listing
+    assert "docker start renamed-prometheus-1 only with the owner's ok" in context
 
-    monkeypatch.setenv("COMPOSE_PROJECT_NAME", "")
-    empty = tmp_path_factory.mktemp("empty") / "bin"
-    fake_docker(empty, monkeypatch, running="", stopped="", rows="")
-    session_context(repo)
-    assert "label=com.docker.compose.project=lakehouse " in (empty / "calls.txt").read_text()
+
+def test_session_context_says_when_the_stack_directory_matches_no_container(
+    repo: Path, tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # B11 review: a stack started from another directory, or a path that docker wrote another way,
+    # must not read as a stack with nothing stopped.
+    fake_docker(
+        tmp_path_factory.mktemp("elsewhere") / "bin",
+        monkeypatch,
+        running="otherstack-kafka-1 Up 2 hours (healthy)\n",
+        stopped="",
+        rows="",
+        stack="",
+        others="aaa\nbbb\n",
+    )
+
+    context = session_context(repo)
+
+    assert f"no containers of the stack at {repo}/docker" in context
+    assert "otherstack-kafka-1 Up 2 hours (healthy)" in context
+    assert "docker start" not in context
+
+
+@pytest.mark.parametrize(
+    ("stack", "others"),
+    [("aaa\n", "aaa\nbbb\n"), ("", "")],
+    ids=["the stack has containers", "docker has no containers at all"],
+)
+def test_session_context_has_no_missing_stack_line_otherwise(
+    repo: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+    stack: str,
+    others: str,
+) -> None:
+    fake_docker(
+        tmp_path_factory.mktemp("stack") / "bin",
+        monkeypatch,
+        running="lakehouse-kafka-1 Up 2 hours (healthy)\n",
+        stopped="",
+        rows="",
+        stack=stack,
+        others=others,
+    )
+
+    assert "no containers of the stack" not in session_context(repo)
 
 
 def test_session_context_inspects_nothing_when_the_project_has_no_containers(

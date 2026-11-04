@@ -137,6 +137,52 @@ def test_changes_since_the_stamp_are_listed_by_path(repo: Path) -> None:
     assert code_changes_since(repo, stamp) == ["job.py"]
 
 
+def move_code_out(repo: Path, target: str) -> None:
+    """`job.py` leaves the code paths with its content: git shows it as a rename."""
+    (repo / target).parent.mkdir(exist_ok=True)
+    (repo / "job.py").rename(repo / target)
+
+
+@pytest.mark.parametrize("target", ["docs/job.txt", "job.md"])
+def test_code_that_is_moved_out_of_the_code_paths_still_counts_as_changed(
+    repo: Path, target: str
+) -> None:
+    # B12 review: a rename shows only its new name, a Markdown or docs/ path, so the code that
+    # left `job.py` was not listed and a stamp seemed to cover the tree.
+    (repo / "job.py").write_text("x = 2\n")
+    write_stamp(repo, "fast")
+    stamp = read_stamp(repo)
+    assert stamp is not None
+    move_code_out(repo, target)
+
+    assert code_changes_since(repo, stamp) == ["job.py"]
+
+
+@pytest.mark.parametrize("target", ["docs/job.txt", "job.md"])
+def test_a_staged_move_of_code_out_of_the_code_paths_is_a_code_change(
+    repo: Path, target: str
+) -> None:
+    # `git mv` stages a rename, and `git status` shows a staged rename by its new name only.
+    (repo / target).parent.mkdir(exist_ok=True)
+    git(repo, "mv", "job.py", target)
+
+    assert code_changes(repo) == ["job.py"]
+
+
+@pytest.mark.parametrize("target", ["docs/job.txt", "job.md"])
+def test_a_review_does_not_cover_code_that_was_moved_out_of_the_code_paths(
+    repo: Path, target: str
+) -> None:
+    (repo / "job.py").write_text("x = 2\n")
+    tree = tree_hash(repo)
+    move_code_out(repo, target)
+
+    message = record_review(repo, reviewer_report("принять", tree))
+
+    assert message.startswith("nothing recorded: code changed since tree")
+    assert not (repo / REVIEW_STAMP).exists()
+
+
 WIDE_NOTES = "принять \t с   замечаниями"  # noqa: RUF001
 
 
@@ -358,6 +404,59 @@ def test_record_review_never_accepts_a_verdict_that_words_after_it_take_back(rep
     assert_revoked(repo, message)
     stamp = read_stamp(repo, "review")
     assert stamp is not None and stamp.mode not in ACCEPTED
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        f"Вердикт: {WITH_NOTES} (не блокируют)",
+        f"**Вердикт:** {WITH_NOTES} (замечания не блокируют коммит)",
+        "Вердикт: принять (нет блокирующих, вернуть не нужно)",
+        f"Вердикт: {WITH_NOTES}, не блокируют",
+    ],
+)
+def test_a_remark_with_a_word_that_takes_back_on_the_verdict_line_revokes(
+    repo: Path, line: str
+) -> None:
+    # B11: the parser is not loosened, a closed refusal is safe. The reviewer role says where a
+    # remark goes instead (the test below and the role text).
+    tree = tree_hash(repo)
+    record_review(repo, reviewer_report("принять", tree))
+
+    message = record_review(repo, lines(line, "Предмет: код", f"Дерево: {tree}"))
+
+    assert_revoked(repo, message)
+
+
+@pytest.mark.parametrize("mode", ["принять", WITH_NOTES])
+def test_a_remark_on_the_line_after_the_verdict_does_not_take_it_back(
+    repo: Path, mode: str
+) -> None:
+    tree = tree_hash(repo)
+
+    message = record_review(
+        repo,
+        lines(
+            f"Вердикт: {mode}",
+            "Ремарка: замечания не блокируют коммит, вернуть код не нужно, нет причин для отказа",
+            "Предмет: код",
+            "Проверено и чисто: make test",
+            f"Дерево: {tree}",
+        ),
+    )
+
+    stamp = read_stamp(repo, "review")
+    assert stamp is not None
+    assert (stamp.mode, stamp.tree, stamp.fresh) == (VERDICTS[mode], tree, True)
+    assert "revoked" not in message
+
+
+def test_the_reviewer_role_keeps_remarks_off_the_verdict_line() -> None:
+    # The role wraps its lines at 100 columns, so a phrase may sit across a line break.
+    role = " ".join((REPO / ".claude" / "agents" / "reviewer.md").read_text().split())
+
+    assert "только слова вердикта" in role
+    assert "следующей строкой" in role
 
 
 def test_record_review_revokes_on_two_different_verdicts(repo: Path) -> None:

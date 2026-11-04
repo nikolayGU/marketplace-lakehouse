@@ -19,18 +19,21 @@ docker ps --format '{{.Names}} {{.Status}}' 2>/dev/null || echo "docker unavaila
 # REL-01: docker ps does not show a container that is down. After `docker kill` or `docker stop`
 # restart: unless-stopped leaves it down, and nothing else raises it. One-shot jobs (restart "no")
 # are meant to exit and are not listed. Only name, policy, state and exit code are read, no Env.
-# The project is COMPOSE_PROJECT_NAME of this shell, as `docker compose` reads it, else lakehouse.
+# The stack is found by the directory of its compose file: docker compose labels every container
+# with com.docker.compose.project.working_dir, which holds whatever COMPOSE_PROJECT_NAME is. The
+# name may come from .env, which this shell does not read, so a lookup by name would miss the stack.
+# One filter only: docker ANDs label filters, so a second spelling of the path would match nothing.
 stopped_containers() {
-  local project="${COMPOSE_PROJECT_NAME:-lakehouse}"
-  local label="label=com.docker.compose.project=$project"
+  local stack="$root/docker"
+  local label="label=com.docker.compose.project.working_dir=$stack"
   local format='{{.Name}} {{.HostConfig.RestartPolicy.Name}}'
   format+=' {{.State.Status}} {{.State.ExitCode}}'
   local ids_text info="" name policy state code down=0
   local -a ids
   ids_text="$(docker ps -aq --filter "$label" 2>/dev/null)" || return 1
-  echo "project: $project"
+  echo "stack: $stack"
   if [ -z "$ids_text" ]; then
-    echo "no containers of project $project"
+    echo "no containers of the stack at $stack"
     return 0
   fi
   mapfile -t ids <<<"$ids_text"

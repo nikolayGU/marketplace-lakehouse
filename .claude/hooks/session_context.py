@@ -14,7 +14,10 @@ ROOT = Path(os.environ.get("CLAUDE_PROJECT_DIR") or Path(__file__).resolve().par
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from scripts.agent_state import describe_stamp  # noqa: E402
 
-COMPOSE_PROJECT = os.environ.get("COMPOSE_PROJECT_NAME") or "lakehouse"
+# The stack is found by the directory of its compose file, which docker compose writes into the
+# label of every container, not by the project name: the name may come from .env, which neither
+# this hook nor its environment reads. One filter only, as docker ANDs the label filters.
+STACK_LABEL = f"label=com.docker.compose.project.working_dir={ROOT / 'docker'}"
 # Docker brings these back after a daemon restart, unless they were stopped by hand.
 RESTARTED = ("unless-stopped", "always")
 
@@ -38,6 +41,18 @@ def docker_lines(*args: str) -> list[str] | None:
     return result.stdout.splitlines() if result.returncode == 0 else None
 
 
+def stack_missing() -> str | None:
+    """A line when no container carries the label of this checkout's compose directory while
+    other containers exist: a stack started from another directory, or a path that docker wrote
+    another way, would otherwise read as a stack with nothing stopped."""
+    ours = docker_lines("ps", "-a", "--filter", STACK_LABEL, "--format", "{{.ID}}")
+    if ours is None or ours:
+        return None
+    if not docker_lines("ps", "-a", "--format", "{{.ID}}"):
+        return None
+    return f"no containers of the stack at {ROOT / 'docker'} (other containers exist)"
+
+
 def stopped_containers() -> list[str]:
     """One line per stopped container of the stack that a restart policy should have kept up
     (27.10 and 30.10: prometheus stayed in Exited (255) after a Docker restart and nobody saw
@@ -46,7 +61,7 @@ def stopped_containers() -> list[str]:
         "ps",
         "-a",
         "--filter",
-        f"label=com.docker.compose.project={COMPOSE_PROJECT}",
+        STACK_LABEL,
         "--filter",
         "status=exited",
         "--filter",
@@ -118,13 +133,16 @@ def containers_section() -> str:
     if running.startswith("unavailable"):  # no point in asking a docker that does not answer
         return running
     try:
+        missing = stack_missing()
         stopped = stopped_containers()
     except Exception as error:  # a surprise from docker must not block the session start
+        missing = None
         stopped = [f"stopped containers unreadable ({error.__class__.__name__})"]
+    section = running + (f"\n\n{missing}" if missing else "")
     if not stopped:
-        return running
+        return section
     return (
-        running + "\n\nNot running, restart policy unless-stopped or always:\n" + "\n".join(stopped)
+        section + "\n\nNot running, restart policy unless-stopped or always:\n" + "\n".join(stopped)
     )
 
 

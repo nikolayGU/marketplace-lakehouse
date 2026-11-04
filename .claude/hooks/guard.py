@@ -598,9 +598,8 @@ def commit_gap(low: str) -> list[str]:
     current = tree_hash(ROOT)
 
     def covers(stamp: Stamp | None) -> bool:
-        # The commit gate is more lenient than stop_gate.py, which wants a verify stamp that is
-        # exactly fresh whenever code changed: here a stamp also covers a tree that differs from
-        # the stamped one only in Markdown and docs/.
+        # The same rule as stop_gate.py: a stamp covers the tree it was written on and any tree
+        # that differs from it only in Markdown and docs/.
         if stamp is None:
             return False
         try:

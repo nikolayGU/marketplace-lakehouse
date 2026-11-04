@@ -6,9 +6,12 @@ marked as stopped by hand, and nothing else raises it. The script runs here agai
 """
 
 import os
+import shutil
 import stat
 import subprocess
 from pathlib import Path
+
+import pytest
 
 REPO = Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "scripts" / "report.sh"
@@ -20,7 +23,12 @@ echo "$*" >> "$FAKE_DOCKER_DIR/calls.log"
 case "$1" in
   ps)
     case "$*" in
-      *--filter*) cat "$FAKE_DOCKER_DIR/ids.txt" ;;
+      *--filter*)
+        # Only the stack of FAKE_DOCKER_WORKDIR answers, as its containers carry the label.
+        case " $* " in
+          *" label=com.docker.compose.project.working_dir=$FAKE_DOCKER_WORKDIR "*)
+            cat "$FAKE_DOCKER_DIR/ids.txt" ;;
+        esac ;;
       *) echo "lakehouse-trino-1 Up 3 hours (healthy)" ;;
     esac ;;
   inspect) cat "$FAKE_DOCKER_DIR/inspect.txt" ;;
@@ -37,11 +45,14 @@ def _run_report(
     *,
     ids: list[str] | None = None,
     project: str | None = None,
+    script: Path = SCRIPT,
+    workdir: Path = REPO / "docker",
 ) -> tuple[str, list[str]]:
     """Return the report and the docker calls; inspect_lines None means docker fails.
 
     ids are the container ids `docker ps` finds (five by default); project is the shell's
-    COMPOSE_PROJECT_NAME, unset when None.
+    COMPOSE_PROJECT_NAME, unset when None; script is the copy of report.sh to run; workdir is the
+    compose directory the containers carry in their working_dir label.
     """
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -59,9 +70,10 @@ def _run_report(
         **({"COMPOSE_PROJECT_NAME": project} if project is not None else {}),
         "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
         "FAKE_DOCKER_DIR": str(tmp_path),
+        "FAKE_DOCKER_WORKDIR": str(workdir),
     }
     result = subprocess.run(
-        ["bash", str(SCRIPT)], capture_output=True, text=True, env=env, check=False
+        ["bash", str(script)], capture_output=True, text=True, env=env, check=False
     )
     assert result.returncode == 0, result.stderr
     calls_log = tmp_path / "calls.log"
@@ -92,7 +104,7 @@ def test_a_stopped_unless_stopped_container_is_listed_and_a_one_shot_job_is_not(
 
     section = _section(report, SECTION)
 
-    assert "project: lakehouse" in section
+    assert f"stack: {REPO}/docker" in section
     assert "lakehouse-prometheus-1 exited" in section
     assert "255" in section
     assert "lakehouse-legacy-1 exited" in section
@@ -116,28 +128,57 @@ def test_nothing_is_listed_when_every_restartable_container_runs(tmp_path: Path)
 
 
 def test_no_containers_of_the_project_is_not_reported_as_all_running(tmp_path: Path) -> None:
-    # An empty list (the stack is down, or the project is another one) must not read as healthy.
+    # An empty list (the stack is down, or it is another checkout's) must not read as healthy.
     report, _ = _run_report(tmp_path, [], ids=[])
 
     section = _section(report, SECTION)
 
-    assert "no containers of project lakehouse" in section
+    assert f"no containers of the stack at {REPO}/docker" in section
     assert "all restartable containers run" not in section
 
 
-def test_the_project_comes_from_compose_project_name(tmp_path: Path) -> None:
+@pytest.mark.parametrize("project", [None, "lakehouse-fresh", ""])
+def test_the_stack_is_found_by_its_compose_directory_not_by_a_project_name(
+    tmp_path: Path, project: str | None
+) -> None:
+    # B11: .env may name the project (.env.example sets COMPOSE_PROJECT_NAME) and this shell never
+    # sees it, since .env is not read. The working_dir label does not depend on the name.
     report, calls = _run_report(
-        tmp_path,
-        ["/lakehouse-fresh-prometheus-1 unless-stopped exited 255"],
-        project="lakehouse-fresh",
+        tmp_path, ["/renamed-prometheus-1 unless-stopped exited 255"], project=project
     )
 
     section = _section(report, SECTION)
 
-    assert "project: lakehouse-fresh" in section
-    assert "lakehouse-fresh-prometheus-1 exited" in section
+    assert "renamed-prometheus-1 exited" in section
     [listing] = [call for call in calls if call.startswith("ps") and "--filter" in call]
-    assert "label=com.docker.compose.project=lakehouse-fresh" in listing.split()
+    label = f"label=com.docker.compose.project.working_dir={REPO}/docker"
+    assert listing.split().count(label) == 1
+    assert "label=com.docker.compose.project=" not in listing
+
+
+@pytest.mark.parametrize("answers_for", ["this checkout", "the repository of the tests"])
+def test_the_stack_is_the_one_of_the_checkout_the_script_runs_from(
+    tmp_path: Path, answers_for: str
+) -> None:
+    clone = tmp_path / "clone"
+    (clone / "scripts").mkdir(parents=True)
+    (clone / "docker").mkdir()
+    shutil.copy(SCRIPT, clone / "scripts" / "report.sh")
+    run = tmp_path / "run"
+    run.mkdir()
+    own = answers_for == "this checkout"
+
+    report, _ = _run_report(
+        run,
+        ["/lakehouse-fresh-prometheus-1 unless-stopped exited 255"],
+        script=clone / "scripts" / "report.sh",
+        workdir=clone / "docker" if own else REPO / "docker",
+    )
+
+    section = _section(report, SECTION)
+    assert f"stack: {clone}/docker" in section
+    assert ("lakehouse-fresh-prometheus-1 exited" in section) is own
+    assert (f"no containers of the stack at {clone}/docker" in section) is not own
 
 
 def test_a_docker_that_fails_reads_unavailable_and_the_report_goes_on(tmp_path: Path) -> None:

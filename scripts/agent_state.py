@@ -163,13 +163,20 @@ def _is_code(path: str) -> bool:
 
 def code_changes(root: Path) -> list[str]:
     """Changed or untracked paths other than Markdown and `docs/`: what a check must cover."""
-    lines = _git(root, "status", "--porcelain", "--untracked-files=all").decode().splitlines()
-    paths = [line[3:].split(" -> ")[-1] for line in lines]
+    # --no-renames: a staged `git mv` is listed as `old -> new`, and only the new name was read.
+    lines = (
+        _git(root, "status", "--porcelain", "--no-renames", "--untracked-files=all")
+        .decode()
+        .splitlines()
+    )
+    paths = [line[3:] for line in lines]
     return sorted(p for p in paths if _is_code(p))
 
 
 def _code_diff(root: Path, old: str, new: str) -> list[str]:
-    names = _git(root, "diff", "--name-only", old, new).decode().splitlines()
+    # Without --no-renames a moved file is listed by its new name only, and code moved to docs/ or
+    # renamed to .md would look like a Markdown change.
+    names = _git(root, "diff", "--name-only", "--no-renames", old, new).decode().splitlines()
     return sorted(p for p in names if _is_code(p))
 
 

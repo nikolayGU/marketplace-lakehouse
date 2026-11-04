@@ -44,8 +44,8 @@ Olist), Debezium, Kafka, Spark bronze и silver (`MERGE`), Iceberg в Lakekeeper
   обходить его запрещено (`13-harness.md`, раздел 2).
 - `review_stamp.py`: по отчёту `reviewer` (строки `Вердикт:`, `Предмет:`, `Дерево:`) пишет или
   отзывает `.review-stamp`.
-- `stop_gate.py`: один раз останавливает конец хода с изменённым кодом, если нет свежего
-  `verify-fast` или `verify`.
+- `stop_gate.py`: один раз останавливает конец хода с изменённым кодом, если нет отметки
+  `verify-fast` или `verify`; отметки хватает, если с её дерева менялись только Markdown и `docs/`.
 - `session_context.py`: на старте сессии подгружает git, отметку verify, HANDOFF, NEXT_SESSION.
 - `guard.py` читает текст команды: правку, в тексте которой есть такие слова, делать через Edit.
 - Правки `.claude/hooks/` и `.claude/settings.json` агент готовит в копии в scratchpad, владелец
