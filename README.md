@@ -129,7 +129,6 @@ Components:
 | Trino access control: `grafana` reads `lake_ro.gold` only | measured | 2026-10-29 19:15, after a Trino restart: `grafana` selects `lake_ro.gold.fct_orders`; `lake_ro.silver`, catalogs `lake` and `system`, `create table` and `optimize` get Access Denied; `dbt`, `trino`, `airflow` still read `lake.silver.orders`: [evidence](docs/evidence.md#trino-access-control). Residual risks (no authentication): [OPERATIONS](OPERATIONS.md#access-control) |
 | CI: five jobs | measured | green on HEAD `6ca7224`, [run 40934002684](../../actions/runs/40934002684) |
 | Clean-clone path (`smoke.yml`) | measured | green, [run 40907438614](../../actions/runs/40907438614) (10 min 1 s) [run 40916528470](../../actions/runs/40916528470) (9 min 14 s) and [run 40934001854](../../actions/runs/40934001854) (10 min 52 s) on HEAD `6ca7224`, 2026-10-29 |
-| First scheduled smoke run (Monday 03:00 UTC) | planned | due 2026-11-02: `gh run list --workflow smoke.yml` |
 | `iceberg_orphans` on its weekly schedule | planned | paused by decision: [not proven yet](docs/evidence.md#not-proven-yet) |
 | `rewrite-position-deletes` on `silver.orders` | planned | failed on 2026-10-23, not run live since: [not proven yet](docs/evidence.md#not-proven-yet) |
 | 24 hour unattended run | planned | card W6-T09, no result yet: [not proven yet](docs/evidence.md#not-proven-yet) |
