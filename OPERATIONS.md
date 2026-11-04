@@ -522,9 +522,17 @@ with a live item), pair `source_gold`, table `mart_daily_sales_gmv`, exact decim
 only when the source pairs run (at rest, CDC not stalled) and only when the mart has caught up
 with `fct_orders` (`max(source_updated_at)` of the mart not older than `max(updated_at)` of
 `fct_orders`), since `dbt build` rebuilds `fct_orders` before the mart; otherwise the log says
-`mart_daily_sales has not caught up with fct_orders: GMV not compared`. The full recompute test
-compares the mart only with `int_daily_sales`, so a wrong filter in that model passes it; this
-comparison does not share the model's SQL. Measured 2026-10-30 by `select`: 596 days, fingerprint
+`mart_daily_sales has not caught up with fct_orders: GMV not compared`. Postgres is read last, so
+the CDC position (write counter of schema `shop` and the confirmed LSN of the slot, as in
+`cdc_progress`) is read once after the rest check, before the source-silver pairs, and again just
+before the GMV query; if either value differs, the source wrote or the slot moved while the task
+ran, gold may be behind the source, and the log says `in flight: ... GMV not compared`. If a GMV
+step fails (the `MART_UPDATED` read, the second CDC read, or a GMV query), the finished verdicts
+and the run count are still printed and sent, `lakehouse_dq_reconcile_gmv_compared` is 0, the log
+has `dq reconcile_gmv_failed=1`, and the task then fails with that error; with a difference
+found at the same time it fails with `ValueError` that lists the difference and names the failure. The
+full recompute test compares the mart only with `int_daily_sales`, so a wrong filter in that model
+passes it; this comparison does not share the model's SQL. Measured 2026-10-30 by `select`: 596 days, fingerprint
 `0857d53200f24741049bbdf3c2d3520f` on both sides, totals 13 101 558.80 and 108 637 items; the same
 GMV computed with `canceled` left in gives another fingerprint (`ba89f32e...`), so such a change in
 the model turns the task red for every date dbt rebuilds after it.
@@ -535,7 +543,8 @@ twice, which MERGE must never produce; read the last `silver_upsert` log and the
 merged its latest snapshot and CDC is not stalled (below), so a change never reached silver;
 `make verify` (with the scheduler stopped) shows the offsets and the counts. `reconcile_values`
 with `source_gold mart_daily_sales_gmv`: GMV of a purchase date in the mart differs from Postgres
-at rest; the log names the dates. A soft-deleted order leaves its old date stale (D18, the
+at rest; the log names the dates. With `dq reconcile_gmv_failed=1` in the log it is a failed query,
+not a difference: read the error next to it. A soft-deleted order leaves its old date stale (D18, the
 replayer does not delete orders; a seller moved to another state does not change GMV per day, only
 the full recompute test sees it). While neither `silver_upsert` nor `dbt_build` runs,
 `cd dbt && uv run dbt build --profiles-dir . --target dev --select mart_daily_sales --full-refresh`
@@ -594,7 +603,7 @@ stops instead of showing its last value for ever.
 | `lakehouse_dq_cdc_stalled` | none | 1 while CDC stands: the source wrote since the previous run (write counter of schema `shop` in `pg_stat_user_tables`) and `confirmed_flush_lsn` of `shop_slot` did not move; it stays 1 until the slot moves. 0 without a slot, and for one run after a reset of the statistics (1 again at the next write while the slot stands). Sent every run, whether or not counts differ |
 | `lakehouse_dq_reconcile_verdict_timestamp_seconds` | none | Unix time of the last verdict |
 | `lakehouse_dq_reconcile_gold_compared` | none | 1 when the run compared silver and gold, 0 when it did not: nothing at rest, or gold behind silver |
-| `lakehouse_dq_reconcile_gmv_compared` | none | 1 when the run compared GMV per day with Postgres, 0 when it did not: not at rest, CDC stalled, gold behind silver, or the mart behind `fct_orders` |
+| `lakehouse_dq_reconcile_gmv_compared` | none | 1 when the run compared GMV per day with Postgres, 0 when it did not: not at rest, CDC stalled or moved during the run, gold behind silver, the mart behind `fct_orders`, or a failed GMV step |
 | `lakehouse_dq_gold_not_compared_runs` | none | runs in a row without a silver-gold comparison (Airflow Variable `dq_gold_not_compared_runs`), 0 after a comparison |
 
 Values come at the cadence of `dq_checks` (15 minutes), so an alert on them can lag by that long.

@@ -255,6 +255,11 @@ class DqChecks:
         self.gold_updated = "2026-10-01 00:00:00"
         self.mart_updated: str | None = "2026-10-01 00:00:00"
         self.trino_fails_on: str | None = None
+        self.postgres_fails_on: str | None = None
+        self.cdc_reads: list[tuple[int | None, str | None]] = []
+        self.cdc_moves_after: str | None = None
+        self.cdc_moved: tuple[int, str] = (12, "0/10")
+        self.cdc_second_read_fails = False
         variables = self.variables
 
         class Variable:
@@ -303,6 +308,8 @@ class DqChecks:
 
     def postgres_value(self, _settings: object, query: str) -> Any:
         self.queries.append(query)
+        if query == self.postgres_fails_on:
+            raise RuntimeError("postgres is down")
         if query == reconcile.gmv_fingerprint_sql_postgres():
             return "596 gmv"
         for table in SOURCE_TABLES:
@@ -313,6 +320,12 @@ class DqChecks:
     def postgres_rows(self, _settings: object, query: str) -> list[tuple[Any, ...]]:
         self.queries.append(query)
         if query == sql.CDC_PROGRESS:
+            if self.cdc_second_read_fails and self.queries.count(query) >= 2:
+                raise RuntimeError("postgres is down")
+            if self.cdc_moves_after in self.queries[:-1]:  # the source wrote after that query
+                return [self.cdc_moved]
+            if self.cdc_reads:  # successive reads of one run, the first is its start
+                return [self.cdc_reads.pop(0)]
             return [] if self.cdc is None else [self.cdc]
         if query == reconcile.gmv_pairs_sql_postgres():
             return [("2026-07-17", "20585.00")]
@@ -681,10 +694,8 @@ def test_a_count_that_is_missing_or_unreadable_starts_from_zero(
         reconcile.GOLD_UPDATED,  # before gold is known to be at rest
         reconcile.gold_sql_trino(next(iter(reconcile.GOLD_PAIRS))),  # inside the pair comparison
         reconcile.GOLD_CUSTOMERS,  # after the pairs
-        reconcile.MART_UPDATED,  # after the silver-gold verdicts, before the mart is at rest
-        reconcile.gmv_fingerprint_sql_trino(),  # the source-gold pair, the last gold query
     ],
-    ids=["gold_updated", "first_gold_pair", "gold_customers", "mart_updated", "gmv"],
+    ids=["gold_updated", "first_gold_pair", "gold_customers"],
 )
 def test_a_comparison_that_fails_does_not_reset_the_count(dq: DqChecks, failing_query: str) -> None:
     dq.at_rest()
@@ -1084,3 +1095,135 @@ def test_the_merge_container_has_a_fixed_name() -> None:
     assert ast.literal_eval(merge["task_id"]) == "merge"
     assert "container_name" in merge, "merge has no container_name"
     assert ast.literal_eval(merge["container_name"]) == "lakehouse-silver-merge"
+
+
+@pytest.mark.parametrize(
+    ("side", "failing_query"),
+    [
+        ("trino", reconcile.MART_UPDATED),
+        ("postgres", reconcile.gmv_fingerprint_sql_postgres()),
+        ("trino", reconcile.gmv_fingerprint_sql_trino()),
+        ("cdc", sql.CDC_PROGRESS),  # the second read, just before the GMV queries
+    ],
+    ids=["mart_updated", "gmv_postgres", "gmv_trino", "cdc_reread"],
+)
+def test_a_failing_gmv_step_sends_the_finished_verdicts_then_fails_the_run(
+    dq: DqChecks,
+    capsys: pytest.CaptureFixture[str],
+    side: str,
+    failing_query: str,
+) -> None:
+    # The silver-gold verdicts and the B3 count are done when the GMV step breaks: they are
+    # printed, counted and sent, and the run still ends red (not green with a silence).
+    dq.at_rest()
+    dq.variables[GOLD_NOT_COMPARED_RUNS] = "23"
+    if side == "trino":
+        dq.trino_fails_on = failing_query
+    elif side == "cdc":
+        dq.cdc_second_read_fails = True
+    else:
+        dq.postgres_fails_on = failing_query
+
+    with pytest.raises(RuntimeError, match=f"{'postgres' if side == 'cdc' else side} is down"):
+        dq.run("reconcile_values", False)
+
+    out = capsys.readouterr().out
+    gold = next(iter(reconcile.GOLD_PAIRS))
+    assert f"dq reconcile_values_differing{{silver_gold,{gold}}}=0" in out
+    assert "dq gold_not_compared_runs=0" in out
+    assert (
+        "lakehouse.dq.reconcile_values_differing",
+        0,
+        {"pair": "silver_gold", "table": gold},
+    ) in dq.sent
+    assert dq.gauge("lakehouse.dq.reconcile_gold_compared") == 1
+    assert dq.gauge("lakehouse.dq.reconcile_gmv_compared") == 0
+    assert dq.gauge("lakehouse.dq.gold_not_compared_runs") == 0
+    assert any(name == "lakehouse.dq.reconcile_verdict_timestamp_seconds" for name, _, _ in dq.sent)
+    assert dq.variables[GOLD_NOT_COMPARED_RUNS] == "0"
+
+
+def test_a_failing_gmv_step_does_not_hide_a_silver_gold_difference(dq: DqChecks) -> None:
+    dq.at_rest()
+    dq.gold_differs = True
+    dq.postgres_fails_on = reconcile.gmv_fingerprint_sql_postgres()
+
+    with pytest.raises(ValueError, match="values differ at rest") as failure:
+        dq.run("reconcile_values", False)
+
+    assert "postgres is down" in str(failure.value)
+    assert dq.gauge("lakehouse.dq.reconcile_gmv_compared") == 0
+
+
+@pytest.mark.parametrize(
+    "later",
+    [(12, "0/10"), (10, "0/20"), (9, "0/10")],
+    ids=["source_wrote", "slot_moved", "counter_fell"],
+)
+def test_gmv_is_not_compared_when_cdc_moved_since_the_start_of_the_task(
+    dq: DqChecks, capsys: pytest.CaptureFixture[str], later: tuple[int, str]
+) -> None:
+    # Postgres is read last, after the gold queries: a write that landed in between is in the
+    # source and not yet in the mart, a difference that is not an error. Not a false red.
+    dq.at_rest()
+    dq.gmv_differs = True
+    dq.cdc_reads = [(10, "0/10"), later]
+
+    dq.run("reconcile_values", False)
+
+    assert not dq.queried_gmv()
+    assert "in flight" in capsys.readouterr().out
+    assert dq.gauge("lakehouse.dq.reconcile_gmv_compared") == 0
+    assert dq.gauge("lakehouse.dq.reconcile_gold_compared") == 1
+    assert dq.gauge("lakehouse.dq.gold_not_compared_runs") == 0
+
+
+def test_gmv_is_still_compared_when_cdc_did_not_move_during_the_task(dq: DqChecks) -> None:
+    dq.at_rest()
+    dq.gmv_differs = True
+    dq.cdc_reads = [(10, "0/10"), (10, "0/10")]
+
+    with pytest.raises(ValueError, match="mart_daily_sales_gmv"):
+        dq.run("reconcile_values", False)
+
+    assert dq.queried_gmv()
+    assert dq.gauge("lakehouse.dq.reconcile_gmv_compared") == 1
+    assert dq.queries.count(sql.CDC_PROGRESS) == 2
+
+
+@pytest.mark.parametrize(
+    "event",
+    [reconcile.fingerprint_sql_postgres(SOURCE_TABLES[0]), reconcile.GOLD_UPDATED],
+    ids=["after_the_first_source_pair", "after_the_gold_watermark"],
+)
+def test_the_cdc_position_of_the_start_is_read_before_any_comparison(
+    dq: DqChecks, event: str
+) -> None:
+    # A write that lands after a comparison began is a shift, wherever the baseline is read: the
+    # baseline must come before the first comparison query, not just before the second read.
+    dq.at_rest()
+    dq.gmv_differs = True
+    dq.cdc_moves_after = event
+
+    dq.run("reconcile_values", False)
+
+    assert not dq.queried_gmv()
+    assert dq.gauge("lakehouse.dq.reconcile_gmv_compared") == 0
+
+
+def test_the_cdc_position_is_read_before_the_comparisons_and_again_before_the_gmv(
+    dq: DqChecks,
+) -> None:
+    dq.at_rest()
+    dq.gmv_differs = True
+
+    with pytest.raises(ValueError, match="mart_daily_sales_gmv"):
+        dq.run("reconcile_values", False)
+
+    reads = [i for i, q in enumerate(dq.queries) if q == sql.CDC_PROGRESS]
+    first_source = dq.queries.index(reconcile.fingerprint_sql_postgres(SOURCE_TABLES[0]))
+    mart = dq.queries.index(reconcile.MART_UPDATED)
+    gmv = dq.queries.index(reconcile.gmv_fingerprint_sql_postgres())
+    assert len(reads) == 2
+    assert reads[0] < first_source
+    assert mart < reads[1] < gmv
