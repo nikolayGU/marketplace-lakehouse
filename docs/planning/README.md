@@ -22,5 +22,5 @@
 | `15-audit-2026-10-30.md` | независимый аудит: находки, бэклог Б1..Б20 | действует |
 | `15-audit-p1-harness.patch` | патч П-1: guard, settings, `session_context.py`, `agent_state.py` | применён в `8577de1`, история |
 | `15-audit-p3-harness.patch` | патч П-3 (Б11, Б12): stop_gate после Markdown, стек по метке compose, строка вердикта | применён в `90c64b2`, история |
-| `15-audit-p4-harness.patch` | патч П-4 (Б14): guard на код через пайп и heredoc, перенос строки, `-z` в `agent_state.py` | ждёт владельца: `git apply` и тесты |
+| `15-audit-p4-harness.patch` | патч П-4 (Б14): guard на код через пайп и heredoc, перенос строки, `-z` в `agent_state.py` | применён владельцем 04.11, коммит после ревью на дереве, история |
 | `archive/` | перенесённая история (HANDOFF до 24.10) | история |
