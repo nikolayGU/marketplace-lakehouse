@@ -18,6 +18,22 @@ jobs:
   lint-and-test:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # The same image, by the same digest, as postgres-oltp in docker/compose.yaml: the reconcile
+    # queries of the source side run on it (tests/unit/test_reconcile_postgres.py). A throwaway
+    # server: on a laptop RECONCILE_TEST_DSN must never point at the Postgres of the stack
+    # (postgres-oltp, localhost:5432).
+    services:
+      postgres:
+        image: postgres:17@sha256:f4c66b820c6f974249089d3d16d86a3698eae11e8746eb6644b2271031e91232
+        env:
+          POSTGRES_PASSWORD: reconcile-test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -38,6 +54,12 @@ jobs:
         working-directory: dbt
       - run: make dbt-parse
       - run: uv run pytest tests/unit -q
+      # FAIL_ON_SKIP (tests/unit/conftest.py) turns a skip into a failure: a wrong DSN must not
+      # leave the Postgres side of reconcile unrun and the job green.
+      - run: uv run pytest tests/unit/test_reconcile_postgres.py -q
+        env:
+          FAIL_ON_SKIP: "1"
+          RECONCILE_TEST_DSN: postgresql://postgres:reconcile-test@localhost:5432/postgres
       - name: compose config
         run: cp .env.example .env && docker compose --env-file .env -f docker/compose.yaml --profile '*' config -q
       - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2.3.9

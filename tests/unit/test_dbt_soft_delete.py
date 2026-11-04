@@ -62,20 +62,35 @@ def drops_deleted_rows(block: str) -> bool:
     return any(NOT_DELETED.search(clause) for clause in WHERE.findall(block))
 
 
-def unguarded_aggregates(block: str) -> list[str]:
-    """Aggregate calls over a deleted-row-keeping model that do not say `not is_deleted`."""
-    unguarded = []
+def aggregate_calls(block: str) -> list[tuple[str, str]]:
+    """(function, argument text) of every aggregate call in the block."""
+    calls = []
     for call in AGGREGATE.finditer(block):
         depth, end = 1, call.end()
         while depth:
             depth += {"(": 1, ")": -1}.get(block[end], 0)
             end += 1
-        arguments = block[call.end() : end - 1]
-        if call.group(1) == "max" and arguments.strip() == "updated_at":
-            continue
-        if not NOT_DELETED.search(arguments):
-            unguarded.append(f"{call.group(1)}({arguments})")
-    return unguarded
+        calls.append((call.group(1), block[call.end() : end - 1]))
+    return calls
+
+
+def unguarded_aggregates(block: str) -> list[str]:
+    """Aggregate calls over a deleted-row-keeping model that do not say `not is_deleted`."""
+    return [
+        f"{function}({arguments})"
+        for function, arguments in aggregate_calls(block)
+        if not (function == "max" and arguments.strip() == "updated_at")
+        and not NOT_DELETED.search(arguments)
+    ]
+
+
+def watermark_aggregates(block: str) -> list[str]:
+    """The aggregates that read `updated_at`, as written."""
+    return [
+        f"{function}({arguments.strip()})"
+        for function, arguments in aggregate_calls(block)
+        if "updated_at" in arguments
+    ]
 
 
 FILTERED = [r for r in readings() if r[0] != KEEPS_DELETED_ROWS and r[:2] not in AGGREGATES_ONLY]
@@ -106,6 +121,11 @@ def test_consumer_that_keeps_deleted_rows_aggregates_live_ones_only(
     # A row filter would hide a deleted item from max(updated_at): deleting an item would no longer
     # move the order's updated_at, the watermark of mart_daily_sales.
     assert not drops_deleted_rows(block), f"{model} filters the rows of {staging}"
+    # `max(case when not is_deleted then updated_at end)` passes both checks above and still hides a
+    # deleted item from the watermark: it has to be the bare column.
+    assert watermark_aggregates(block) == ["max(updated_at)"], (
+        f"{model} must take max(updated_at) of {staging} over deleted rows too"
+    )
 
 
 def test_fct_order_items_keeps_the_deleted_items_with_their_flag() -> None:
@@ -149,3 +169,21 @@ def test_aggregate_over_deleted_rows_is_unguarded_until_it_says_not_is_deleted(
 ) -> None:
     assert unguarded_aggregates(f"select {call} from t") == [call]
     assert unguarded_aggregates(f"select {guarded} from t") == []
+
+
+@pytest.mark.parametrize(
+    "written",
+    [
+        "max(case when not is_deleted then updated_at end)",
+        "max(if(not is_deleted, updated_at))",
+        "min(updated_at)",
+        "max(coalesce(updated_at, current_timestamp))",
+    ],
+)
+def test_the_watermark_must_be_the_bare_max_of_updated_at(written: str) -> None:
+    mutated = f"select order_id, {written} as updated_at from t group by order_id"
+
+    assert watermark_aggregates(mutated) != ["max(updated_at)"]
+    assert watermark_aggregates("select max(updated_at) as updated_at from t") == [
+        "max(updated_at)"
+    ]

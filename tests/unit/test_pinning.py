@@ -226,3 +226,84 @@ def test_promtool_runs_from_the_prometheus_image_compose_runs() -> None:
     assert all("$(PROMETHEUS_IMAGE)" in line for line in promtool)
     # No second copy of the name, tag or digest elsewhere in the Makefile.
     assert "prom/prometheus" not in text.replace(pinned, "")
+
+
+# `docker run` options that take the next word as their value; any other option is a flag.
+RUN_OPTIONS_WITH_VALUE = {
+    "-e",
+    "-p",
+    "-u",
+    "-v",
+    "-w",
+    "--entrypoint",
+    "--env-file",
+    "--memory",
+    "--name",
+    "--network",
+    "--user",
+}
+
+
+# `docker run`, `docker container run` and the Makefile's `$(DOCKER) run` spelling of both.
+DOCKER_RUN = re.compile(r"(?:\bdocker|\$\(DOCKER\))\s+(?:container\s+)?run\b")
+
+
+def _make_variables(text: str) -> dict[str, str]:
+    return dict(re.findall(r"^(\w+)\s*(?:\?=|:=|=)\s*(\S+)\s*$", text, re.M))
+
+
+def _docker_run_images(text: str) -> list[str]:
+    """The image operand of every `docker run` in a Makefile, make variables expanded."""
+    variables = _make_variables(text)
+    images = []
+    for line in text.replace("\\\n", " ").splitlines():
+        run = DOCKER_RUN.search(line)
+        if not line.startswith("\t") or not run:
+            continue
+        words = shlex.split(line[run.end() :].replace("$(CURDIR)", "/repo"))
+        position = 0
+        while words[position].startswith("-"):
+            position += 1 + (words[position] in RUN_OPTIONS_WITH_VALUE)
+        image = words[position]
+        for name, value in variables.items():
+            image = image.replace(f"$({name})", value)
+        images.append(image)
+    return images
+
+
+def test_every_docker_run_in_the_makefile_uses_a_pinned_or_a_local_image() -> None:
+    images = _docker_run_images(MAKEFILE.read_text())
+
+    # promtool twice, the Spark tests, the DAG import check.
+    assert len(images) >= 4
+    bad = [i for i in images if not i.startswith(LOCAL_NAMESPACE) and _unpinned([i])]
+    assert not bad, bad
+
+
+def test_the_docker_run_scan_finds_the_image_behind_options_and_variables() -> None:
+    makefile = (
+        "IMAGE ?= prom/prometheus:v3.14.0\n"
+        'check:\n\tdocker run --rm -v "$(CURDIR)/x:/x:ro" --entrypoint promtool $(IMAGE) check\n'
+        "spark:\n\tdocker run --rm --user root -e A=1 \\\n\t  -e B=2 lakehouse/spark:dev -c 'x'\n"
+        "var:\n\t$(DOCKER) run --rm --network none $(IMAGE) true\n"
+        "container:\n\tdocker container run --rm -p 1:1 alpine:3.20 true\n"
+    )
+
+    assert _docker_run_images(makefile) == [
+        "prom/prometheus:v3.14.0",
+        "lakehouse/spark:dev",
+        "prom/prometheus:v3.14.0",
+        "alpine:3.20",
+    ]
+    assert _unpinned(["prom/prometheus:v3.14.0"]) == ["prom/prometheus:v3.14.0"]
+
+
+def test_every_image_a_workflow_runs_as_a_service_is_pinned_by_digest() -> None:
+    images = [
+        image
+        for workflow in sorted(WORKFLOWS.glob("*.yml"))
+        for image in re.findall(r"^\s+image:\s*(\S+)\s*$", workflow.read_text(), re.M)
+    ]
+
+    assert images
+    assert not _unpinned(images), images
