@@ -1,7 +1,8 @@
-"""The first step of scripts/verify.sh after the replayer check: Trino answers. It runs the real
-script and the real lib.sh in a temporary root, with `docker` and `curl` replaced by fakes first in
-PATH, so no container is touched. Without the probe an unreachable Trino made `bronze_caught_up`
-fail on every try, and verify waited VERIFY_WAIT (900 s) and blamed Kafka."""
+"""The first steps of scripts/verify.sh after the replayer check: Trino answers `select 1`, then
+catalog `lake` answers `show schemas`. It runs the real script and the real lib.sh in a temporary
+root, with `docker` and `curl` replaced by fakes first in PATH, so no container is touched. Without
+the probes an unreachable Trino, or a live Trino whose catalog is down (Lakekeeper), made
+`bronze_caught_up` fail on every try, and verify waited VERIFY_WAIT (900 s) and blamed Kafka."""
 
 import os
 import shutil
@@ -17,8 +18,9 @@ REPO = Path(__file__).resolve().parents[2]
 # What every run must stay under: the old code waited VERIFY_WAIT, here 600 s.
 HARD_LIMIT = 10
 
-# Every call is logged. $TRINO decides how `compose ... exec ... trino` answers; a Kafka call
-# fails, so a run that gets past the probe ends at "bronze did not catch up" without a stack.
+# Every call is logged. $TRINO decides how `compose ... exec ... trino` answers, $LAKE how the same
+# call answers when it names `--catalog lake`; a Kafka call fails, so a run that gets past the
+# probes ends at "bronze did not catch up" without a stack.
 # `hang` and `stubborn` start a child that outlives its parent unless the whole group is killed,
 # and log its pid; `stubborn` also ignores SIGTERM, so only the kill after the grace period ends it.
 # `slow` answers after 2 s.
@@ -26,7 +28,16 @@ FAKE_DOCKER = """#!/usr/bin/env bash
 echo "$*" >>"$DOCKER_CALLS"
 case "$*" in
   *" exec -T trino "*)
-    case "$TRINO" in
+    state=$TRINO
+    case "$*" in *"--catalog lake"*) state=$LAKE ;; esac
+    # Like the real CLI: a schema query without a session catalog is an error.
+    case "$*" in
+      *"--catalog lake"*) ;;
+      *"show schemas"*) echo "Catalog must be specified when session catalog is not set" >&2
+        exit 1 ;;
+    esac
+    case "$state" in
+      lakedown) echo "Query failed: lakekeeper refused the connection" >&2; exit 1 ;;
       down) echo 'service "trino" is not running' >&2; exit 1 ;;
       slow) sleep 2; echo 1; exit 0 ;;
       hang) sleep 30 & echo $! >>"$PIDS"; wait; exit 0 ;;
@@ -42,6 +53,7 @@ esac
 FAKE_CURL = "#!/usr/bin/env bash\nexit 7\n"
 
 PROBE = "exec -T trino trino --execute select 1"
+LAKE_PROBE = "exec -T trino trino --catalog lake --execute show schemas"
 
 
 def alive(pid: int) -> bool:
@@ -58,6 +70,7 @@ def run_verify(
     mode: str,
     trino: str,
     interrupt: signal.Signals | None = None,
+    lake: str = "up",
     **env: str,
 ) -> tuple[subprocess.CompletedProcess[str], list[str], float, list[int]]:
     # interrupt: sent to the bash process alone once the probe has started, as a terminal sends it
@@ -91,6 +104,7 @@ def run_verify(
             "PIDS": str(pids),
             "TMPDIR": str(scratch),
             "TRINO": trino,
+            "LAKE": lake,
             "VERIFY_WAIT": "600",
             **env,
         },
@@ -130,6 +144,76 @@ def test_trino_not_running_refuses_with_exit_2_and_names_trino(tmp_path: Path, m
     assert "does not answer" not in result.stderr
     assert "bronze did not catch up" not in result.stderr
     assert not any(" exec -T kafka " in call for call in calls)
+    assert not any(call.endswith(LAKE_PROBE) for call in calls)
+
+
+@pytest.mark.parametrize("mode", ["--no-merge", ""])
+def test_catalog_lake_down_with_trino_alive_refuses_with_exit_2_and_names_the_catalog(
+    tmp_path: Path, mode: str
+) -> None:
+    result, calls, seconds, _ = run_verify(tmp_path, mode, trino="up", lake="lakedown")
+
+    assert result.returncode == 2, result.stderr
+    assert "verify failed: Trino answers, but catalog lake fails" in result.stderr
+    assert "lakekeeper refused the connection" in result.stderr
+    assert "Trino probe failed" not in result.stderr
+    assert "bronze did not catch up" not in result.stderr
+    assert any(call.endswith(PROBE) for call in calls)
+    assert any(call.endswith(LAKE_PROBE) for call in calls)
+    assert not any(" exec -T kafka " in call for call in calls)
+    assert seconds < HARD_LIMIT / 2
+
+
+@pytest.mark.parametrize("mode", ["--no-merge", ""])
+def test_catalog_lake_that_hangs_refuses_after_the_probe_limit(tmp_path: Path, mode: str) -> None:
+    result, calls, seconds, left = run_verify(
+        tmp_path, mode, trino="up", lake="hang", TRINO_PROBE_WAIT="1"
+    )
+
+    assert result.returncode == 2, result.stderr
+    assert "verify failed: Trino answers, but catalog lake does not answer within 1 s" in (
+        result.stderr
+    )
+    assert "bronze did not catch up" not in result.stderr
+    assert seconds < 1 + 2
+    assert not any(" exec -T kafka " in call for call in calls)
+    assert not left, f"the probe left processes behind: {left}"
+
+
+def test_catalog_lake_that_ignores_sigterm_is_killed_after_the_grace_period(tmp_path: Path) -> None:
+    # Same as for Trino itself: timeout answers 137, still "does not answer".
+    result, calls, seconds, _ = run_verify(
+        tmp_path, "--no-merge", trino="up", lake="stubborn", TRINO_PROBE_WAIT="1"
+    )
+
+    assert result.returncode == 2, result.stderr
+    assert "verify failed: Trino answers, but catalog lake does not answer within 1 s" in (
+        result.stderr
+    )
+    assert any(call.endswith(LAKE_PROBE) for call in calls)
+    assert seconds < 6
+
+
+@pytest.mark.parametrize("mode", ["--no-merge", ""])
+def test_ctrl_c_during_the_first_probe_does_not_start_the_catalog_probe(
+    tmp_path: Path, mode: str
+) -> None:
+    # The first probe answers after 2 s, the second would hang: a signal that only the script gets
+    # must stop it between the two, not after both.
+    result, calls, seconds, _ = run_verify(
+        tmp_path,
+        mode,
+        trino="slow",
+        lake="hang",
+        interrupt=signal.SIGINT,
+        TRINO_PROBE_WAIT="3",
+        VERIFY_WAIT="0",
+    )
+
+    assert result.returncode == 130, result.stderr
+    assert "verify interrupted" in result.stderr
+    assert not any(call.endswith(LAKE_PROBE) for call in calls)
+    assert seconds < 2 + 2
 
 
 @pytest.mark.parametrize("mode", ["--no-merge", ""])
@@ -206,7 +290,17 @@ def test_signal_during_an_answering_probe_stops_verify_before_bronze_and_silver(
     assert not any(" exec -T kafka " in call or "spark-silver" in call for call in calls)
 
 
-def test_answering_trino_lets_verify_go_on_to_bronze(tmp_path: Path) -> None:
+def test_catalog_probe_names_catalog_lake_and_passes_on_a_healthy_stack(tmp_path: Path) -> None:
+    result, calls, _, _ = run_verify(tmp_path, "--no-merge", trino="up", VERIFY_WAIT="0")
+
+    schema_calls = [call for call in calls if "show schemas" in call]
+    assert len(schema_calls) == 1
+    assert "--catalog lake" in schema_calls[0]
+    assert "Catalog must be specified" not in result.stderr
+    assert "catalog lake" not in result.stderr
+
+
+def test_answering_trino_and_catalog_let_verify_go_on_to_bronze(tmp_path: Path) -> None:
     result, calls, _, _ = run_verify(tmp_path, "--no-merge", trino="up", VERIFY_WAIT="0")
 
     assert "Trino does not answer" not in result.stderr
@@ -214,5 +308,6 @@ def test_answering_trino_lets_verify_go_on_to_bronze(tmp_path: Path) -> None:
     assert result.returncode == 1
     assert "verify failed: bronze did not catch up with Kafka in 0 s" in result.stderr
     probe = next(i for i, call in enumerate(calls) if call.endswith(PROBE))
+    lake = next(i for i, call in enumerate(calls) if call.endswith(LAKE_PROBE))
     kafka = next(i for i, call in enumerate(calls) if " exec -T kafka " in call)
-    assert probe < kafka
+    assert probe < lake < kafka

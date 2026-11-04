@@ -63,18 +63,27 @@ clone on the sample it took 4 minutes with the images built, a re-run 75 seconds
 of the Spark image adds about 80 seconds with its base image already pulled (2026-10-17).
 
 `make verify` refuses (exit 2) while `airflow-scheduler` runs, while a replayer answers on port
-8000, and when Trino does not answer `select 1`. Otherwise it waits up to `VERIFY_WAIT` seconds
+8000, and when Trino does not answer `select 1` or its catalog `lake` does not answer
+`show schemas` (Lakekeeper down). Otherwise it waits up to `VERIFY_WAIT` seconds
 (default 900) for bronze to catch up with Kafka, runs one silver merge, and checks that every Kafka
 offset is in bronze exactly once, that live silver rows equal Postgres for all seven tables (row
 count, set of primary keys, sum of every decimal column, and since 2026-10-30 the row fingerprint
 of every column; `reconcile`), and that all seven tables reached bronze. The last line is
-`verify ok` or `verify failed: <reason>`. Both `verify` targets send `select 1` to Trino after the
-replayer check (and the scheduler check of `make verify`), in at most `TRINO_PROBE_WAIT` (a number
-from 1, default 20) + 2 seconds, instead of waiting `VERIFY_WAIT` and blaming Kafka. Exit 2 with
-`verify failed: Trino does not answer within N s: <reason>` when the probe hangs or is killed, with
-`verify failed: Trino probe failed: <reason>` when Trino answers with an error (a stopped
-container). Ctrl+C ends either target with `verify interrupted` and exit 130 once the current step
-ends; a kill (TERM) ends the script at once, but a running merge container goes on.
+`verify ok` or `verify failed: <reason>`. Both `verify` targets send `select 1` to Trino and then
+`show schemas` in catalog `lake` after the replayer check (and the scheduler check of
+`make verify`), each in at most `TRINO_PROBE_WAIT` (a number from 1, default 20) + 2 seconds,
+instead of waiting `VERIFY_WAIT` and blaming Kafka. Exit 2 with
+`verify failed: Trino does not answer within N s: <reason>` when the first probe hangs or is
+killed, with `verify failed: Trino probe failed: <reason>` when Trino
+answers with an error (a stopped container), and with `verify failed: Trino answers, but catalog
+lake does not answer within N s` or `... catalog lake fails (Lakekeeper?): <reason>` when the
+second one does. With Lakekeeper stopped the refusal took 11 s on 2026-11-04, about 9 s of it the
+Trino REST client giving up; with `TRINO_PROBE_WAIT` below about 10 the same fault reads as
+`does not answer within N s`. `show schemas` lists namespaces in Lakekeeper and does not read MinIO: with MinIO
+down `verify` still waits `VERIFY_WAIT` and blames Kafka (a MinIO probe is in the backlog). Ctrl+C
+ends either target with `verify interrupted` and exit 130 once the current probe or step ends,
+before the next probe starts; a kill (TERM) ends the script at once, but a running merge container
+goes on.
 
 ```
 make replay-burst SECONDS=60   # about 12 virtual hours at 720x; prints virtual_now before and after

@@ -4,8 +4,10 @@
 # (`make reconcile`), all seven source tables reached bronze. Ends with
 # `verify ok` or the reason and a non-zero exit code. It runs one silver merge, so it refuses
 # while Airflow may run another (two writers on one checkpoint) and while a replayer plays
-# (reconcile would compare a moving source), and when Trino does not answer `select 1`. That probe
-# runs after the other two checks and ends within TRINO_PROBE_WAIT (default 20) + 2 s at most.
+# (reconcile would compare a moving source), and when Trino does not answer `select 1` or its
+# catalog lake does not answer `show schemas` (Lakekeeper down). The probes run after the other two
+# checks, one after the other, each ends within TRINO_PROBE_WAIT (default 20) + 2 s at most, so a
+# refusal comes within twice that. A MinIO outage is not probed: verify then waits for bronze.
 # `--no-merge` (make verify-fast) skips the merge and writes nothing to the lake.
 # On success it stamps the working tree (.verify-stamp) for the agent hooks in .claude/hooks.
 . "$(dirname "$0")/chaos/lib.sh"
@@ -13,7 +15,7 @@
 # bash runs a trap once the foreground command ends: a Ctrl+C that only the script gets (the Trino
 # probe has a process group of its own) ends it right after that command, with this message and
 # exit code 130. TERM has no trap, so a kill still ends the script at once, even during a merge.
-trap 'echo "verify interrupted" >&2; exit 130' INT
+trap 'echo "verify interrupted" >&2; rm -f "${probe_out:-}"; exit 130' INT
 
 mode=full
 case "${1:-}" in
@@ -39,9 +41,12 @@ if [ "$mode" = full ]; then
   fi
 fi
 no_other_replayer
-# Every check below needs Trino: without this probe a down Trino shows as bronze not catching up.
-trino_err=$(trino_up 2>&1) || {
-  echo "verify failed: $trino_err" >&2
+# Every check below needs Trino and its catalog lake: without these probes either one down shows as
+# bronze not catching up.
+# trino_up runs in this shell, not in $(...): the INT trap then fires after the probe that was
+# running, before the next one starts. It leaves its reason in trino_up_err.
+trino_up || {
+  echo "verify failed: $trino_up_err" >&2
   exit 2
 }
 wait="${VERIFY_WAIT:-900}"
