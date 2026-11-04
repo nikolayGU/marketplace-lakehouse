@@ -1,6 +1,3 @@
-# Skeleton, week 0. Image tags pinned on 2026-09-19 from official sources; W1-T02 runs
-# `docker compose pull`, fixes whatever does not resolve and records it in DECISIONS.md.
-# Lines marked TODO(W1) / TODO(W3) / TODO(W4) are filled by the corresponding roadmap task.
 # Rules: every service has profiles and log rotation, and every published port is bound to
 # ${BIND_IP} (required: compose refuses to start with it empty). A long-running service also has
 # a healthcheck, restart: unless-stopped and a memory limit. Exceptions: kafka-ui has no
@@ -53,7 +50,7 @@ services:
       DEBEZIUM_PASSWORD: ${DEBEZIUM_PASSWORD}
     volumes:
       - postgres_oltp:/var/lib/postgresql/data
-      - ../oltp/init:/docker-entrypoint-initdb.d:ro   # TODO(W1): creates debezium role + publication
+      - ../oltp/init:/docker-entrypoint-initdb.d:ro   # creates the debezium role and the publication, once
     ports:
       - "${BIND_IP:?set BIND_IP in .env}:5432:5432"
     healthcheck:
@@ -819,7 +816,6 @@ services:
   # ---------------------------------------------------------------- tools
   kafka-ui:
     <<: *common
-    # TODO: verify tag when first used
     image: ghcr.io/kafbat/kafka-ui:v1.3.0@sha256:edd59f51a992cf79c16a394fd141a6ab47eb9c1deeb77a3e360035ac3e7bc30c
     profiles: [tools]
     environment:

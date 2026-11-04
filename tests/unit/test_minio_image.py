@@ -5,7 +5,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-import yaml  # type: ignore[import-untyped]
+import yaml
 
 REPO = Path(__file__).resolve().parents[2]
 DOCKERFILE = REPO / "docker" / "minio" / "Dockerfile"

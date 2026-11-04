@@ -242,3 +242,170 @@ def test_a_non_json_trino_answer_is_a_failed_query_not_a_traceback(  # type: ign
     out = capsys.readouterr().out
     assert code == 1
     assert "query failed for select 1" in out
+
+
+SPARK_EXPR = 'spark_streaming_state_rows{query="orders_per_minute"}'
+
+
+def _spark_check(  # type: ignore[no-untyped-def]
+    tmp_path: Path,
+    expr: str = SPARK_EXPR,
+    known=lambda name: True,
+    age=lambda query: 20.0,
+    has_batches=lambda query: False,
+    seen=lambda selector: True,
+    query=lambda e: [],
+) -> int:
+    path = _dashboard(tmp_path / "a.json", [{"title": "state", "targets": [{"expr": expr}]}])
+    return check_dashboards.check(
+        [path],
+        query,
+        known=known,
+        last_batch_age=age,
+        has_batches=has_batches,
+        seen_before=seen,
+    )
+
+
+def test_an_empty_spark_panel_of_a_live_query_is_idle(tmp_path: Path, capsys) -> None:  # type: ignore[no-untyped-def]
+    assert _spark_check(tmp_path) == 0
+
+    out = capsys.readouterr().out
+    assert f"idle: a.json: state: {SPARK_EXPR}" in out
+    assert "empty:" not in out
+
+
+def test_a_misspelled_spark_metric_is_empty_even_with_a_fresh_batch(tmp_path: Path, capsys) -> None:  # type: ignore[no-untyped-def]
+    expr = 'spark_streaming_bach_duration_seconds{query="orders_per_minute"}'
+
+    code = _spark_check(tmp_path, expr, known=lambda name: "bach" not in name)
+
+    out = capsys.readouterr().out
+    assert code == 1
+    assert f"empty: a.json: state: {expr}" in out and "idle:" not in out
+
+
+def test_a_stale_last_batch_is_empty_not_idle(tmp_path: Path, capsys) -> None:  # type: ignore[no-untyped-def]
+    assert _spark_check(tmp_path, age=lambda query: 301.0) == 1
+    assert "empty:" in capsys.readouterr().out
+
+
+def test_a_missing_last_batch_is_empty_not_idle(tmp_path: Path) -> None:
+    assert _spark_check(tmp_path, age=lambda query: None) == 1
+
+
+def test_a_failed_idle_lookup_is_empty_not_idle(tmp_path: Path) -> None:
+    def broken(name: str) -> bool:
+        raise OSError("prometheus down")
+
+    assert _spark_check(tmp_path, known=broken) == 1
+
+
+def test_an_empty_panel_of_another_job_is_never_idle(tmp_path: Path, capsys) -> None:  # type: ignore[no-untyped-def]
+    code = _spark_check(tmp_path, 'airflow_x{query="orders_per_minute"}')
+
+    assert code == 1
+    assert "empty:" in capsys.readouterr().out
+
+
+def test_a_spark_panel_with_a_non_spark_metric_is_never_idle(tmp_path: Path) -> None:
+    expr = 'spark_streaming_state_rows{query="orders_per_minute"} / up'
+
+    assert _spark_check(tmp_path, expr) == 1
+
+
+def test_a_spark_panel_without_a_query_label_is_never_idle(tmp_path: Path) -> None:
+    assert _spark_check(tmp_path, "spark_streaming_state_rows") == 1
+
+
+def test_a_failed_panel_query_is_empty_not_idle(tmp_path: Path, capsys) -> None:  # type: ignore[no-untyped-def]
+    def broken(expr: str) -> list[dict[str, object]]:
+        raise OSError("HTTP Error 400")
+
+    assert _spark_check(tmp_path, query=broken) == 1
+    out = capsys.readouterr().out
+    assert "query failed" in out and "idle:" not in out
+
+
+def test_a_query_that_made_batches_with_data_is_never_idle(tmp_path: Path) -> None:
+    assert _spark_check(tmp_path, has_batches=lambda query: True) == 1
+
+
+def test_a_failed_batch_lookup_is_empty_not_idle(tmp_path: Path) -> None:
+    def broken(query: str) -> bool:
+        raise OSError("prometheus down")
+
+    assert _spark_check(tmp_path, has_batches=broken) == 1
+
+
+def test_a_selector_without_a_series_in_the_retention_is_not_idle(tmp_path: Path) -> None:
+    # A label name or value typo, or a metric the query never had: no series, ever.
+    expr = 'spark_streaming_kafka_lag{query="bronze_cdc_ingest", topik="x"}'
+    asked: list[str] = []
+
+    def seen(selector: str) -> bool:
+        asked.append(selector)
+        return "topik" not in selector
+
+    assert _spark_check(tmp_path, expr, seen=seen) == 1
+    assert asked == [expr]
+
+
+def test_a_vector_matching_expression_is_never_idle(tmp_path: Path) -> None:
+    expr = (
+        'spark_streaming_kafka_lag{query="q"} / on(topic) '
+        'spark_streaming_batch_duration_seconds{query="q"}'
+    )
+
+    assert _spark_check(tmp_path, expr) == 1
+
+
+def test_two_different_query_labels_are_never_idle(tmp_path: Path) -> None:
+    expr = 'spark_streaming_state_rows{query="a"} + spark_streaming_state_rows{query="b"}'
+
+    assert _spark_check(tmp_path, expr) == 1
+
+
+def test_a_batch_exactly_300_seconds_old_is_idle(tmp_path: Path) -> None:
+    assert _spark_check(tmp_path, age=lambda query: 300.0) == 0
+
+
+def test_known_checks_the_metric_type_for_the_total_suffix() -> None:
+    types = {
+        "spark_streaming_input_rows": "counter",
+        "spark_streaming_state_rows": "gauge",
+    }
+
+    def prometheus_get(path: str) -> dict[str, object]:
+        name = path.rsplit("=", 1)[1]
+        return {"data": {name: [{"type": types[name]}]} if name in types else {}}
+
+    known = check_dashboards.metric_known(prometheus_get)
+
+    assert known("spark_streaming_input_rows_total")
+    assert not known("spark_streaming_input_rows")
+    assert known("spark_streaming_state_rows")
+    assert not known("spark_streaming_state_rows_total")
+
+
+def test_pipeline_health_spark_panels_say_why_they_are_empty() -> None:
+    dashboard = json.loads((check_dashboards.DASHBOARDS / "pipeline-health.json").read_text())
+    spark_only = []
+    for panel in check_dashboards.panels(dashboard):
+        for target in panel.get("targets", []):
+            expr = target.get("expr", "")
+            names = check_dashboards.metric_names(expr)
+            if (
+                names
+                and all(n.startswith("spark_streaming_") for n in names)
+                and not expr.startswith("time() - ")
+            ):
+                spark_only.append(panel)
+    assert len(spark_only) >= 7
+    for panel in spark_only:
+        text = panel["fieldConfig"]["defaults"].get("noValue")
+        assert text and "or the job is down" in text, panel["title"]
+        bronze = 'query="bronze_cdc_ingest"' in panel["targets"][0]["expr"]
+        assert ("Seconds since the last bronze batch" in text) == bronze, panel["title"]
+    titles = [p["title"] for p in check_dashboards.panels(dashboard)]
+    assert "Seconds since the last bronze batch" in titles

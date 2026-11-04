@@ -5,7 +5,7 @@ import shlex
 from pathlib import Path
 from typing import Any
 
-import yaml  # type: ignore[import-untyped]
+import yaml
 
 REPO = Path(__file__).resolve().parents[2]
 COMPOSE = REPO / "docker" / "compose.yaml"

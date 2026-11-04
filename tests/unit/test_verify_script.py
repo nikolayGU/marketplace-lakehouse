@@ -5,6 +5,7 @@ the probes an unreachable Trino, or a live Trino whose catalog is down (Lakekeep
 `bronze_caught_up` fail on every try, and verify waited VERIFY_WAIT (900 s) and blamed Kafka."""
 
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -311,3 +312,14 @@ def test_answering_trino_and_catalog_let_verify_go_on_to_bronze(tmp_path: Path) 
     lake = next(i for i, call in enumerate(calls) if call.endswith(LAKE_PROBE))
     kafka = next(i for i, call in enumerate(calls) if " exec -T kafka " in call)
     assert probe < lake < kafka
+
+
+def test_verify_script_table_literal_is_the_seven_contracts() -> None:
+    text = (REPO / "scripts" / "verify.sh").read_text()
+    literal = re.search(r"source_table in \(([^)]*)\)", text)
+    assert literal is not None
+    tables = re.findall(r"'([a-z_]+)'", literal.group(1))
+    contracts = sorted(p.stem for p in (REPO / "contracts" / "silver").glob("*.json"))
+    assert sorted(tables) == contracts
+    assert re.search(rf'\[ "\$tables" = {len(contracts)} \]', text)
+    assert f"of the {len(contracts)} source tables" in text

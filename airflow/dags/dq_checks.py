@@ -118,7 +118,7 @@ def dq_checks() -> None:
         rows = trino_rows(settings, sql.LATEST_BRONZE_SNAPSHOT)
         latest, committed_at = (int(rows[0][0]), rows[0][1]) if rows else (None, None)
         remembered = Variable.get(LAST_BRONZE_SNAPSHOT, default=None)
-        postgres = {t: int(postgres_value(settings, sql.postgres_rows(t))) for t in SOURCE_TABLES}
+        postgres = {t: int(postgres_value(settings, sql.source_rows(t))) for t in SOURCE_TABLES}
         silver = {t: int(trino_value(settings, sql.silver_live_rows(t))) for t in SOURCE_TABLES}
         differences = checks.count_differences(postgres, silver)
         resting = checks.at_rest(latest, committed_at, remembered, datetime.now(UTC))

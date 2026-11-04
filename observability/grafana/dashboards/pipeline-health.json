@@ -30,7 +30,8 @@
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "short"
+          "unit": "short",
+          "noValue": "no samples: no batch with data since start, or the job is down (see Seconds since the last bronze batch)"
         },
         "overrides": []
       },
@@ -63,7 +64,8 @@
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "short"
+          "unit": "short",
+          "noValue": "no samples: no batch with data since start, or the job is down (see Seconds since the last bronze batch)"
         },
         "overrides": []
       },
@@ -96,7 +98,8 @@
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "s"
+          "unit": "s",
+          "noValue": "no samples: no batch with data since start, or the job is down (see Seconds since the last bronze batch)"
         },
         "overrides": []
       },
@@ -543,7 +546,8 @@
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "short"
+          "unit": "short",
+          "noValue": "no samples: no batch with data since start, or the job is down"
         },
         "overrides": []
       },
@@ -576,7 +580,8 @@
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "dateTimeAsIso"
+          "unit": "dateTimeAsIso",
+          "noValue": "no samples: no batch with data since start, or the job is down"
         },
         "overrides": []
       },
@@ -609,7 +614,8 @@
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "short"
+          "unit": "short",
+          "noValue": "no samples: no batch with data since start, or the job is down"
         },
         "overrides": []
       },
@@ -642,7 +648,8 @@
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "short"
+          "unit": "short",
+          "noValue": "no samples: no batch with data since start, or the job is down"
         },
         "overrides": []
       },

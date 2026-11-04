@@ -724,6 +724,17 @@ Grafana provisions `observability/grafana/dashboards/*.json` (classic JSON, edit
 not saved: change the file). `uv run python scripts/obs/check_dashboards.py` runs every panel query
 against Prometheus (or, for a Trino panel, its SQL against Trino on `127.0.0.1:8080`, which needs the
 `query` profile) and lists the empty ones, since a typo and a missing metric both read "No data".
+A Spark panel whose query ran fine but is empty is printed as `idle:` (exit 0) only if all of these
+hold: the expression names exactly one `query="..."` and has no `on`, `ignoring` or `group_*`; that
+query has no `spark_streaming_batch_duration_seconds` series (no batch with data since the start;
+the listener sets it on every progress event); it reported progress or idle within 300 s
+(`spark_streaming_last_batch_timestamp`); and every metric name, type (a counter with `_total`) and
+selector of the panel has metadata or a series within the 7 days of Prometheus retention
+(`--storage.tsdb.retention.time=7d` in `docker/compose.yaml`). Anything else, a typo included, is
+`empty` and exit 1. After 7 days without a batch with data, or on a fresh Prometheus volume, these
+panels are `empty` and the check exits 1 until the next batch with data; confirm with the "Seconds
+since the last bronze batch" panel and `group(last_over_time(<selector>[7d]))`. Grafana shows "no
+samples: no batch with data since start, or the job is down" on those panels.
 
 | Dashboard / panel | Query (metric) | Source |
 |---|---|---|
@@ -794,8 +805,9 @@ Freshness panels step every 15 minutes (the cadence of `dq_checks`); that is not
   recomputes from Kafka without undoing anything; windows older than Kafka's retention keep their
   old counts. Needed when the service was down longer than 24 h (`failOnDataLoss`).
 - After a start or restart the state and watermark series are absent until the first batch with
-  data (an idle trigger carries no state), so `check_dashboards.py` lists those two panels as empty
-  on a quiet system.
+  data (an idle trigger carries no state), so `check_dashboards.py` lists those two panels as `idle`
+  (not empty) on a quiet system while the query keeps making idle triggers, for at most the 7 days
+  of Prometheus retention since the last batch with data.
 - Live check (2026-10-23, 60 s burst, 12 virtual hours): per minute, `silver.orders_per_minute`
   against `count(*)` of `silver.orders` from the burst's start: 164 windows, 0 differing, 194
   orders each side; `spark_streaming_late_rows_dropped_total` 0, so no partition skew beat the

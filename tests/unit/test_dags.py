@@ -10,7 +10,7 @@ from typing import Any
 
 import jinja2
 import pytest
-import yaml  # type: ignore[import-untyped]
+import yaml
 from lakehouse import checks, reconcile, sql
 from lakehouse.maintenance_commands import (
     DRY_RUN_FLAG,
@@ -313,7 +313,7 @@ class DqChecks:
         if query == reconcile.gmv_fingerprint_sql_postgres():
             return "596 gmv"
         for table in SOURCE_TABLES:
-            if query == sql.postgres_rows(table):
+            if query == sql.source_rows(table):
                 return self.postgres_counts.get(table, 10)
         return "10 fp"
 

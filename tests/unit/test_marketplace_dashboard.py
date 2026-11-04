@@ -8,7 +8,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-import yaml  # type: ignore[import-untyped]
+import yaml
 
 from scripts.obs import check_dashboards
 

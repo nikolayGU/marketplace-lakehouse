@@ -35,7 +35,7 @@ def silver_live_rows(table: str) -> str:
     return f"select count(*) from lake.silver.{table} where not _is_deleted"
 
 
-def postgres_rows(table: str) -> str:
+def source_rows(table: str) -> str:
     return f"select count(*) from shop.{table}"
 
 

@@ -24,7 +24,7 @@ from typing import Any
 
 import psycopg
 import pytest
-import yaml  # type: ignore[import-untyped]
+import yaml
 from lakehouse import reconcile
 from psycopg import sql
 from psycopg.conninfo import make_conninfo
