@@ -1,3 +1,4 @@
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -165,6 +166,69 @@ def test_a_staged_move_of_code_out_of_the_code_paths_is_a_code_change(
     # `git mv` stages a rename, and `git status` shows a staged rename by its new name only.
     (repo / target).parent.mkdir(exist_ok=True)
     git(repo, "mv", "job.py", target)
+
+    assert code_changes(repo) == ["job.py"]
+
+
+# B14: git quotes a path with a space, a quote or a non-ASCII letter in the line-based output, and
+# the quoted path used to count as code (a block for a note in docs/). The -z output is raw.
+ODD_DOC_PATHS = ["docs/my plan.txt", "docs/план.txt", "notes é.md", 'docs/a"b.txt', "my notes.md"]
+
+
+@pytest.mark.parametrize("path", ODD_DOC_PATHS)
+def test_a_doc_with_a_space_or_a_non_ascii_name_is_no_code_change(repo: Path, path: str) -> None:
+    (repo / path).parent.mkdir(exist_ok=True)
+    (repo / path).write_text("x")
+
+    assert code_changes(repo) == []
+
+
+@pytest.mark.parametrize("path", ["src/my job.py", "src/задача.py", "src/é.py", 'src/a"b.py'])
+def test_code_with_a_space_or_a_non_ascii_name_is_listed_by_its_real_name(
+    repo: Path, path: str
+) -> None:
+    (repo / path).parent.mkdir(exist_ok=True)
+    (repo / path).write_text("x = 1\n")
+
+    assert code_changes(repo) == [path]
+
+
+def test_a_path_that_is_not_utf8_is_listed_not_a_crash(repo: Path) -> None:
+    name = os.fsencode(repo) + b"/bad\xff name.py"
+    with open(name, "w") as handle:
+        handle.write("x = 1\n")
+
+    assert code_changes(repo) == [os.fsdecode(b"bad\xff name.py")]
+
+
+@pytest.mark.parametrize("target", ["docs/my job.txt", "docs/задача.txt", "my job.md"])
+def test_code_moved_to_an_odd_doc_name_still_counts_as_changed(repo: Path, target: str) -> None:
+    (repo / "job.py").write_text("x = 2\n")
+    write_stamp(repo, "fast")
+    stamp = read_stamp(repo)
+    assert stamp is not None
+    move_code_out(repo, target)
+
+    assert code_changes_since(repo, stamp) == ["job.py"]
+    assert code_changes(repo) == ["job.py"]
+
+
+@pytest.mark.parametrize("path", ODD_DOC_PATHS)
+def test_a_doc_with_an_odd_name_added_after_a_stamp_is_no_code_change_since_it(
+    repo: Path, path: str
+) -> None:
+    write_stamp(repo, "fast")
+    stamp = read_stamp(repo)
+    assert stamp is not None
+    (repo / path).parent.mkdir(exist_ok=True)
+    (repo / path).write_text("x")
+
+    assert code_changes_since(repo, stamp) == []
+
+
+def test_a_staged_move_to_an_odd_doc_name_lists_the_old_code_path(repo: Path) -> None:
+    (repo / "docs").mkdir()
+    git(repo, "mv", "job.py", "docs/my job.txt")
 
     assert code_changes(repo) == ["job.py"]
 

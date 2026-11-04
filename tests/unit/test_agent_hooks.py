@@ -599,6 +599,217 @@ def test_inline_code_that_names_env_is_still_asked(command: str) -> None:
     assert "secret" in result.stdout
 
 
+READS_ENV = "print(open('.env').read())"
+
+
+# B14: the interpreter gets its code without `-c` and `-`, or the line is cut between the
+# interpreter and its flag, or an option value hides a `;` from the segment. Each form reads .env.
+@pytest.mark.parametrize(
+    "command",
+    [
+        # Code on the stdin of an interpreter that is the end of a pipe, here-document or not.
+        f"cat <<'EOF' | python3\n{READS_ENV}\nEOF",
+        f"cat <<'EOF' | uv run python\n{READS_ENV}\nEOF",
+        f"cat <<EOF | python3.12 -u\n{READS_ENV}\nEOF",
+        f"cat <<'EOF' | env PYTHONUNBUFFERED=1 python3\n{READS_ENV}\nEOF",
+        f'echo "{READS_ENV}" | python3',
+        f"printf '{READS_ENV}' | python3 -u",
+        f'cat script.txt && echo "{READS_ENV}" | python3 && echo done',
+        "cat <<'EOF' | node\nrequire('fs').readFileSync('.env')\nEOF",
+        "cat <<'EOF' | perl\nopen(F, '.env'); print <F>\nEOF",
+        "cat <<'EOF' | ruby\nputs File.read('.env')\nEOF",
+        f"x=$(cat <<'EOF' | python3\n{READS_ENV}\nEOF\n)",
+        # The same with a shell, which can hold the name in a variable.
+        "cat <<'EOF' | bash\nf=.env\ncat \"$f\"\nEOF",
+        "echo 'f=.env; cat $f' | sh",
+        "cat <<'EOF' | bash -s\nf=.env\ncat \"$f\"\nEOF",
+        "bash <<'EOF'\nf=.env\ncat \"$f\"\nEOF",
+        'sh <<EOF\nf=.env\ncat "$f"\nEOF',
+        "bash <<< 'f=.env; cat $f'",
+        "/bin/bash <<'EOF'\nf=.env\ncat \"$f\"\nEOF",
+        f'python3 < <(echo "{READS_ENV}")',
+        f'echo "{READS_ENV}" | python3 /dev/stdin',
+        f'echo "{READS_ENV}" | python3 -X dev',
+        f'echo "{READS_ENV}" | python3 | tee out.txt',
+        # A redirect right after the interpreter does not give it a script file.
+        f"cat <<'EOF' | python3 2>&1 | tail -3\n{READS_ENV}\nEOF",
+        f"cat <<'EOF' | python3 2>/dev/null\n{READS_ENV}\nEOF",
+        f"cat <<'EOF' | python3 &>/dev/null\n{READS_ENV}\nEOF",
+        f"cat <<'EOF' | python3 >out.txt\n{READS_ENV}\nEOF",
+        "echo 'cat .env' | bash 2>&1",
+        "echo 'cat .env' | bash 2>&1 | head",
+        # A wrapper with an option and its value, a group around the interpreter.
+        f'echo "{READS_ENV}" | nice -n 5 python3',
+        f'echo "{READS_ENV}" | timeout 60 python3',
+        f'echo "{READS_ENV}" | stdbuf -oL python3',
+        f'echo "{READS_ENV}" | env -i python3',
+        f'echo "{READS_ENV}" | sudo -u nobody python3',
+        "echo 'f=.env; cat $f' | sudo -u nobody bash",
+        f'echo "{READS_ENV}" | (python3)',
+        f'echo "{READS_ENV}" | ( python3 )',
+        f'echo "{READS_ENV}" | {{ python3; }}',
+        f'echo "{READS_ENV}" | timeout --signal=KILL 60 python3',
+        # An escaped separator in the value of an option, or a command line handed over by xargs.
+        f'python3 -X a\\;b -c "{READS_ENV}"',
+        f'python3 -Xa\\|b -c "{READS_ENV}"',
+        "echo 'cat .env' | xargs -I{} bash -c {}",
+        # A shell with options only reads its here-document as code.
+        "bash -x <<'EOF'\nf=.env\ncat \"$f\"\nEOF",
+        # The line is cut by a backslash right after the interpreter or after the command name.
+        f'python3 \\\n-c "{READS_ENV}"',
+        f'python3 \\\n  -c "{READS_ENV}"',
+        f'uv run python \\\n-c "{READS_ENV}"',
+        f'python3 -u \\\n  -c "{READS_ENV}"',
+        f'python3\\\n -c "{READS_ENV}"',
+        "cat \\\n.env",
+        "git status; cat \\\n  .env",
+        "grep PASSWORD \\\n  .env",
+        # Two backslashes are a literal one: the newline after them ends the command.
+        "echo a\\\\\ncat .env",
+        "echo a\\\\\\\n; cat .env",
+        # An option with a value in quotes that hold a separator comes before `-c`.
+        f"python3 -X 'a;b' -c \"{READS_ENV}\"",
+        f'python3 -X "a;b" -c "{READS_ENV}"',
+        f"python3 -W 'a|b' -c \"{READS_ENV}\"",
+        f"python3 -X 'a&b' -c \"{READS_ENV}\"",
+        f"python3 -X 'a;b' -X 'c;d' -c \"{READS_ENV}\"",
+        f"node --require 'a;b' -e \"{READS_ENV}\"",
+        "python3 -X 'a;b' - <<'EOF'\nprint(open('.env').read())\nEOF",
+        "python3 -X 'a;b' <<'EOF'\nprint(open('.env').read())\nEOF",
+    ],
+)
+def test_guard_asks_when_the_code_reaches_the_interpreter_in_an_unusual_way(
+    command: str,
+) -> None:
+    result = bash(command)
+
+    assert decision(result) == "ask"
+    assert "secret" in result.stdout
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cat <<'EOF' | python3\nprint(1)\nEOF",
+        "echo 'print(1)' | python3",
+        "cat <<'EOF' | bash\necho hi\nEOF",
+        "cat <<'EOF' | sh\ncat .env.example\nEOF",
+        "echo 'cat .env.example' | bash",
+        "python3 \\\n-c 'print(1)'",
+        "cat \\\n.env.example",
+        "git status; cat \\\n  README.md",
+        "python3 -X 'a;b' -c 'print(1)'",
+        "python3 -X 'a;b' -c 'print(open(\".env.example\").read())'",
+        "cat Makefile | python3 -m json.tool",
+        "ls scripts | grep sh",
+        "git log --oneline | head -3",
+        "echo 'a|b' | tr a b",
+        "bash scripts/hello.sh <<'EOF'\nyes\nEOF",
+        "./scripts/run.sh <<'EOF'\nyes\nEOF",
+        # A shell that runs a script file reads the here-document as data, not as code.
+        "bash scripts/hello.sh <<'EOF'\nmentions .env\nEOF",
+        "sh -x scripts/hello.sh .env <<EOF\nyes\nEOF",
+        # A module or a script file after the options is what runs; the pipe is its data.
+        "git ls-files | grep .env | python3 -u scripts/x.py",
+        "git ls-files | grep .env | uv run python -u scripts/x.py",
+        "git ls-files | grep .env | python3 -m json.tool",
+        "git ls-files | grep .env | python3 -X dev scripts/x.py",
+        "git ls-files | grep .env | python3 -W error -m json.tool",
+        "git ls-files | grep .env | python3 -mjson.tool",
+        "git ls-files | grep .env | timeout 60 python3 scripts/x.py",
+        "git ls-files | grep .env | nice -n 5 python3 scripts/x.py",
+        # A script file is run: the piped text is its data, and `||` is no pipe.
+        "git check-ignore .env | python3 parse.py",
+        "git check-ignore .env | bash scripts/hello.sh",
+        "git check-ignore .env || python3 -u build.py",
+        "git check-ignore .env || bash",
+    ],
+)
+def test_guard_lets_the_unusual_forms_without_env_pass(command: str) -> None:
+    assert decision(bash(command)) == "allow"
+
+
+# The same forms hide the module of the stamp code from the guard.
+@pytest.mark.parametrize(
+    "command",
+    [
+        "echo \"from scripts import agent_state as s; s.write_stamp(None, 'full')\" | python3",
+        "printf 'import scripts.agent_state' | python3 -u",
+        "cat scripts/agent_state.py | uv run python",
+        "python3 -X 'a;b' -c \"from scripts.agent_state import write_stamp\"",
+        "python3 -W 'a|b' -c \"import scripts.agent_state\"",
+        'python3 \\\n-c "from scripts.agent_state import write_stamp"',
+        'python3 \\\n  -c "from scripts.agent_state import write_stamp"',
+        'uv run python \\\n-c "import scripts.agent_state"',
+        "python3 -X 'a;b' -c \"open('.review-stamp', 'w').write('x')\"",
+        # A redirect after the interpreter, a process substitution, a wrapper with options.
+        "echo 'from scripts.agent_state import write_stamp' | python3 2>&1",
+        "echo 'from scripts.agent_state import write_stamp' | python3 2>/dev/null",
+        "echo 'from scripts.agent_state import write_stamp' | python3 &>/dev/null",
+        "cat <<'EOF' | python3 2>&1 | tail -3\nfrom scripts.agent_state import write_stamp\nEOF",
+        "python3 < <(echo 'import scripts.agent_state')",
+        'python3 -X a\\;b -c "import scripts.agent_state"',
+        "echo 'import scripts.agent_state as s' | nice -n 5 python3",
+        "echo 'import scripts.agent_state as s' | timeout 60 python3",
+        "echo 'import scripts.agent_state as s' | stdbuf -oL python3",
+        "echo 'import scripts.agent_state as s' | (python3)",
+        "echo 'import scripts.agent_state as s' | { python3; }",
+    ],
+)
+def test_guard_denies_a_gate_stamp_written_through_an_unusual_interpreter_call(
+    command: str,
+) -> None:
+    result = bash(command)
+
+    assert decision(result) == "deny"
+    assert "writes a gate stamp by hand" in result.stderr
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "echo 'print(1)' | python3 -u",
+        "python3 -X 'a;b' -c 'print(1)'",
+        "python3 \\\n-c 'print(1)'",
+        "python3 -X 'a;b' scripts/agent_state.py tree .",
+        "cat scripts/agent_state.py | head -5",
+        "uv run pytest tests/unit/test_agent_state.py -q 2>&1 | python3 summarize.py",
+        "git diff scripts/agent_state.py | python3 render.py",
+        "cat scripts/agent_state.py | python3 -m ast",
+        "git log -p -- scripts/agent_state.py | python3 -m pydoc",
+        "cat scripts/agent_state.py | python3 -u scripts/render.py",
+        "cat scripts/agent_state.py | python3 -W error -m ast",
+    ],
+)
+def test_guard_allows_the_unusual_forms_that_do_not_touch_the_stamp_code(command: str) -> None:
+    assert decision(bash(command)) == "allow"
+
+
+# A comment runs to the end of the line, and a backslash in it does not continue it. Joining the
+# lines would hide the command on the next line inside the comment, so both texts are checked.
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [
+        ("ls # list files \\\ncat .env", "ask"),
+        ("echo start # note \\\ncat .env", "ask"),
+        ("git status # see \\\ngrep PASS .env", "ask"),
+        ("make test # run \\\nhead .env", "ask"),
+        ("ls # x \\\npython3 scripts/agent_state.py stamp full", "deny"),
+        ("ls # x \\\ntouch .verify-stamp", "deny"),
+        # The name is cut by the continuation: only the joined text shows it, and deny beats ask.
+        ("cat .env; touch .verify\\\n-stamp", "deny"),
+        # Not a comment: the continuation joins the lines, as before.
+        ("python3 \\\n  -c \"print(open('.env').read())\"", "ask"),
+        ("cat \\\n.env", "ask"),
+        ("cat \\\n.env.example", "allow"),
+        ("make test \\\n  2>&1 | tail -3", "allow"),
+        ("echo hi \\\n && echo there", "allow"),
+    ],
+)
+def test_a_backslash_in_a_comment_does_not_hide_the_next_line(command: str, expected: str) -> None:
+    assert decision(bash(command)) == expected
+
+
 def test_a_secret_read_is_asked_before_the_early_exit_of_read_only_commands() -> None:
     # cat is a reader and passes on its own words; .env is what makes the difference.
     assert decision(bash("cat Makefile")) == "allow"
@@ -759,6 +970,37 @@ def test_docs_changed_after_a_full_verify_can_be_committed(repo: Path) -> None:
 
     (repo / "job.py").write_text("x = 9\n")
     assert decision(bash("git add -A && git commit -m code", repo)) == "deny"
+
+
+ODD_DOCS = ["docs/my plan.txt", "docs/план.txt", "my notes.md", "заметки.md"]
+
+
+@pytest.mark.parametrize("path", ODD_DOCS)
+def test_a_doc_with_a_space_or_a_non_ascii_name_can_be_committed_after_a_full_verify(
+    repo: Path, path: str
+) -> None:
+    # B14: git quoted such a path in `status --porcelain` and the quoted name counted as code.
+    write_stamp(repo, "full")
+    (repo / path).parent.mkdir(exist_ok=True)
+    (repo / path).write_text("x")
+
+    assert decision(bash("git add -A && git commit -m notes", repo)) == "allow"
+
+
+@pytest.mark.parametrize("path", ODD_DOCS)
+def test_stop_gate_lets_a_doc_with_an_odd_name_end_the_turn(repo: Path, path: str) -> None:
+    (repo / path).parent.mkdir(exist_ok=True)
+    (repo / path).write_text("x")
+
+    assert hook("stop_gate.py", {}, repo).stdout == ""
+
+
+def test_stop_gate_names_code_with_an_odd_name_by_its_real_name(repo: Path) -> None:
+    (repo / "моя задача.py").write_text("x = 1\n")
+
+    reason = json.loads(hook("stop_gate.py", {}, repo).stdout)["reason"]
+
+    assert "моя задача.py" in reason
 
 
 def test_docs_after_a_fast_verify_do_not_open_the_commit(repo: Path) -> None:

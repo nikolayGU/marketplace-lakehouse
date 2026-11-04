@@ -161,22 +161,26 @@ def _is_code(path: str) -> bool:
     return not path.endswith(".md") and not path.startswith("docs/")
 
 
+def _paths(output: bytes) -> list[str]:
+    """The paths of a `-z` listing: NUL-separated and never quoted, whatever the name holds."""
+    return [os.fsdecode(raw) for raw in output.split(b"\0") if raw]
+
+
 def code_changes(root: Path) -> list[str]:
     """Changed or untracked paths other than Markdown and `docs/`: what a check must cover."""
     # --no-renames: a staged `git mv` is listed as `old -> new`, and only the new name was read.
-    lines = (
-        _git(root, "status", "--porcelain", "--no-renames", "--untracked-files=all")
-        .decode()
-        .splitlines()
+    # -z: otherwise git quotes a path with a space, a quote or a non-ASCII letter, and the quoted
+    # name starts with `"`, so it always counted as code. An entry is `XY path`.
+    entries = _paths(
+        _git(root, "status", "--porcelain", "-z", "--no-renames", "--untracked-files=all")
     )
-    paths = [line[3:] for line in lines]
-    return sorted(p for p in paths if _is_code(p))
+    return sorted(p for p in (entry[3:] for entry in entries) if _is_code(p))
 
 
 def _code_diff(root: Path, old: str, new: str) -> list[str]:
     # Without --no-renames a moved file is listed by its new name only, and code moved to docs/ or
-    # renamed to .md would look like a Markdown change.
-    names = _git(root, "diff", "--name-only", "--no-renames", old, new).decode().splitlines()
+    # renamed to .md would look like a Markdown change. -z as in code_changes: no quoted names.
+    names = _paths(_git(root, "diff", "--name-only", "-z", "--no-renames", old, new))
     return sorted(p for p in names if _is_code(p))
 
 

@@ -24,7 +24,13 @@ like; not .env.example and not `--env-file .env`), `docker compose config` witho
 flag (--services, --profiles, --images, --volumes), `docker inspect` without a --format or with one
 that prints Env or the whole object (`json`, a lone dot, `.Config` with no field), and `env` or
 `printenv` run by `docker exec` or `compose exec|run`, or a read of /proc/<pid>/environ.
-The match is on the command text. A command made only of searches and reads (grep, rg, git log,
+The match is on the command text, and on the text with each backslash-newline joined too (a
+comment ends at the newline, so the joined text can hide a command): the stricter answer wins.
+Inline code is code in `-c` or `-e` (after options whose quoted values may hold a `;`), a
+here-document or here-string, `-`, `< <(...)`, or the stdin of an interpreter at the end of a pipe
+with no script file or module (a wrapper such as `nice -n 5`, `timeout 60`, a redirect or a group
+bracket may stand around it). A shell counts only for the stdin forms: a here-document with no
+script file, or a pipe. A command made only of searches and reads (grep, rg, git log,
 cat and the like, no substitution or redirect) runs none of these words and passes, except that
 the secret check runs before that exit. If the guard itself fails, it asks instead of letting the
 call through.
@@ -37,7 +43,7 @@ import shlex
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 ROOT = Path(os.environ.get("CLAUDE_PROJECT_DIR") or Path(__file__).resolve().parents[2])
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -110,7 +116,32 @@ SHELL_WRITE_RULES = shell_write(
 # Python that names the module: every form of writing a stamp that the command text shows.
 STAMP_NAME = re.compile(r"\.(verify|check|review)-stamp\b")
 STAMP_CLI = re.compile(r"\bagent_state(\.py)?[\"']?\s+[\"']?(stamp|check)\b")
-INLINE_PYTHON = re.compile(r"\bpython[\d.]*\b[^\n;|&]*\s-[a-zA-Z]*c\b|<<|\bpython[\d.]*\s+-(\s|$)")
+# The rest of one simple command, up to a separator outside quotes: the value of an option such as
+# `-X 'a;b'` may hold one. The plain run is tried first; the quoted run is the way out when a
+# separator in quotes ends it too early.
+SEGMENT = r"(?:[^\n;|&]*|(?:[^\n;|&'\"\\]|\\.|'[^']*'|\"[^\"]*\")*)"
+# A backslash right before a newline joins the two lines (an even run of backslashes does not).
+LINE_CONTINUATION = re.compile(r"(?<!\\)((?:\\\\)*)\\\n")
+# What a pipe may put between itself and the interpreter that reads the piped text as its code: a
+# group bracket, a variable, a wrapper with its options (`nice -n 5`, `timeout 60`, `sudo -u x`).
+WRAPPER_ARGS = r"(?:\s+(?:-\S+(?:\s+[^\s-]\S*)?|\d+[smhd]?))*"
+AFTER_PIPE = (
+    r"(?<!\|)\|(?!\|)&?\s*(?:[({]\s*)*"
+    r"(?:(?:(?:env|sudo|time|exec|nohup|nice|command|xargs|timeout|stdbuf|setsid|ionice"
+    r"|uv\s+run|poetry\s+run)" + WRAPPER_ARGS + r"|[A-Za-z_]\w*=\S*)\s+)*(?:[\w.-]*/)*"
+)
+# The interpreter ends its command or goes on with options, a redirect or /dev/stdin: it has no
+# script file or module to run, so the piped text is its code (or `-c` takes it from stdin by
+# xargs). With a script file or `-m module` the piped text is only its data. `-X` and `-W` take
+# the next word as their value.
+READS_STDIN = (
+    r"(?=(?:\s+(?:-[XW]\s+\S+|-[^\s\-mc]\S*|--\S+))*\s*(?:$|[\n;&|)}]|\d*[<>])"
+    r"|\s+-(?:\s|$)|\s+-[a-zA-Z]*c\b|\s+/dev/(?:stdin|fd/0)\b)"
+)
+INLINE_PYTHON = re.compile(
+    r"\bpython[\d.]*\b" + SEGMENT + r"(?:\s-[a-zA-Z]*c\b|<\s*<\()|<<|\bpython[\d.]*\s+-(\s|$)"
+    r"|" + AFTER_PIPE + r"python[\d.]*\b" + READS_STDIN
+)
 # make check stamps the tree it checked: a flag such as -i or -o, a variable, or a make or pytest
 # option variable anywhere in the command could make it stamp failing checks.
 MAKE_CHECK_ENV = re.compile(r"\b(PYTEST_ADDOPTS|MAKEFLAGS|MFLAGS|GNUMAKEFLAGS)\b")
@@ -304,8 +335,14 @@ ENV_FILE = re.compile(r"(^|/)\.env(\.(?!example$)[^/]*)?$")
 ENV_TEXT = re.compile(r"(?:^|[\s\"'=/(])\.env(?:\.(?!example\b)\w+)?(?![\w.-])")
 # `--env-file .env` hands the file to compose; the command does not read it.
 ENV_FILE_OPTION = re.compile(r"--env-file[=\s]+\S+")
+INTERPRETERS = r"python[\d.]*|perl|ruby|node"
+# The code is an argument (`-c`, `-e`), a here-document or here-string, `-` for stdin, a process
+# substitution on stdin, or the text of an earlier command of the pipeline. A shell counts only
+# when it reads its stdin: `bash -c` is read word by word below.
 INLINE_CODE = re.compile(
-    r"\b(python[\d.]*|perl|ruby|node)\b[^\n;|&]*(\s-[a-zA-Z]*[ce]\b|<<|\s-(\s|$))"
+    r"\b(" + INTERPRETERS + r")\b" + SEGMENT + r"(\s-[a-zA-Z]*[ce]\b|<<|\s-(\s|$)|<\s*<\()"
+    r"|(?<![\w.-])(bash|sh|zsh|dash|ksh)\b(?:\s+-\S+)*\s*<<"
+    r"|" + AFTER_PIPE + r"(" + INTERPRETERS + r"|bash|sh|zsh|dash|ksh)\b" + READS_STDIN
 )
 # The text of $(...) and of a backtick pair, which a quoted word hides from the word split.
 SUBSTITUTION = re.compile(r"\$\(([^()]*)\)|`([^`]*)`")
@@ -373,19 +410,33 @@ SECRET_INSPECT = (
 )
 
 
-def deny(reason: str, fix: str = "ask the owner for an explicit ok") -> None:
-    print(f"blocked by .claude/hooks/guard.py: {reason}; {fix}", file=sys.stderr)
-    sys.exit(2)
+class VerdictError(Exception):
+    """A deny or an ask. Raised, so that the check of a command can be run on two texts of it and
+    the stricter verdict kept."""
+
+    def __init__(self, kind: str, reason: str, fix: str = "") -> None:
+        super().__init__(reason)
+        self.kind, self.reason, self.fix = kind, reason, fix
+
+    def emit(self) -> NoReturn:
+        if self.kind == "deny":
+            print(f"blocked by .claude/hooks/guard.py: {self.reason}; {self.fix}", file=sys.stderr)
+            sys.exit(2)
+        decision = {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "ask",
+            "permissionDecisionReason": f"AGENTS.md hard rule, needs the owner's ok: {self.reason}",
+        }
+        print(json.dumps({"hookSpecificOutput": decision}))
+        sys.exit(0)
 
 
-def ask(reason: str) -> None:
-    decision = {
-        "hookEventName": "PreToolUse",
-        "permissionDecision": "ask",
-        "permissionDecisionReason": f"AGENTS.md hard rule, needs the owner's ok: {reason}",
-    }
-    print(json.dumps({"hookSpecificOutput": decision}))
-    sys.exit(0)
+def deny(reason: str, fix: str = "ask the owner for an explicit ok") -> NoReturn:
+    raise VerdictError("deny", reason, fix)
+
+
+def ask(reason: str) -> NoReturn:
+    raise VerdictError("ask", reason)
 
 
 def reads_only(command: str) -> bool:
@@ -658,6 +709,17 @@ def check(event: dict[str, Any]) -> None:
     if tool != "Bash":
         return
     command = args.get("command", "")
+    verdicts: list[VerdictError] = []
+    for text in dict.fromkeys([LINE_CONTINUATION.sub(r"\1", command), command]):
+        try:
+            check_bash(text)
+        except VerdictError as verdict:
+            verdicts.append(verdict)
+    if verdicts:
+        raise next((v for v in verdicts if v.kind == "deny"), verdicts[0])
+
+
+def check_bash(command: str) -> None:
     if reads_only(command):
         # The one read that is not free: its words are data, but the file it opens is a secret.
         secret = secret_shown(command)
@@ -712,6 +774,10 @@ def check(event: dict[str, Any]) -> None:
 
 try:
     check(json.load(sys.stdin))
+except VerdictError as verdict:
+    verdict.emit()
 except Exception as error:  # a broken guard must not wave the call through
-    ask(f"guard.py failed ({error.__class__.__name__}: {error}), check the call by hand")
+    VerdictError(
+        "ask", f"guard.py failed ({error.__class__.__name__}: {error}), check the call by hand"
+    ).emit()
 sys.exit(0)
