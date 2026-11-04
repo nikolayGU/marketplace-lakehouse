@@ -9,7 +9,7 @@
     {"owner": true}
   ],
   "tables": [
-    {"user": "grafana", "catalog": "lake_ro", "schema": "gold", "privileges": ["SELECT"]},
+    {"user": "grafana", "catalog": "lake_ro", "schema": "gold", "table": "(fct|dim|mart)_.*", "privileges": ["SELECT"]},
     {"user": "grafana", "privileges": []},
     {"privileges": ["SELECT", "INSERT", "DELETE", "UPDATE", "OWNERSHIP", "GRANT_SELECT"]}
   ],

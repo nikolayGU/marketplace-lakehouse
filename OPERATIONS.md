@@ -263,7 +263,7 @@ names for the same tables: nothing is copied.
 
 | User | Can |
 |---|---|
-| `grafana` (Grafana datasource) | `select` on `lake_ro.gold` only; `lake_ro` is read-only twice (rules and connector); catalogs `lake` and `system` and every other: none; no schema ownership, no procedures, no other users' queries, no system information |
+| `grafana` (Grafana datasource) | `select` on the `lake_ro.gold` tables `fct_*`, `dim_*` and `mart_*` only (not the dbt views `stg_*` and `int_*`, which read silver with the owner's rights, nor the seed `category_translation`); `lake_ro` is read-only twice (rules and connector); catalogs `lake` and `system` and every other: none; no schema ownership, no procedures, no other users' queries, no system information |
 | everyone else (`dbt`, `airflow`, `trino` of the CLI and `make` targets, any new name) | `lake` as before access control: all table privileges, schema ownership, procedures, query management, system information; `lake_ro` is read-only for them too, they have no use for it |
 
 Both files are read when `trino` starts, so a rule or catalog change needs a restart of the
@@ -280,6 +280,13 @@ Check it after a restart (Trino up):
 T="docker compose --env-file .env -f docker/compose.yaml exec -T trino trino"
 $T --user grafana --execute "select count(*) from lake_ro.gold.fct_orders"   # passes
 $T --user grafana --execute "select count(*) from lake_ro.silver.orders"     # Access Denied
+$T --user grafana --execute "select count(*) from lake_ro.gold.stg_reviews"   # Access Denied (dbt view over silver)
+$T --user grafana --execute "select count(*) from lake_ro.gold.int_daily_sales" # Access Denied
+$T --user grafana --execute "select count(*) from lake_ro.gold.mart_daily_sales" # passes
+# Iceberg metadata tables follow their table: those of the marts pass ($files shows S3 paths), the seed's do not.
+$T --user grafana --execute 'select count(*) from lake_ro.gold."fct_orders$snapshots"'        # passes
+$T --user grafana --execute 'select count(*) from lake_ro.gold."category_translation$files"'  # Access Denied
+$T --user trino --execute "select count(*) from lake.gold.stg_reviews"       # passes
 $T --user grafana --execute "select count(*) from lake.gold.fct_orders"      # Access Denied (catalog)
 $T --user grafana --execute "create table lake_ro.gold.t_acl (a int)"        # Access Denied
 $T --user grafana --execute "alter table lake.gold.category_translation execute optimize"    # Access Denied (catalog)
@@ -754,9 +761,9 @@ the category panel applies the gmv definition (live items, status neither `cance
 `unavailable`), so its categories add up to `sum(gmv)`.
 
 Risk: the plugin runs any SQL the panel or Explore sends, as Trino user `grafana`. That user reads
-`lake_ro.gold` only, and `lake_ro` is read-only at the connector (W6-D17, "Access control" under
-"Query"), so DDL, DML and table procedures from Explore get `Access Denied` and no table files can
-be deleted on Lakekeeper. Residual risk: Trino has no authentication. A Grafana admin can create a
+`fct_*`, `dim_*` and `mart_*` of `lake_ro.gold` only, and `lake_ro` is read-only at the connector
+(W6-D17, "Access control" under "Query"), so DDL, DML and table procedures from Explore get
+`Access Denied` and no table files can be deleted on Lakekeeper. Residual risk: Trino has no authentication. A Grafana admin can create a
 new Trino datasource in the UI with user `dbt` and get all rights on `lake` (`editable: false`
 protects only the provisioned datasource), and a client that reaches the Trino port can name
 itself any user. Mitigation: the Grafana admin password and the ports bound to `BIND_IP`.

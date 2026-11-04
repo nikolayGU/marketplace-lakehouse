@@ -104,7 +104,7 @@ docker run --rm -v "$T:/in" -v "$PWD/docs/img:/out" minlag/mermaid-cli:11.4.2 \
 9. Grafana with a Trino datasource shows the "Marketplace" dashboard: four panels over
    `lake_ro.gold` (daily sales, GMV by category, delivery SLA by state, cancellations). `lake_ro`
    is a read-only catalog over the same warehouse, and Trino file-based access control lets the
-   `grafana` user read nothing else (W6-D17; probes in
+   `grafana` user read its marts `fct_*`, `dim_*`, `mart_*` and nothing else (W6-D17; probes in
    [docs/evidence.md](docs/evidence.md#trino-access-control)). Trino has no authentication, so the
    user name is only a label: [OPERATIONS, Access control](OPERATIONS.md#access-control) lists the
    residual risk. Superset is optional (ADR-014).

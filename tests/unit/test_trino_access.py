@@ -1,4 +1,4 @@
-"""File-based access control in Trino: `grafana` reads lake_ro.gold only, others as before (W6-D17).
+"""File-based access control in Trino: `grafana` reads marts of lake_ro.gold only, others as before.
 
 Before access control every Trino user could do everything. The rules file must keep that for
 dbt, Airflow, the CLI (`trino`) and any new user, and take it away from the Grafana datasource,
@@ -32,6 +32,10 @@ READ_ONLY_CATALOG = "lake_ro"
 OTHERS = ["dbt", "airflow", "trino", "dashboard-check", "a-new-client"]
 ALL_TABLE_PRIVILEGES = {"SELECT", "INSERT", "DELETE", "UPDATE", "OWNERSHIP", "GRANT_SELECT"}
 GOLD_TABLES = ["fct_orders", "mart_daily_sales", "fct_order_items", "dim_customers"]
+# dbt views over silver (they run with the owner's rights) and the seed: hidden from the datasource.
+HIDDEN_GOLD_TABLES = ["stg_orders", "stg_reviews", "int_daily_sales", "int_orders_enriched"]
+DBT = REPO / "dbt"
+EXPOSED_PREFIXES = ("fct_", "dim_", "mart_")
 
 
 def _read_properties(path: Path) -> dict[str, str]:
@@ -144,6 +148,31 @@ def test_grafana_selects_gold_of_the_read_only_catalog_and_nothing_else_there(ta
     assert table_privileges(GRAFANA, READ_ONLY_CATALOG, "gold", table) == {"SELECT"}
 
 
+@pytest.mark.parametrize("table", [*HIDDEN_GOLD_TABLES, "category_translation"])
+def test_grafana_cannot_select_staging_and_intermediate_views_or_the_seed(table: str) -> None:
+    # A dbt view reads silver as its owner, so SELECT on stg_* would hand grafana the silver rows.
+    assert table_privileges(GRAFANA, READ_ONLY_CATALOG, "gold", table) == set()
+
+
+def _gold_object_names() -> dict[str, str]:
+    """Every object dbt builds in gold: model file stems and seed file stems, by layer."""
+    models = DBT / "models"
+    names = {p.stem: p.relative_to(models).parts[0] for p in models.rglob("*.sql")}
+    names |= {p.stem: "seeds" for p in (DBT / "seeds").glob("*.csv")}
+    return names
+
+
+def test_grafana_reads_exactly_the_marts_layer_of_every_dbt_object() -> None:
+    # The rule is a table-name pattern, so a new model is exposed by its prefix alone: this pins
+    # layer and prefix together (marts: fct_, dim_, mart_; staging, intermediate and seeds: hidden).
+    names = _gold_object_names()
+    assert {"stg_orders", "int_daily_sales", "fct_orders", "category_translation"} <= set(names)
+    for name, layer in names.items():
+        expected = {"SELECT"} if layer == "marts" else set()
+        assert table_privileges(GRAFANA, READ_ONLY_CATALOG, "gold", name) == expected, name
+        assert name.startswith(EXPOSED_PREFIXES) == (layer == "marts"), name
+
+
 @pytest.mark.parametrize("schema", ["silver", "bronze", "gold_staging"])
 def test_grafana_has_no_privileges_outside_gold(schema: str) -> None:
     assert table_privileges(GRAFANA, READ_ONLY_CATALOG, schema, "orders") == set()
@@ -214,6 +243,13 @@ def test_the_read_only_catalog_takes_its_secrets_from_the_environment() -> None:
 def test_rules_are_applied_by_restarting_trino_not_by_a_refresh_period() -> None:
     # A rule edit that applies silently on a bind-mounted file would skip the restart gate.
     assert "security.refresh-period" not in _properties()
+
+
+@pytest.mark.parametrize("user", OTHERS)
+@pytest.mark.parametrize("table", HIDDEN_GOLD_TABLES + GOLD_TABLES)
+def test_other_clients_keep_every_privilege_on_every_gold_table(user: str, table: str) -> None:
+    for catalog in ["lake", READ_ONLY_CATALOG]:
+        assert table_privileges(user, catalog, "gold", table) == ALL_TABLE_PRIVILEGES
 
 
 @pytest.mark.parametrize("user", OTHERS)
