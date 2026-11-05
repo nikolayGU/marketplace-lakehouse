@@ -22,10 +22,12 @@ Not proven live: no full disk was run on this stack. The steps below only read u
    topic; MinIO grows with snapshots until maintenance expires
    them (OPERATIONS.md, "Maintenance"); container logs are capped by the `json-file` rotation
    (20 MB, 3 files).
-4. Freeing space is the owner's call, one command at a time; an agent proposes and does not run
-   it. Least risky first: the Docker build cache (`docker builder prune`), then unused images.
-   `docker system prune --volumes`, `docker volume rm`, `make nuke`, checkpoint or bucket deletes,
-   retention changes and `expire_snapshots` are blast radius (AGENTS.md).
+4. Freeing space is the owner's call, one command at a time; the operator proposes it and runs it
+   only with an explicit approval. Least risky first: the Docker build cache
+   (`docker builder prune`), then unused images. `docker system prune --volumes`,
+   `docker volume rm`, `make nuke`, checkpoint or bucket deletes, retention changes and
+   `expire_snapshots` are blast radius: destructive actions need an explicit approval (see
+   OPERATIONS.md, "Maintenance").
 5. After space is back: `make status` until every service is `healthy`, then `make verify-fast`.
    A Spark job that died on a failed write resumes from its checkpoint; a Postgres that stopped
    replays its WAL on start.

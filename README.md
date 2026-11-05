@@ -131,7 +131,7 @@ Components:
 | Clean-clone path (`smoke.yml`) | measured | green, [run 40907438614](../../actions/runs/40907438614) (10 min 1 s) [run 40916528470](../../actions/runs/40916528470) (9 min 14 s) and [run 40934001854](../../actions/runs/40934001854) (10 min 52 s) on HEAD `6ca7224`, 2026-10-29 |
 | `iceberg_orphans` on its weekly schedule | planned | paused by decision: [not proven yet](docs/evidence.md#not-proven-yet) |
 | `rewrite-position-deletes` on `silver.orders` | planned | failed on 2026-10-23, not run live since: [not proven yet](docs/evidence.md#not-proven-yet) |
-| 24 hour unattended run | planned | card W6-T09, no result yet: [not proven yet](docs/evidence.md#not-proven-yet) |
+| 24 hour unattended run | not run | cancelled by the owner on 2026-11-04: [not proven yet](docs/evidence.md#not-proven-yet) |
 | Interview notes: 30 questions, each with a project example and a link | done | [interview notes](docs/interview-notes.md), every link and anchor opened by script, stale numbers corrected against OPERATIONS, the ADRs and [evidence](docs/evidence.md), 2026-10-30 |
 | Mock interview and learning gates | planned | [LEARNING.md](LEARNING.md) is empty |
 | Superset (optional) | planned | [ADR-014](DECISIONS.md) |

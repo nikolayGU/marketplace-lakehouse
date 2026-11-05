@@ -215,8 +215,8 @@ not a person with an admin login, a shell or network access.
 - Scenario 8 live against `CdcStalledSourceWrites` (it is shorter than the alert window) and
   `SparkRestartLoop` as a live firing.
 - The offline start of Grafana with a new `grafana` volume (the plugin install is synchronous).
-- The 24 hour unattended window (W6-T09) and the learning gates in [LEARNING.md](../LEARNING.md):
-  `planned`.
+- The 24 hour unattended window: not run, cancelled by the owner on 2026-11-04.
+- The learning gates in [LEARNING.md](../LEARNING.md): `planned`.
 - Trino authentication: not done. Access control (W6-T11) limits the `grafana` user, but the user
   name is only a label ([OPERATIONS, Access control](../OPERATIONS.md#access-control)).
 
