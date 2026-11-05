@@ -1,0 +1,27 @@
+import json, os, sys, time
+from typing import Any
+def load(root):
+    os.environ["CLAUDE_PROJECT_DIR"] = root
+    src = open(f"{root}/.claude/hooks/guard.py").read()
+    head = src.split("\ntry:\n    check(json.load(sys.stdin))")[0]
+    ns: dict[str, Any] = {"__name__": "g", "__file__": f"{root}/.claude/hooks/guard.py"}
+    sys.path.insert(0, root)
+    exec(compile(head, "guard.py", "exec"), ns)
+    return ns
+S = "/tmp/claude-1000/-home-gusev-marketplace-lakehouse/428b1e66-39bf-4b44-909d-736ee2fa0c74/scratchpad"
+new = load(S + "/b18r"); old = load(S + "/b18h")
+def dec(ns, cmd):
+    t = time.monotonic()
+    try:
+        ns["check"]({"tool_name": "Bash", "tool_input": {"command": cmd}})
+        d = "allow"
+    except ns["VerdictError"] as v:
+        d = v.kind + ":" + str(v)[:40]
+    except Exception as e:
+        d = "CRASH " + repr(e)[:60]
+    return d, time.monotonic() - t
+cmds = json.load(open(sys.argv[1]))
+for c in cmds:
+    dn, tn = dec(new, c); do, to = dec(old, c)
+    flag = "" if dn.split(":")[0] == do.split(":")[0] else "  <<CHANGED"
+    print(f"{c!r}\n   NEW {dn} ({tn:.3f}s) | HEAD {do} ({to:.3f}s){flag}")

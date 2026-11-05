@@ -3,6 +3,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -1737,3 +1738,499 @@ def test_settings_wire_the_review_hook_and_make_the_guard_fail_closed() -> None:
     ):
         assert settings["enabledPlugins"][plugin] is False
     assert (HOOKS / "review_stamp.py").exists()
+
+
+# B18: the stdin-as-code forms the first round of the pipe and heredoc checks left open. A shell
+# option that takes a value is not a script file, `-s` reads the script from stdin whatever follows,
+# a group on the receiving end of a pipe, a process substitution and the interpreters beyond python
+# are inline code too. Each command hides `.env` in quotes, so only the inline code can read it.
+PIPED_TEXT = "echo 'cat .env' | "
+PYTHON_TEXT = "echo \"print(open('.env').read())\" | "
+STAMP_TEXT = "echo 'import scripts.agent_state as s' | "
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        PIPED_TEXT + "bash -euo pipefail",
+        PIPED_TEXT + "bash -o pipefail",
+        PIPED_TEXT + "bash -eo pipefail",
+        PIPED_TEXT + "bash +o history",
+        PIPED_TEXT + "bash -O extglob",
+        PIPED_TEXT + "bash --rcfile /dev/null",
+        PIPED_TEXT + "bash -s -- arg",
+        PIPED_TEXT + "bash -s arg",
+        PIPED_TEXT + "bash -es -- a b",
+        PIPED_TEXT + "bash -e -",
+        PIPED_TEXT + "bash -o pipefail -",
+        PIPED_TEXT + "bash -euo pipefail -s",
+        PIPED_TEXT + "sudo -E bash -s -- arg",
+        PIPED_TEXT + "nice -n 5 bash -o pipefail",
+        PIPED_TEXT + "zsh -o errexit",
+        PIPED_TEXT + "env -i bash -o pipefail",
+        PIPED_TEXT + "timeout 60 sh -o pipefail",
+        PIPED_TEXT + "bash -o pipefail 2>&1",
+        "bash -o pipefail <<< 'cat .env'",
+        "bash -o pipefail <<'EOF'\nf=.env\ncat \"$f\"\nEOF",
+        "bash -euo pipefail <<'EOF'\nf=.env\ncat \"$f\"\nEOF",
+        "bash -s -- arg <<'EOF'\nf=.env\ncat \"$f\"\nEOF",
+        'bash -s -- a <<< "f=.env; cat \\$f"',
+        "bash -e - <<< 'cat .env'",
+        "bash - <<< 'cat .env'",
+        "bash -o pipefail < <(echo 'cat .env')",
+        "bash <(echo 'cat .env')",
+        "bash -o pipefail <(echo 'cat .env')",
+        "bash -e <(echo 'cat .env')",
+    ],
+)
+def test_a_shell_option_with_a_value_does_not_make_the_piped_text_a_script_file(
+    command: str,
+) -> None:
+    result = bash(command)
+
+    assert decision(result) == "ask"
+    assert "secret" in result.stdout
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        PYTHON_TEXT + "python3 --check-hash-based-pycs never",
+        PYTHON_TEXT + "python3 -X dev --check-hash-based-pycs always -u",
+        PYTHON_TEXT + "( cd /x && python3 )",
+        PYTHON_TEXT + "{ cd /x; python3; }",
+        PYTHON_TEXT + "( cd /x; nice -n 5 python3 -u )",
+        PYTHON_TEXT + "tee >(python3)",
+        PYTHON_TEXT + "tee /dev/null >(python3 -u)",
+        "python3 <(echo \"print(open('.env').read())\")",
+        "python3 -u <(echo \"print(open('.env').read())\")",
+        "python3 -B -X dev <(echo \"print(open('.env').read())\")",
+        "python3 -- <(echo \"print(open('.env').read())\")",
+        PYTHON_TEXT + "pypy3",
+        PYTHON_TEXT + "pypy3 -u",
+        "pypy3 -c \"print(open('.env').read())\"",
+        "pypy3 - <<'EOF'\nprint(open('.env').read())\nEOF",
+        "pypy3 <<< \"print(open('.env').read())\"",
+        "node -p \"require('fs').readFileSync('.env','utf8')\"",
+        "node --print \"require('fs').readFileSync('.env','utf8')\"",
+        "node --eval \"console.log(require('fs').readFileSync('.env','utf8'))\"",
+        "node -r dotenv/config -p \"require('fs').readFileSync('.env','utf8')\"",
+        "perl -E 'say for do { local @ARGV = (\".env\"); <> }'",
+        "perl -nE 'say' .env",
+        "perl -Mstrict -E 'say for do { local @ARGV = (\".env\"); <> }'",
+    ],
+)
+def test_the_inline_code_of_the_other_forms_that_reads_env_asks(command: str) -> None:
+    result = bash(command)
+
+    assert decision(result) == "ask"
+    assert "secret" in result.stdout
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        STAMP_TEXT + "pypy3",
+        STAMP_TEXT + "( cd /x && python3 )",
+        STAMP_TEXT + "{ cd /x; python3; }",
+        STAMP_TEXT + "tee >(python3)",
+        STAMP_TEXT + "python3 --check-hash-based-pycs never",
+        STAMP_TEXT + "nice -n 5 pypy3 -u",
+        "python3 <(echo 'import scripts.agent_state')",
+        "python3 -u <(echo 'import scripts.agent_state')",
+        "python3 --check-hash-based-pycs never <(echo 'import scripts.agent_state')",
+        "python3 -X dev --check-hash-based-pycs never <(echo 'import scripts.agent_state')",
+        "pypy3 -c 'import scripts.agent_state'",
+        "pypy3 -c 'import scripts.agent_state' x",
+    ],
+)
+def test_the_other_forms_of_inline_python_that_name_the_stamp_code_are_denied(
+    command: str,
+) -> None:
+    assert decision(bash(command)) == "deny"
+
+
+# The forms the first draft of this patch let through while HEAD asked or denied, and the
+# neighbours of the new forms. HEAD asks for all but `| bash --`, `bash - <<'EOF'`, which it let
+# pass (a gap this patch closes), so those two ask here too.
+@pytest.mark.parametrize(
+    "command",
+    [
+        PIPED_TEXT + "bash -",
+        PIPED_TEXT + "bash --",
+        PIPED_TEXT + "bash -es",
+        PIPED_TEXT + "bash -e",
+        PIPED_TEXT + "bash",
+        PIPED_TEXT + "bash -c 'ls'",
+        "bash -- <<'EOF'\nf=.env\ncat \"$f\"\nEOF",
+        "bash - <<'EOF'\nf=.env\ncat \"$f\"\nEOF",
+        "python3 -- < <(echo \"print(open('.env').read())\")",
+        PYTHON_TEXT + "python3 -u -",
+        PYTHON_TEXT + "python3 -X dev",
+    ],
+)
+def test_the_forms_that_asked_before_still_ask(command: str) -> None:
+    assert decision(bash(command)) == "ask"
+
+
+def test_a_stamp_written_through_python_u_and_a_process_substitution_is_still_denied() -> None:
+    command = "python3 -u - < <(echo 'import scripts.agent_state as s')"
+
+    assert decision(bash(command)) == "deny"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        PIPED_TEXT + "bash script.sh",
+        PIPED_TEXT + "bash -o pipefail script.sh",
+        PIPED_TEXT + "bash -euo pipefail ./run.sh arg -s",
+        PIPED_TEXT + "bash -- script.sh",
+        PIPED_TEXT + "bash +o history script.sh",
+        PYTHON_TEXT + "python3 script.py",
+        PYTHON_TEXT + "python3 -u script.py -x",
+        PYTHON_TEXT + "python3 -m json.tool",
+        PYTHON_TEXT + "python3 --check-hash-based-pycs never script.py",
+        PYTHON_TEXT + "( cd /x && python3 script.py )",
+        PYTHON_TEXT + "tee >(cat) > /dev/null",
+        PYTHON_TEXT + "node scripts/x.js -p",
+        PYTHON_TEXT + "node scripts/x.js --print",
+        PYTHON_TEXT + "node -r dotenv/config scripts/x.js -p 3000",
+        PYTHON_TEXT + "perl script.pl -E",
+        PYTHON_TEXT + "pypy3 script.py",
+        "grep -rn .env docs | node scripts/x.js -p",
+        "python3 script.py <(echo .env)",
+        "git log --oneline | python3 -m json.tool",
+    ],
+)
+def test_a_script_file_or_a_module_keeps_the_piped_text_as_data(command: str) -> None:
+    assert decision(bash(command)) == "allow"
+
+
+def load_guard(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    """The guard's names without running its stdin check, to call `check` with a stub inside."""
+    source = (HOOKS / "guard.py").read_text()
+    head = source.split("\ntry:\n    check(json.load(sys.stdin))")[0]
+    names: dict[str, Any] = {"__name__": "guard_under_test", "__file__": str(HOOKS / "guard.py")}
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(REPO))
+    monkeypatch.syspath_prepend(str(REPO))
+    exec(compile(head, "guard.py", "exec"), names)
+    return names
+
+
+def test_a_failure_in_one_text_of_the_command_does_not_lower_a_deny_in_the_other(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    guard = load_guard(monkeypatch)
+
+    def check_bash(text: str) -> None:
+        if text == "echo ab":
+            raise RuntimeError("a regex gave up")
+        raise guard["VerdictError"]("deny", "the raw text is denied")
+
+    guard["check_bash"] = check_bash
+
+    with pytest.raises(guard["VerdictError"]) as raised:
+        guard["check"]({"tool_name": "Bash", "tool_input": {"command": "echo a\\\nb"}})
+
+    assert raised.value.kind == "deny"
+
+
+def test_a_failure_in_every_text_of_the_command_asks(monkeypatch: pytest.MonkeyPatch) -> None:
+    guard = load_guard(monkeypatch)
+
+    def check_bash(text: str) -> None:
+        raise RuntimeError("a regex gave up")
+
+    guard["check_bash"] = check_bash
+
+    with pytest.raises(guard["VerdictError"]) as raised:
+        guard["check"]({"tool_name": "Bash", "tool_input": {"command": "echo a\\\nb"}})
+
+    assert raised.value.kind == "ask"
+
+
+# The wrapper options once backtracked without bound: `nice` and 22 pairs of `-a 5` before a
+# command that does not match took seconds. The decision is checked as well as the time, so that
+# a guard that gives up early cannot pass.
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [
+        (PIPED_TEXT + "nice" + " -a 5" * 40 + " bash script.sh", "allow"),
+        (PIPED_TEXT + "nice" + " -a 5" * 40 + " ls", "allow"),
+        (PIPED_TEXT + "nice" + " -a 5" * 40 + " bash -o pipefail", "ask"),
+        (PIPED_TEXT + "nice" + " -a 5" * 40 + " bash", "ask"),
+        (STAMP_TEXT + "nice" + " -a 5" * 40 + " python3", "deny"),
+        (STAMP_TEXT + "timeout" + " -k 5" * 40 + " 9 python3 script.py", "allow"),
+        (STAMP_TEXT + "env" + " -a 5" * 40 + " nice" + " -a 5" * 40 + " ls", "allow"),
+        (PIPED_TEXT + "nice" + " -a env" * 40 + " ls", "allow"),
+        (PIPED_TEXT + "nice" + " -a nice" * 40 + " ls", "allow"),
+        (PIPED_TEXT + "nice" + " -a A=1 nice" * 40 + " ls", "allow"),
+        (STAMP_TEXT + "nice" + " -a env" * 40 + " python3", "deny"),
+        (STAMP_TEXT + "nice" + " -a A=1 nice" * 40 + " python3", "deny"),
+    ],
+)
+def test_forty_wrapper_options_are_decided_in_under_a_second(command: str, expected: str) -> None:
+    event = {"tool_name": "Bash", "tool_input": {"command": command}}
+    env = {**os.environ, "CLAUDE_PROJECT_DIR": str(REPO)}
+    started = time.monotonic()
+    try:
+        result = subprocess.run(
+            [sys.executable, str(HOOKS / "guard.py")],
+            input=json.dumps(event),
+            capture_output=True,
+            text=True,
+            env=env,
+            check=False,
+            timeout=10,
+        )
+    except subprocess.TimeoutExpired:
+        pytest.fail("the guard did not decide in 10 s")
+    elapsed = time.monotonic() - started
+
+    assert decision(result) == expected
+    assert elapsed < 1
+
+
+# A word that starts with `#` ends the command at the next line break or separator, as in bash. It
+# is no script file of the interpreter before it, so the piped text stays its code. A `#` inside
+# a word or inside quotes is no comment.
+@pytest.mark.parametrize(
+    "command",
+    [
+        PYTHON_TEXT + "python3 -u # x",
+        PYTHON_TEXT + "python3 # x",
+        PIPED_TEXT + "bash # x",
+        PIPED_TEXT + "bash -e # x",
+        PYTHON_TEXT + "python3 #x; ls",
+        PYTHON_TEXT + "python3 # x | cat",
+        PYTHON_TEXT + "python3 # it's a comment",
+        PYTHON_TEXT + "nice -n 5 python3 # x",
+        PYTHON_TEXT + "python3 # x\nls",
+    ],
+)
+def test_a_comment_after_the_interpreter_does_not_make_the_piped_text_data(command: str) -> None:
+    result = bash(command)
+
+    assert decision(result) == "ask"
+    assert "secret" in result.stdout
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        STAMP_TEXT + "python3 # x",
+        STAMP_TEXT + "python3 -u # x",
+        STAMP_TEXT + "pypy3 # x",
+    ],
+)
+def test_a_comment_after_the_interpreter_does_not_hide_the_stamp_code_in_the_pipe(
+    command: str,
+) -> None:
+    assert decision(bash(command)) == "deny"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        PYTHON_TEXT + "python3 a#b",
+        PYTHON_TEXT + "python3 '#'",
+        PYTHON_TEXT + 'python3 "#x"',
+        PIPED_TEXT + "bash '# x'",
+        "python3 script.py # x",
+        PYTHON_TEXT + "python3 script.py #x; ls",
+    ],
+)
+def test_a_hash_inside_a_word_or_quotes_is_not_a_comment(command: str) -> None:
+    assert decision(bash(command)) == "allow"
+
+
+# A comment runs to the line break, not to the next `;`, `&` or `|` (`bash -c 'true # a; echo x'`
+# prints nothing). A quote in what follows the `;` is part of the comment: it must not unbalance
+# the quotes of the next line, where the real command is.
+@pytest.mark.parametrize(
+    "command",
+    [
+        "true # a; it's\necho 'cat .env' | bash -o pipefail # '",
+        "true # a & it's\necho 'cat .env' | bash -o pipefail # '",
+        "true # a | it's\necho 'cat .env' | bash -o pipefail # '",
+        "true # a; it's\n" + PIPED_TEXT + "bash -o pipefail",
+        "true # a; it's\n" + PYTHON_TEXT + "python3 -X dev --check-hash-based-pycs never # '",
+        PIPED_TEXT + "bash -o pipefail # it's",
+        PIPED_TEXT + "bash -o pipefail # a; it's\nls",
+    ],
+)
+def test_a_quote_after_a_separator_inside_a_comment_does_not_hide_the_next_line(
+    command: str,
+) -> None:
+    result = bash(command)
+
+    assert decision(result) == "ask"
+    assert "secret" in result.stdout
+
+
+def test_a_stamp_written_after_a_comment_with_a_separator_and_a_quote_is_denied() -> None:
+    command = "true # a; it's\n" + STAMP_TEXT + "python3 --check-hash-based-pycs never # '"
+
+    assert decision(bash(command)) == "deny"
+
+
+# What a comment hides is decided by the quotes: a `#` inside quotes is text (the value of `-o`
+# is a word, so the shell still reads its script from the pipe), and a `#` right after a bracket
+# starts a comment, whose quote must not unbalance the rest.
+@pytest.mark.parametrize(
+    "command",
+    [
+        PIPED_TEXT + "bash -o 'a #b'",
+        PIPED_TEXT + 'bash -o "a #b"',
+        PIPED_TEXT + "bash -o 'a #b' # c",
+        PYTHON_TEXT + "( #x\npython3)",
+        PIPED_TEXT + "(#)\nbash -o pipefail )",
+        PIPED_TEXT + "tee >(#)\nbash -o pipefail )",
+        PYTHON_TEXT + "(#)\npython3 -X dev )",
+        PYTHON_TEXT + "(#it's\npython3)",
+        PYTHON_TEXT + "( python3 -u\n#it's\n)",
+        PIPED_TEXT + "(#it's\nbash -o pipefail)",
+        PIPED_TEXT + "$(#it's\nbash -o pipefail)",
+    ],
+)
+def test_the_quotes_decide_which_hash_starts_a_comment(command: str) -> None:
+    result = bash(command)
+
+    assert decision(result) == "ask"
+    assert "secret" in result.stdout
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "python3 'a #b'",
+        PYTHON_TEXT + "python3 'a #b'",
+        PIPED_TEXT + 'bash "x #y"',
+        PIPED_TEXT + "bash 'a #b'",
+        PIPED_TEXT + "bash 'it #s' x",
+    ],
+)
+def test_a_script_file_with_a_hash_in_quotes_is_still_a_script_file(command: str) -> None:
+    assert decision(bash(command)) == "allow"
+
+
+# The stdin of a wrapped interpreter is its code whatever the options of the wrapper look like: a
+# value with a point (`0.5`), a suffix (`1.5s`, `5x`), an assignment (`-u A=1`) or a wrapper name
+# that is no value. The decimal forms and the assignment were once read as the end of the options,
+# and the quotes around `$(...)` hide the text from the token scan, so only the patterns decide.
+SUBSTITUTED_STAMP = 'echo "$(' + STAMP_TEXT
+SUBSTITUTED_SECRET = 'echo "$(' + PIPED_TEXT
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        SUBSTITUTED_STAMP + 'timeout -k 0.5 9 python3)"',
+        SUBSTITUTED_STAMP + 'timeout --kill-after 1.5 9 python3)"',
+        SUBSTITUTED_STAMP + 'timeout -k 0.5 9 python3 -u)"',
+        SUBSTITUTED_STAMP + 'timeout -k 0.5s 9 python3)"',
+        SUBSTITUTED_STAMP + 'nice -n 5x python3)"',
+        SUBSTITUTED_STAMP + 'stdbuf -o 0x python3 -u)"',
+        SUBSTITUTED_STAMP + 'nice -a A=1 5 python3)"',
+        SUBSTITUTED_STAMP + 'sudo -u A=1 -E python3)"',
+        SUBSTITUTED_STAMP + 'env -u A=1 -i python3)"',
+        SUBSTITUTED_STAMP + 'nice -a env -n 5 python3)"',
+        SUBSTITUTED_STAMP + 'sudo -u nice -E python3)"',
+        SUBSTITUTED_STAMP + 'stdbuf -oL python3)"',
+        SUBSTITUTED_STAMP + 'sudo -E uv run 5 -E 0.5 9 python3)"',
+        'x="$(' + STAMP_TEXT + 'nice -n 5x python3)"',
+        'sh -c "' + STAMP_TEXT + 'stdbuf -o 0x python3 -u"',
+    ],
+)
+def test_wrapper_options_with_a_decimal_a_suffix_or_an_assignment_still_feed_the_interpreter(
+    command: str,
+) -> None:
+    assert decision(bash(command)) == "deny"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        SUBSTITUTED_SECRET + 'sudo -E uv run 5 -E 0.5 9 bash)"',
+        SUBSTITUTED_SECRET + 'timeout -k 0.5 9 bash)"',
+        SUBSTITUTED_SECRET + '(timeout -k 0.5 9 bash))"',
+        SUBSTITUTED_SECRET + 'nice -a A=1 5 bash)"',
+        SUBSTITUTED_SECRET + 'nice -n 5x bash)"',
+        SUBSTITUTED_SECRET + 'sudo -u A=1 -E bash)"',
+        "echo \"$( (echo 'cat .env') | timeout -k 0.5 9 bash)\"",
+        'echo "$(' + PYTHON_TEXT + '(timeout -k 0.5 9 python3))"',
+        PIPED_TEXT + "sudo -E uv run 5 -E 0.5 9 bash",
+    ],
+)
+def test_wrapper_options_with_a_decimal_or_an_assignment_still_feed_the_shell(command: str) -> None:
+    result = bash(command)
+
+    assert decision(result) == "ask"
+    assert "secret" in result.stdout
+
+
+# A wrapper name after an option is the next wrapper, not the value of the option.
+@pytest.mark.parametrize(
+    "command",
+    [
+        PIPED_TEXT + "env -i uv run python3 -X dev --check-hash-based-pycs never",
+        PIPED_TEXT + "sudo -E uv run bash -o pipefail",
+        PIPED_TEXT + "sudo -E uv run python3 --check-hash-based-pycs never",
+        PIPED_TEXT + "sudo -E env bash -o pipefail",
+        PIPED_TEXT + "sudo -E nice -n 5 bash -o pipefail",
+        PIPED_TEXT + "sudo -E poetry run bash -o pipefail",
+        PIPED_TEXT + "env -i timeout 9 bash -o pipefail",
+    ],
+)
+def test_a_wrapper_after_an_option_is_not_the_value_of_that_option(command: str) -> None:
+    result = bash(command)
+
+    assert decision(result) == "ask"
+    assert "secret" in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [
+        (SUBSTITUTED_STAMP + "nice" + " -a A=1 5" * 40 + ' python3)"', "deny"),
+        (SUBSTITUTED_STAMP + "nice" + " -a 5x" * 40 + ' python3)"', "deny"),
+        (SUBSTITUTED_STAMP + "nice" + " -a 0.5" * 40 + ' python3)"', "deny"),
+        (SUBSTITUTED_STAMP + "nice" + " -a 1.5s" * 40 + ' python3)"', "deny"),
+        (SUBSTITUTED_STAMP + "nice" + " -a A=1" * 40 + ' python3)"', "deny"),
+        (SUBSTITUTED_STAMP + "nice" + " -a A=1 nice" * 40 + ' python3)"', "deny"),
+        (SUBSTITUTED_STAMP + "nice" + " -a 5 A=1" * 40 + ' python3)"', "deny"),
+        (SUBSTITUTED_STAMP + "nice" + " -a A=1 5" * 40 + ' ls)"', "allow"),
+        (SUBSTITUTED_STAMP + "nice" + " -a A=1 5" * 40 + 'x)"', "allow"),
+        (SUBSTITUTED_STAMP + "nice" + " 5 -a" * 40 + ' python3)"', "deny"),
+        (SUBSTITUTED_STAMP + "nice" + " -a uv run" * 40 + ' python3)"', "deny"),
+        (SUBSTITUTED_STAMP + "nice" + " -a -b 5" * 40 + ' python3)"', "deny"),
+        (SUBSTITUTED_STAMP + "nice" + " -k 0.5" * 40 + ' python3)"', "deny"),
+        (SUBSTITUTED_SECRET + "nice" + " -a A=1 5" * 40 + ' bash)"', "ask"),
+        (SUBSTITUTED_SECRET + "nice" + " -a 5x" * 40 + ' bash -o pipefail)"', "ask"),
+        (PIPED_TEXT + "nice" + " -a A=1 5" * 40 + " bash -o pipefail", "ask"),
+        (PIPED_TEXT + "nice" + " -a 0.5" * 40 + " ls", "allow"),
+    ],
+)
+def test_forty_odd_wrapper_options_are_decided_in_under_a_second(
+    command: str, expected: str
+) -> None:
+    event = {"tool_name": "Bash", "tool_input": {"command": command}}
+    env = {**os.environ, "CLAUDE_PROJECT_DIR": str(REPO)}
+    started = time.monotonic()
+    try:
+        result = subprocess.run(
+            [sys.executable, str(HOOKS / "guard.py")],
+            input=json.dumps(event),
+            capture_output=True,
+            text=True,
+            env=env,
+            check=False,
+            timeout=10,
+        )
+    except subprocess.TimeoutExpired:
+        pytest.fail("the guard did not decide in 10 s")
+    elapsed = time.monotonic() - started
+
+    assert decision(result) == expected
+    assert elapsed < 1

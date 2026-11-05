@@ -30,10 +30,18 @@ Inline code is code in `-c` or `-e` (after options whose quoted values may hold 
 here-document or here-string, `-`, `< <(...)`, or the stdin of an interpreter at the end of a pipe
 with no script file or module (a wrapper such as `nice -n 5`, `timeout 60`, a redirect or a group
 bracket may stand around it). A shell counts only for the stdin forms: a here-document with no
-script file, or a pipe. A command made only of searches and reads (grep, rg, git log,
-cat and the like, no substitution or redirect) runs none of these words and passes, except that
-the secret check runs before that exit. If the guard itself fails, it asks instead of letting the
-call through.
+script file, or a pipe. A token scan of each simple command adds what those patterns cannot tell:
+an option with a value is not a script file (`bash -euo pipefail`, `-o name`, `--rcfile f`,
+`python3 --check-hash-based-pycs never`), `-s` reads the script from stdin whatever follows, `--`
+and `-` end the options, a group or `>(...)` after a pipe feeds its commands, and a process
+substitution given as the script is code (`python3 <(...)`, `bash <(...)`); node `-p`, `--print`,
+`--eval`, perl `-E` and pypy count as inline code. A word that starts with `#` is a comment up
+to the next line break (a `;` or `|` does not end it): it is no script file. The scan only adds
+to the patterns. A command made only of searches and reads (grep, rg, git log, cat and the like,
+no substitution or redirect) runs none of these words and passes, but the secret check runs before
+that exit.
+If the guard itself fails, or fails on one of the two texts, it asks instead of letting the call
+through (a deny of the other text still wins).
 """
 
 import json
@@ -124,11 +132,24 @@ SEGMENT = r"(?:[^\n;|&]*|(?:[^\n;|&'\"\\]|\\.|'[^']*'|\"[^\"]*\")*)"
 LINE_CONTINUATION = re.compile(r"(?<!\\)((?:\\\\)*)\\\n")
 # What a pipe may put between itself and the interpreter that reads the piped text as its code: a
 # group bracket, a variable, a wrapper with its options (`nice -n 5`, `timeout 60`, `sudo -u x`).
-WRAPPER_ARGS = r"(?:\s+(?:-\S+(?:\s+[^\s-]\S*)?|\d+[smhd]?))*"
+# A word of digits with an optional unit (`5`, `60s`), a wrapper name (`env`, `uv run`) and an
+# assignment (`A=1`) are items of their own, never the value of an option (`-a 5`, `-a env`,
+# `-a A=1 nice`), so there is one way to split a run of such pairs and a mismatch costs one pass,
+# not 2^n (`nice` and 22 pairs of `-a 5` took seconds). A value that only looks like a number
+# (`0.5`, `1.5s`, `5x`) is still a value. The pattern was compared with the one before on
+# generated forms: none that was denied or asked for before passes now.
+WRAPPER_NAMES = r"env|sudo|time|exec|nohup|nice|command|xargs|timeout|stdbuf|setsid|ionice"
+WRAPPER_ITEM = r"(?:(?:\d+[smhd]?|" + WRAPPER_NAMES + r"|(?:uv|poetry)\s+run)(?:\s|$))"
+WRAPPER_VALUE = r"(?!" + WRAPPER_ITEM + r"|[A-Za-z_]\w*=)[^\s-]\S*"
+WRAPPER_ARGS = r"(?:\s+(?:-\S+(?:\s+" + WRAPPER_VALUE + r")?|\d+[smhd]?))*"
+CODE_RUNNERS = r"(?:python|pypy)[\d.]*|perl|ruby|node|bash|sh|zsh|dash|ksh"
 AFTER_PIPE = (
     r"(?<!\|)\|(?!\|)&?\s*(?:[({]\s*)*"
-    r"(?:(?:(?:env|sudo|time|exec|nohup|nice|command|xargs|timeout|stdbuf|setsid|ionice"
-    r"|uv\s+run|poetry\s+run)" + WRAPPER_ARGS + r"|[A-Za-z_]\w*=\S*)\s+)*(?:[\w.-]*/)*"
+    r"(?:(?:(?:"
+    + WRAPPER_NAMES
+    + r"|uv\s+run|poetry\s+run|[A-Za-z_]\w*=\S*)"
+    + WRAPPER_ARGS
+    + r")\s+)*(?:[\w.-]*/)*"
 )
 # The interpreter ends its command or goes on with options, a redirect or /dev/stdin: it has no
 # script file or module to run, so the piped text is its code (or `-c` takes it from stdin by
@@ -610,12 +631,260 @@ def compose_secret(args: list[str]) -> str | None:
     return None
 
 
+# The token scan below finds the inline code the regexes above cannot: it reads the words of each
+# simple command, so an option with a value, `--`, `-s`, a group after a pipe and a process
+# substitution are told from a script file. It only adds to the regexes.
+PUNCTUATION = re.compile(r"\|&|\|\||&&|;;|<<<|<<|<\(|>\(|&>>?|>>|>&|<&|>\||[();<>|&]")
+REDIRECTS = {"<", "<<", "<<<", ">", ">>", ">&", "<&", "&>", "&>>", ">|"}
+PIPE_TOKENS = {"|", "|&"}
+PROCESS_SUBSTITUTION = "\0<("
+STDIN_FILES = {"/dev/stdin", "/dev/fd/0", "/proc/self/fd/0"}
+RUNNER_WRAPPERS = WRAPPERS | {"timeout", "stdbuf", "setsid", "ionice"}
+WRAPPER_VALUE_WORD = re.compile(r"(?:[\w.-]*/)*(?:" + CODE_RUNNERS + r")\b")
+
+
+class Flavor:
+    """What the options of one kind of interpreter mean for the text on its stdin."""
+
+    def __init__(
+        self,
+        code: str = "",
+        module: str = "",
+        value: str = "",
+        long_code: tuple[str, ...] = (),
+        long_value: tuple[str, ...] = (),
+    ) -> None:
+        # code: flag letters whose command takes the code, module: flag letters that run a module
+        # (stdin stays data), value: flag letters that take a value (glued or the next word),
+        # long_code and long_value: the same for the `--name` options.
+        self.code, self.module, self.value = code, module, value
+        self.long_code, self.long_value = long_code, long_value
+
+
+FLAVORS = {
+    "python": Flavor(code="c", module="m", value="XW", long_value=("--check-hash-based-pycs",)),
+    "node": Flavor(
+        code="pe",
+        value="rC",
+        long_code=("--eval", "--print"),
+        long_value=("--require", "--import", "--loader", "--experimental-loader", "--conditions"),
+    ),
+    "perl": Flavor(code="eE", value="I"),
+    "ruby": Flavor(code="e", value="rICEF"),
+    "shell": Flavor(long_value=("--rcfile", "--init-file")),
+}
+
+
+def runner_flavor(name: str) -> str | None:
+    base = name.rsplit("/", 1)[-1]
+    if re.fullmatch(r"(?:python|pypy)[\d.]*", base):
+        return "python"
+    if base in ("node", "perl", "ruby"):
+        return base
+    return "shell" if base in SHELLS else None
+
+
+def command_start(words: list[str]) -> int | None:
+    """Index of the command word: past assignments, keywords, wrappers and their options."""
+    at, wrapped = 0, False
+    while at < len(words):
+        word = words[at]
+        if word in RUNNER_WRAPPERS or (
+            word in ("uv", "poetry") and words[at + 1 : at + 2] == ["run"]
+        ):
+            wrapped, at = True, at + (2 if word in ("uv", "poetry") else 1)
+        elif (
+            word in KEYWORDS
+            or ASSIGNMENT.match(word)
+            or (wrapped and re.fullmatch(r"\d+[smhd]?", word))
+        ):
+            at += 1
+        elif wrapped and word.startswith("-") and word != "-":
+            at += 1
+            nxt = words[at] if at < len(words) else "-"
+            if (
+                "=" not in word
+                and not nxt.startswith("-")
+                and nxt not in RUNNER_WRAPPERS | {"uv", "poetry"}
+                and not WRAPPER_VALUE_WORD.match(nxt)
+            ):
+                at += 1
+        else:
+            return at
+    return None
+
+
+def reads_code_from_stdin(flavor: str, args: list[str], stdin_open: bool) -> bool:
+    """The words after an interpreter: does its code come from stdin (or from a process
+    substitution), with no script file or module before it? stdin_open: a pipe or a here-document
+    feeds it. An option that takes a value, `--`, a glued option cluster such as `-euo` are read as
+    the interpreter reads them."""
+    rules = FLAVORS[flavor]
+    shell = flavor == "shell"
+    at = 0
+    while at < len(args):
+        word = args[at]
+        at += 1
+        if word == PROCESS_SUBSTITUTION or word == "-":
+            return True
+        if word == "--":
+            if at == len(args):
+                return stdin_open
+            return args[at] in ("-", PROCESS_SUBSTITUTION)
+        if word.startswith("--"):
+            name, glued, _ = word.partition("=")
+            if name in rules.long_code:
+                return True
+            if name in rules.long_value and not glued:
+                at += 1
+            continue
+        if word[:1] == "-" or (shell and word[:1] == "+" and len(word) > 1):
+            for place, letter in enumerate(word[1:], 1):
+                if letter in rules.code:
+                    return True
+                if letter in rules.module or (shell and letter == "c"):
+                    return False
+                if shell and letter == "s":
+                    return stdin_open
+                if shell and letter in "oO":
+                    at += 1
+                elif letter in rules.value:
+                    if place + 1 == len(word):  # the value is the next word
+                        at += 1
+                    break
+            continue
+        return stdin_open and word in STDIN_FILES
+    return stdin_open
+
+
+def strip_comments(command: str) -> str:
+    """The text without its comments: an unquoted word that starts with `#` runs to the next line
+    break, which stays (`;`, `|` and `&` do not end it). A `#` in a word or in quotes is text."""
+    out: list[str] = []
+    quote = ""
+    at = 0
+    while at < len(command):
+        char = command[at]
+        if char == "\\" and quote != "'":
+            out.append(command[at : at + 2])
+            at += 2
+            continue
+        if quote:
+            quote = "" if char == quote else quote
+        elif char in "'\"":
+            quote = char
+        elif char == "#" and (not out or out[-1][-1] in " \t\n;&|()<>"):
+            while at < len(command) and command[at] != "\n":
+                at += 1
+            continue
+        out.append(char)
+        at += 1
+    return "".join(out)
+
+
+def scan_commands(command: str) -> list[tuple[list[str], bool, bool]] | None:
+    """Each simple command of the text as (words, fed by a pipe or a group after one, has a
+    here-document, here-string or `< <(...)`). None when the quotes do not balance. A group, a
+    subshell, a substitution and a backtick pair are scanned as commands of their own; the
+    commands of a group that follows a pipe, and of `>(...)`, count as fed by it."""
+    backticks = 0
+
+    def swap(_: re.Match[str]) -> str:
+        nonlocal backticks
+        backticks += 1
+        return " ( " if backticks % 2 else " ) "
+
+    lexer = shlex.shlex(
+        re.sub("`", swap, strip_comments(command).replace("\n", " ; ")),
+        posix=True,
+        punctuation_chars=True,
+    )
+    lexer.whitespace_split = True
+    lexer.commenters = ""
+    try:
+        tokens = list(lexer)
+    except ValueError:
+        return None
+    items: list[tuple[bool, str]] = []
+    for token in tokens:
+        if set(token) <= set("();<>|&"):
+            items.extend((True, operator) for operator in PUNCTUATION.findall(token))
+        else:
+            items.append((False, token))
+    found: list[tuple[list[str], bool, bool]] = []
+    # What a group or a substitution suspends while its own commands are scanned.
+    frames: list[tuple[list[str], bool, bool, bool]] = []
+    words: list[str] = []
+    piped = group_piped = heredoc = False
+    redirect = ""
+
+    def finish() -> None:
+        if words:
+            found.append((list(words), piped, heredoc))
+
+    for is_operator, text in items:
+        previous, redirect = redirect, ""
+        if not is_operator or (previous and text not in ("<(", ">(")):
+            if previous:  # the target of a redirect is not an argument
+                continue
+            if text == "{" and not words:
+                frames.append((words, heredoc, piped, group_piped))
+                words, heredoc, group_piped = [], False, piped
+            elif text == "}" and not words and frames:
+                words, heredoc, piped, group_piped = frames.pop()
+            else:
+                words.append(text)
+        elif text in REDIRECTS:
+            if words and words[-1].isdigit():
+                words.pop()  # the file descriptor of `2>&1`
+            heredoc = heredoc or text in ("<<", "<<<")
+            redirect = text
+        elif text in ("<(", ">(", "("):
+            if text == "<(" and previous == "<":
+                heredoc = True
+            elif text == "<(":
+                words.append(PROCESS_SUBSTITUTION)
+            frames.append((words, heredoc, piped, group_piped))
+            fed = {"<(": False, ">(": True, "(": piped}[text]
+            words, heredoc, piped, group_piped = [], False, fed, fed
+        elif text == ")":
+            finish()
+            if frames:
+                words, heredoc, piped, group_piped = frames.pop()
+            else:
+                words, heredoc, piped = [], False, group_piped
+        else:
+            finish()
+            words, heredoc = [], False
+            piped = text in PIPE_TOKENS or group_piped
+    finish()
+    return found
+
+
+def stdin_code_runners(command: str) -> set[str]:
+    """The interpreters (python, node, perl, ruby, shell) that run the text they read from stdin
+    or from a process substitution as code, in the commands of this text."""
+    commands = scan_commands(command)
+    if commands is None:  # the quotes do not balance: any such name counts
+        names = re.finditer(r"\b(?:" + CODE_RUNNERS + r")\b", command)
+        return {runner_flavor(found[0]) or "shell" for found in names}
+    kinds: set[str] = set()
+    for words, piped, heredoc in commands:
+        at = command_start(words)
+        if at is None:
+            continue
+        flavor = runner_flavor(words[at])
+        if flavor and reads_code_from_stdin(flavor, words[at + 1 :], piped or heredoc):
+            kinds.add(flavor)
+    return kinds
+
+
 def secret_shown(command: str) -> str | None:
     """Why the command shows a secret (the reason for the owner), None when it does not."""
     if PROC_ENVIRON.search(command):
         return SECRET_ENVIRON
     text = ENV_FILE_OPTION.sub(" ", command)
-    if INLINE_CODE.search(text) and ENV_TEXT.search(text):
+    if ENV_TEXT.search(text) and (INLINE_CODE.search(text) or stdin_code_runners(text)):
         return SECRET_ENV
     for found in SUBSTITUTION.finditer(command):
         reason = secret_shown(found[1] or found[2] or "")
@@ -715,6 +984,14 @@ def check(event: dict[str, Any]) -> None:
             check_bash(text)
         except VerdictError as verdict:
             verdicts.append(verdict)
+        except Exception as error:  # the other text may still deny
+            verdicts.append(
+                VerdictError(
+                    "ask",
+                    f"guard.py failed ({error.__class__.__name__}: {error}),"
+                    " check the call by hand",
+                )
+            )
     if verdicts:
         raise next((v for v in verdicts if v.kind == "deny"), verdicts[0])
 
@@ -750,7 +1027,10 @@ def check_bash(command: str) -> None:
     if (
         STAMP_NAME.search(command)
         or STAMP_CLI.search(command)
-        or ("agent_state" in command and INLINE_PYTHON.search(command))
+        or (
+            "agent_state" in command
+            and (INLINE_PYTHON.search(command) or "python" in stdin_code_runners(command))
+        )
     ):
         deny("writes a gate stamp by hand", STAMP_FIX)
     if bends_make_check(command):
