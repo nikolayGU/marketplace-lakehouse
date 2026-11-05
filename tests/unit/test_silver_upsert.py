@@ -422,6 +422,49 @@ def test_run_processes_only_what_bronze_committed_since_the_last_run(
     assert second["o1"]._updated_at == first["o1"]._updated_at
 
 
+def values(rows: dict[str, Row]) -> dict[str, dict[str, Any]]:
+    """Every column of a silver row except `_updated_at`, which is processing time."""
+    return {k: {c: v for c, v in r.asDict().items() if c != "_updated_at"} for k, r in rows.items()}
+
+
+@needs_iceberg
+@pytest.mark.usefixtures("fresh_silver")
+def test_a_lost_checkpoint_rereads_bronze_and_silver_keeps_its_values(
+    spark: SparkSession, tmp_path: Path
+) -> None:
+    spark.sql(f"create namespace if not exists {BRONZE_NAMESPACE}")
+    spark.sql(f"drop table if exists {BRONZE}")
+    spark.sql(BRONZE_DDL)
+    spark.sql(f"drop table if exists {QUARANTINE}")
+    bronze(
+        spark,
+        event("c", order("streamed"), lsn=100),
+        event("u", order("streamed", status="approved"), lsn=120),
+        event("c", order("deleted"), lsn=105),
+        event("d", before=order("deleted"), lsn=130),
+        event("r", order("snapshot", status="delivered"), lsn=None),
+    ).writeTo(BRONZE).append()
+
+    run(spark, CONTRACTS, f"file://{tmp_path}/checkpoint-before", max_rows_per_batch=2)
+    before = silver(spark)
+    # A new, empty checkpoint is a lost one: the job reads every bronze snapshot again.
+    run(spark, CONTRACTS, f"file://{tmp_path}/checkpoint-after", max_rows_per_batch=2)
+    after = silver(spark)
+
+    assert before.keys() == {"streamed", "deleted", "snapshot"}
+    assert spark.table(f"{SILVER}.orders").count() == len(before)
+    assert values(after) == values(before)
+    assert after["streamed"].order_status == "approved"
+    assert after["deleted"]._is_deleted
+    # Equal LSN is a replay, so rows with an LSN are not touched.
+    assert after["streamed"]._updated_at == before["streamed"]._updated_at
+    assert after["deleted"]._updated_at == before["deleted"]._updated_at
+    # Known behaviour, not a goal: a row from a snapshot read has no LSN, any later event
+    # replaces it, so the re-read rewrites it with identical values and a new `_updated_at`.
+    assert after["snapshot"]._last_lsn is None
+    assert after["snapshot"]._updated_at > before["snapshot"]._updated_at
+
+
 OLD_BRONZE_DDL = BRONZE_DDL.replace("    source_sequence string,\n", "")
 
 

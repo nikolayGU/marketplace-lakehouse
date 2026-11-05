@@ -224,6 +224,11 @@ bronze snapshot committed since the previous run in micro-batches of about 200 0
   and the replay changes nothing that the first attempt already merged.
 - The job refuses to start if a silver table and its contract disagree on columns: add the
   column to the contract and `ALTER TABLE ... ADD COLUMN`, in that order.
+- Losing the silver checkpoint is checked by the unit test
+  `test_a_lost_checkpoint_rereads_bronze_and_silver_keeps_its_values`, not live (owner's decision of
+  2026-11-04): a new checkpoint re-reads all of bronze, and silver keeps the same values, with no
+  duplicates and no losses. The re-read does update `_updated_at` of the rows that came from a
+  snapshot read without an LSN (`_last_lsn is null`); rows with an LSN are untouched.
 - Resetting silver means dropping the tables and deleting the checkpoint prefix: blast radius.
 
 First run on 2026-09-23: the whole bronze (518 461 events) in 51 s, 3 batches; live rows equal
@@ -1132,6 +1137,7 @@ why nothing is lost or duplicated (or where it can be). Filled in as scenarios a
 | 8 | Kafka down | `chaos-kafka-down` | done 2026-10-23 |
 | 9 | Airflow task failure (dbt test) | `chaos-break-dbt-test` | done 2026-10-18 |
 | 10 (optional) | Partial processing (Trino memory) | `chaos-trino-memory` | planned (week 3) |
+| 10b | Silver merge killed between two tables (`lakehouse-silver-merge`, through the `silver_upsert` DAG; pauses `silver_upsert`, `dbt_build`, `dq_checks`, plays a 30 s burst, unpauses `silver_upsert` and does not trigger it: the run the scheduler creates (at once for the missed interval, or on the next `*/5` border, so up to 6 min of waiting) is the one killed, right after the first table in its log; the retry of the merge task must bring silver level with Postgres and is proved by more than one attempt of that task in that run, otherwise the result is inconclusive; `dbt_build` stays paused during the run, so gold can lag until the next merge with events or a manual `dbt_build`; never removes a leftover container) | `chaos-silver-kill` | not run yet |
 
 ### Template
 
@@ -1605,5 +1611,7 @@ in Kafka (24 h retention). What each piece of state has:
 keys inside the `lakekeeper` database, so a lost `.env` leaves an intact warehouse whose catalog
 cannot be read. Keep a copy of `.env` outside the repo (owner's step, never committed).
 
-Not proven live: losing a Spark checkpoint, MinIO or Lakekeeper down while a job writes, a full
-disk, killing `spark-silver` mid-merge, and a restore from the copy above.
+Not proven live: losing a Spark checkpoint (silver only by the unit test
+`test_a_lost_checkpoint_rereads_bronze_and_silver_keeps_its_values`, see the silver section),
+MinIO or Lakekeeper down while a job writes, a full disk, killing `spark-silver` mid-merge, and a
+restore from the copy above.
