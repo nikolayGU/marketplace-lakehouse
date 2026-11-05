@@ -6,8 +6,9 @@
 - `verify.sh` (W3-T00, `make verify`): waits for bronze to catch up with Kafka, runs one silver
   merge, checks Kafka offsets in bronze, silver against Postgres and all seven tables in bronze;
   prints `verify ok`. Refuses (exit 2) while `airflow-scheduler` runs or a replayer plays, and when
-  Trino does not answer `select 1`, or catalog `lake` (Lakekeeper) does not answer `show schemas`,
-  within `TRINO_PROBE_WAIT` seconds (default 20) + 2 s each. `--no-merge`
+  Trino does not answer `select 1`, catalog `lake` (Lakekeeper) does not answer `show schemas`, or
+  MinIO does not answer a health check run in the trino container (not a table query: Trino
+  caches metadata), within `TRINO_PROBE_WAIT` seconds (default 20) + 2 s each. `--no-merge`
   (`make verify-fast`) skips the merge. On success writes `.verify-stamp` (`agent_state.py`).
 - `report.sh` (`make report`): git state, the verify, check and review stamps, containers and the
   replay clock for a session report. Reads only.

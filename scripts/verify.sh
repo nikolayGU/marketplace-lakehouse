@@ -5,9 +5,11 @@
 # `verify ok` or the reason and a non-zero exit code. It runs one silver merge, so it refuses
 # while Airflow may run another (two writers on one checkpoint) and while a replayer plays
 # (reconcile would compare a moving source), and when Trino does not answer `select 1` or its
-# catalog lake does not answer `show schemas` (Lakekeeper down). The probes run after the other two
-# checks, one after the other, each ends within TRINO_PROBE_WAIT (default 20) + 2 s at most, so a
-# refusal comes within twice that. A MinIO outage is not probed: verify then waits for bronze.
+# catalog lake does not answer `show schemas` (Lakekeeper down) or MinIO does not answer a health
+# check run in the trino container against the endpoint of its catalog (MinIO down; not a table
+# query: Trino caches metadata). The probes run after the other two checks, one after the other,
+# each ends within TRINO_PROBE_WAIT (default 20) + 2 s at most, so a refusal comes within three
+# times that.
 # `--no-merge` (make verify-fast) skips the merge and writes nothing to the lake.
 # On success it stamps the working tree (.verify-stamp) for the agent hooks in .claude/hooks.
 . "$(dirname "$0")/chaos/lib.sh"
@@ -41,8 +43,8 @@ if [ "$mode" = full ]; then
   fi
 fi
 no_other_replayer
-# Every check below needs Trino and its catalog lake: without these probes either one down shows as
-# bronze not catching up.
+# Every check below needs Trino, its catalog lake and the object store: without these probes any
+# one down shows as bronze not catching up.
 # trino_up runs in this shell, not in $(...): the INT trap then fires after the probe that was
 # running, before the next one starts. It leaves its reason in trino_up_err.
 trino_up || {

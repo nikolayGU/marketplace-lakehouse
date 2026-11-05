@@ -34,14 +34,26 @@ _probe() {
   rm -f "$probe_out"
 }
 
-# trino_up: two probes in a row, each with its own limit of TRINO_PROBE_WAIT seconds (default 20),
-# so a refusal comes within 2 * (TRINO_PROBE_WAIT + 2) s at most. First `select 1` (Trino itself),
-# then `show schemas` in catalog lake (Trino to Lakekeeper). The second one is needed because
-# `select 1` passes while Lakekeeper is down, and every bronze query then fails: a caller that waits
-# on bronze reads that as Kafka lagging for its whole limit. On failure the reason is left in
-# trino_up_err (not on stderr: no redirect is then open when a trap fires) and the status is 1.
-# `show schemas` lists namespaces and does not read MinIO: a MinIO outage is not probed. Call it
-# directly, not inside $(...), so that a trap runs between the two probes.
+# trino_up: three probes in a row, each with its own limit of TRINO_PROBE_WAIT seconds (default 20),
+# so a refusal comes within 3 * (TRINO_PROBE_WAIT + 2) s at most. First `select 1` (Trino itself),
+# then `show schemas` in catalog lake (Trino to Lakekeeper), then a health check of MinIO run
+# inside the trino container against $S3_ENDPOINT, the endpoint of its catalog
+# (docker/trino/etc/catalog/lake.properties). The second is needed because `select 1` passes while
+# Lakekeeper is down, the third because `show schemas` lists namespaces and does not read MinIO:
+# with MinIO down every bronze query fails, and a caller that waits on bronze reads that as Kafka
+# lagging for its whole limit. The third is no query on a table: Trino caches table metadata
+# (manifest lists, manifests, row counts; `iceberg.metadata-cache.enabled`, true by default), and
+# `select 1 from bronze.cdc_events limit 1` reads no data file (`explain analyze` with MinIO up:
+# `Input: 70 rows (0B)`, no physical input). Seen: `$manifests` answered with MinIO down
+# (2026-11-04). What it shows: MinIO answers from the host of Trino by the endpoint of its
+# catalog. What it does not: credentials, permissions, that the bucket or the files of a table
+# exist. It needs curl in the trino image (without it the refusal reads "object store (MinIO)
+# fails: ...curl: not found"). curl gets the same limit (-m, passed as $1), since timeout ends
+# the exec on the host and not curl in the container. $S3_ENDPOINT stays literal here, the shell
+# in the container expands it.
+# On failure the reason is left in trino_up_err (not on stderr: no redirect is then open when a
+# trap fires) and the status is 1. Call it directly, not inside $(...), so that a trap runs
+# between the probes.
 trino_up() {
   local limit=${TRINO_PROBE_WAIT:-20}
   # timeout 0 means no limit, and a word is its own error: both are refused before any probe.
@@ -65,13 +77,27 @@ trino_up() {
   esac
   _probe "$limit" "${COMPOSE[@]}" exec -T trino trino --catalog lake --execute 'show schemas'
   case $probe_rc in
-    0) return 0 ;;
+    0) ;;
     124 | 137)
       trino_up_err="Trino answers, but catalog lake does not answer within $limit s:"
       trino_up_err+=" ${probe_err:-no output}"
       ;;
     *)
       trino_up_err="Trino answers, but catalog lake fails (Lakekeeper?):"
+      trino_up_err+=" ${probe_err:-no output}"
+      ;;
+  esac
+  [ "$probe_rc" = 0 ] || return 1
+  _probe "$limit" "${COMPOSE[@]}" exec -T trino sh -c \
+    'curl -sfS -o /dev/null -m "$1" "$S3_ENDPOINT/minio/health/live"' _ "$limit"
+  case $probe_rc in
+    0) return 0 ;;
+    124 | 137)
+      trino_up_err="Trino and catalog lake answer, but the object store (MinIO) does not answer"
+      trino_up_err+=" within $limit s: ${probe_err:-no output}"
+      ;;
+    *)
+      trino_up_err="Trino and catalog lake answer, but the object store (MinIO) fails:"
       trino_up_err+=" ${probe_err:-no output}"
       ;;
   esac
