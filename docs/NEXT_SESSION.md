@@ -17,8 +17,8 @@ docs/planning/13-harness.md; остатки бэклога: раздел 10 docs
 Состояние на 06.11.2026 (подробно: верхний раздел docs/HANDOFF.md, хук старта его печатает).
 - 06.11 вечер: полный аудит docs/planning/16-audit-2026-11-06/ и исправления P1
   docs/planning/17-audit-fixes.md (Superset и его MCP в профиле bi, консоль MinIO :9001, Kafka с
-  хоста, алерт GoldStaleAtRest); коммиты f5c9c8f..последний docs не запушены: первым делом
-  спросить «ок» на push и проверить CI. MCP Superset подключён в Claude Code только локально
+  хоста, алерт GoldStaleAtRest); коммиты f5c9c8f..итоговый docs запушены 06.11 ~16:40: первым
+  делом проверить их CI (gh run list). MCP Superset подключён в Claude Code только локально
   (claude mcp add --scope local), настройки клиента в репозиторий не кладутся. Реплей W6:
   32:28:21 из 48 ч.
 - 06.11: Б10 живьём (kill silver merge после 1 из 4 таблиц, retry Airflow try_number 2,

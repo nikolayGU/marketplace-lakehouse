@@ -29,7 +29,7 @@
 репозитории отменена владельцем (MCP только `--scope local`); времена «ок» в журнале сначала были
 записаны по оценке и исправлены по времени коммита.
 
-Открыто: push `f5c9c8f..` в `origin/main` и CI на них (нужно «ок»); P2 и P3 аудита 16 (раздел 10
+Открыто: CI на запушенных коммитах (push по «ок» 06.11 ~16:40, журнал); P2 и P3 аудита 16 (раздел 10
 `AUDIT_REPORT.md`); прежние остатки ниже (п. 11 холодный старт, Б6, Б17-Б19, Б20, миграция 003).
 
 ## Состояние на 06.11.2026: Б10 живьём доказан, проект закрыт по пп. 1-10 (W6-T10), дальше поддержка
@@ -380,6 +380,7 @@ unit), smoke красный (образы MinIO), W5-T05b не начата, г�
 
 | Дата UTC | Действие | Кто дал | Где видно |
 |---|---|---|---|
+| 06.11 ~16:40 | «делай пуш»: `git push origin main` без force (`f7eede8..` итоговый docs-коммит этой записи, 6 коммитов), затем CI | владелец в Claude Code | `git status -sb`, `gh run list` |
 | 06.11 ~15:04 | «mcp ставим официальный в claude code в репозиторий не постим его настройки»: `.mcp.json` удалён и в `.gitignore`; `claude mcp add --transport http --scope local superset http://127.0.0.1:5008/mcp` (локальный конфиг, 15:05) | владелец в Claude Code | `docs/planning/17-audit-fixes.md` |
 | 06.11 ~14:30 | «настрой и подключи MCP для Superset»: встроенный MCP-сервис Superset 6.1 (`superset-mcp`, порт 5008, `MCP_DEV_USERNAME=admin`), в карточке К2 | владелец в Claude Code | `docs/planning/17-audit-fixes.md` |
 | 06.11 ~14:15 | «да ок на всё начни вносить правки необходимы и подключай mcp superset если необходимо» на четыре пункта аудита 06.11: оживить Superset (F-02); класс C из P1: пересоздание `kafka` и `minio`, `make up PROFILE=stateful`, `make up PROFILE=bi`; `make replay-burst SECONDS=30` для живого E2E; строка аудита в индексе планов и коммиты. Push не входит. MCP Superset признан ненужным (`docs/planning/17-audit-fixes.md`) | владелец в Claude Code | `docs/planning/17-audit-fixes.md` |
