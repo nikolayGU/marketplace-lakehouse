@@ -350,6 +350,7 @@ unit), smoke красный (образы MinIO), W5-T05b не начата, г�
 
 | Дата UTC | Действие | Кто дал | Где видно |
 |---|---|---|---|
+| 06.11 ~15:05 | «да ок на всё начни вносить правки необходимы и подключай mcp superset если необходимо» на четыре пункта аудита 06.11: оживить Superset (F-02); класс C из P1: пересоздание `kafka` и `minio`, `make up PROFILE=stateful`, `make up PROFILE=bi`; `make replay-burst SECONDS=30` для живого E2E; строка аудита в индексе планов и коммиты. Push не входит. MCP Superset признан ненужным (`docs/planning/17-audit-fixes.md`) | владелец в Claude Code | `docs/planning/17-audit-fixes.md` |
 | 06.11 12:21-12:22 | `git push origin main` (`0395bcf..bccd194`), снятие пауз трёх DAG, `gh workflow run smoke.yml --ref main` (run 42216951898, success) | рутина закрытия 06.11 ~12:01 | `gh run list`, `git log` |
 | 06.11 12:51 | `kafka-configs.sh --describe --entity-name oltp.message` (только чтение, повтор W6-T08 по ревью): `segment.ms=3600000` | не нужно (класс A) | «Итог» W6-T08 |
 | 06.11 12:17-12:19 | Цикл verify: пауза трёх DAG, `stop airflow-scheduler`, `make verify` verify ok 7 из 7 (full 12:18:29Z), `make dbt-build` `PASS=79 WARN=4 ERROR=0`, `start airflow-scheduler` | рутина закрытия 06.11 ~12:01 | этот раздел |
