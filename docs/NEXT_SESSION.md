@@ -11,8 +11,9 @@ dbt на Trino, Airflow 3, Prometheus и Grafana). Проект закрыт 06.
 docs/planning/14-closeout-spec.md («Итог» W6-T10; гейты владельца он отложил с записью). Открыты
 п. 11 (холодный старт), CI, gitleaks и чистое дерево итогового docs-коммита: их проверяет эта
 сессия. Правила: AGENTS.md (уже в контексте); регламент:
-docs/planning/13-harness.md; остатки бэклога: раздел 10 docs/planning/15-audit-2026-10-30.md и
-раздел 7 спеки 14; статусы планов: docs/planning/README.md.
+docs/planning/13-harness.md; остатки бэклога: раздел 10 docs/planning/15-audit-2026-10-30.md,
+раздел 7 спеки 14 и бэклог PF-01..PF-65 docs/planning/18-postfix-audit-2026-11-06.md (post-fix
+проверка 06.11: MUST FIX 0); статусы планов: docs/planning/README.md.
 
 Состояние на 06.11.2026 (подробно: верхний раздел docs/HANDOFF.md, хук старта его печатает).
 - 06.11 вечер: полный аудит docs/planning/16-audit-2026-11-06/ и исправления P1
@@ -41,6 +42,10 @@ docs/planning/13-harness.md; остатки бэклога: раздел 10 docs
 2. Одно сообщение владельцу вопросом с вариантами: (а) «ок» на запись п. 11 в «Итог» W6-T10 (цикл
    verify, docs-коммит, push); (б) что брать из поддержки (список ниже) или ничего; (в) гейты.
 3. Кандидаты поддержки, каждый по циклу задачи и только по выбору владельца:
+   - файл 18: первыми PF-01 (живой Prometheus с 15 правилами без GoldStaleAtRest: «ок» на
+     docker exec lakehouse-prometheus-1 kill -HUP 1, затем /api/v1/rules 16) и PF-05 (итог
+     планового smoke 2026-11-09 03:00 UTC на HEAD: gh run list --workflow smoke.yml --limit 1);
+     затем SHOULD FIX PF-02..PF-04 и OPTIONAL по выбору;
    - Б6: учения восстановления (pg_dump lakekeeper, mc mirror checkpoints/, подъём в отдельном
      compose project; второй стек на том же Docker не запускать);
    - Б18, остаток П-5 (две средние): тела here-doc с апострофом прячут форму в «кавычку», вырезать

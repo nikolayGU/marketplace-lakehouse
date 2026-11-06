@@ -2,6 +2,24 @@
 
 Обновляется в конце каждой недели или смыслового блока. Читать первым в каждой сессии.
 
+## Состояние на 06.11.2026, ночь: независимая post-fix проверка, бэклог на будущее (файл 18)
+
+Сессия ~16:40-18:20 UTC по запросу владельца: проверка только чтением после P1, без исправлений.
+Итог и бэклог: `docs/planning/18-postfix-audit-2026-11-06.md`. Вердикт READY WITH ACCEPTED DEBT,
+MUST FIX 0; по решению владельца (журнал ниже) всё исправимое записано как PF-01..PF-65 и пока не
+исполняется.
+
+| Что | Команда | Результат |
+|---|---|---|
+| Git | `git status -sb`, `git ls-remote origin` | HEAD `4169df6` = `origin/main`, дерево чистое до этой записи |
+| CI | `gh run view 42253894035` | success на `4169df6`, 12 job; smoke на HEAD не было, плановый 2026-11-09 03:00 UTC (PF-05) |
+| Тесты | pytest, линтеры, `dbt parse`, promtool, импорт DAG без `make` | 1852 passed, 145 skipped; остальное exit 0 |
+| Данные | `. scripts/chaos/lib.sh && reconcile` | 7 из 7, orders 96358 |
+| MCP Superset | клиент новой сессии | healthy; `fct_orders` 96358; `lake.silver` PERMISSION_DENIED |
+| Prometheus | GET `/api/v1/rules` | 15 правил, `GoldStaleAtRest` не загружен (PF-01, нужен «ок» на `kill -HUP 1`) |
+
+Открыто: PF-01 и PF-05 первыми; остальное в файле 18 по выбору владельца. Прежние остатки ниже.
+
 ## Состояние на 06.11.2026, вечер: полный аудит 16 и исправления P1 (спека 17), Superset живой
 
 Сессия 13:19-16:35 UTC по запросу владельца «полный аудит системы». Аудит только чтением:
@@ -380,6 +398,8 @@ unit), smoke красный (образы MinIO), W5-T05b не начата, г�
 
 | Дата UTC | Действие | Кто дал | Где видно |
 |---|---|---|---|
+| 06.11 ~18:34 | «ок и заканчиваем»: один docs-коммит файла 18 и записей в индексе, HANDOFF и NEXT_SESSION; push не входит | владелец в Claude Code | `git log` |
+| 06.11 ~18:15 | «пометь всё что можно отправить исправить пока не будем но пометим на будущее в репозитории»: бэклог PF-01..PF-65 в `docs/planning/18-postfix-audit-2026-11-06.md`, строки в индексе планов, HANDOFF и NEXT_SESSION; исправлений нет | владелец в Claude Code | `docs/planning/18-postfix-audit-2026-11-06.md` |
 | 06.11 ~16:40 | «делай пуш»: `git push origin main` без force (`f7eede8..` итоговый docs-коммит этой записи, 6 коммитов), затем CI | владелец в Claude Code | `git status -sb`, `gh run list` |
 | 06.11 ~15:04 | «mcp ставим официальный в claude code в репозиторий не постим его настройки»: `.mcp.json` удалён и в `.gitignore`; `claude mcp add --transport http --scope local superset http://127.0.0.1:5008/mcp` (локальный конфиг, 15:05) | владелец в Claude Code | `docs/planning/17-audit-fixes.md` |
 | 06.11 ~14:30 | «настрой и подключи MCP для Superset»: встроенный MCP-сервис Superset 6.1 (`superset-mcp`, порт 5008, `MCP_DEV_USERNAME=admin`), в карточке К2 | владелец в Claude Code | `docs/planning/17-audit-fixes.md` |
