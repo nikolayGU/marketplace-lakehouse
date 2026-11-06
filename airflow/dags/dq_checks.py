@@ -9,8 +9,11 @@ it). A CDC that stands (the source wrote and the slot moved no further, checks.c
 flight, no verdict" for the source-silver comparisons, the GMV comparison and the gauge
 `lakehouse.dq.cdc_stalled` (W6-D9). The runs in a
 row that did not compare silver with gold are counted in `lakehouse.dq.gold_not_compared_runs`
-(alert SilverGoldNotCompared). Every value is logged as a `dq <name>=<value>` line and sent to
-statsd-exporter as a `lakehouse.*` gauge (lakehouse/metrics.py, observability/statsd/mapping.yml).
+(alert SilverGoldNotCompared). The runs in a row at rest in which gold was not rebuilt after the
+last data commit of silver, by Iceberg snapshots, are counted in `lakehouse.dq.gold_stale_runs`
+(alert GoldStaleAtRest, reconcile.gold_stale). Every value is logged as a `dq <name>=<value>` line
+and sent to statsd-exporter as a `lakehouse.*` gauge (lakehouse/metrics.py,
+observability/statsd/mapping.yml).
 Not exported: new quarantine rows, a Modify gate of the owner (W4-D8).
 """
 
@@ -27,6 +30,7 @@ from lakehouse.clients import postgres_rows, postgres_value, trino_rows, trino_v
 from lakehouse.settings import (
     CDC_STATE_SEEN,
     GOLD_NOT_COMPARED_RUNS,
+    GOLD_STALE_RUNS,
     LAST_BRONZE_SNAPSHOT,
     SILVER_KEYS,
     SOURCE_TABLES,
@@ -44,6 +48,10 @@ def export(*gauges: tuple[str, object, dict[str, str]]) -> None:
     metrics.send(lines, settings.statsd_host, settings.statsd_port)
 
 
+def _epoch(value: object) -> float | None:
+    return None if value is None else float(str(value))
+
+
 def count_gold_run(compared: bool) -> int:
     """Runs in a row that did not compare silver with gold, kept in an Airflow Variable: 0 after a
     comparison, one more after a run without. A Variable that is missing or unreadable counts as
@@ -56,6 +64,20 @@ def count_gold_run(compared: bool) -> int:
         before = 0
     runs = 0 if compared else before + 1
     Variable.set(GOLD_NOT_COMPARED_RUNS, str(runs))
+    return runs
+
+
+def count_stale_run(stale: bool | None) -> int:
+    """Runs in a row at rest with gold not rebuilt since the last data commit of silver, kept in an
+    Airflow Variable like count_gold_run: one more when stale, 0 when not, and 0 when None (no
+    verdict, the stand is not at rest). A missing or unreadable Variable counts as 0."""
+    remembered = Variable.get(GOLD_STALE_RUNS, default=None)
+    try:
+        before = max(int(remembered or 0), 0)
+    except ValueError:
+        before = 0
+    runs = before + 1 if stale else 0
+    Variable.set(GOLD_STALE_RUNS, str(runs))
     return runs
 
 
@@ -206,12 +228,15 @@ def dq_checks() -> None:
             print("in flight: bronze or silver has not caught up yet, no verdict")
             runs = count_gold_run(compared=False)
             print(f"dq gold_not_compared_runs={runs}")
+            stale_runs = count_stale_run(None)
+            print(f"dq gold_stale_runs={stale_runs}")
             # Gold is not compared either: the alert needs the count, not a gap in the series.
             export(
                 ("lakehouse.dq.reconcile_in_flight", 1, {}),
                 ("lakehouse.dq.reconcile_gold_compared", 0, {}),
                 ("lakehouse.dq.reconcile_gmv_compared", 0, {}),
                 ("lakehouse.dq.gold_not_compared_runs", runs, {}),
+                ("lakehouse.dq.gold_stale_runs", stale_runs, {}),
             )
             return
 
@@ -329,6 +354,26 @@ def dq_checks() -> None:
         runs = count_gold_run(compared=gold_ready)
         print(f"dq gold_not_compared_runs={runs}")
         gauges.append(("lakehouse.dq.gold_not_compared_runs", runs, {}))
+        # Independent of skip_source and gold_ready. If the metadata queries fail, the count and
+        # its gauge stay as they were and the run fails after the verdicts are sent.
+        stale_failure: Exception | None = None
+        try:
+            # The incremental mart is not read through snapshots: it is stale when its watermark
+            # is behind fct_orders (the same test as in _compare_gmv).
+            mart_behind = not reconcile.gold_at_rest(
+                trino_value(settings, reconcile.MART_UPDATED), gold_updated
+            )
+            stale = mart_behind or reconcile.gold_stale(
+                _epoch(trino_value(settings, reconcile.SILVER_DATA_CHANGED)),
+                _epoch(trino_value(settings, reconcile.GOLD_REBUILT)),
+            )
+        except Exception as error:
+            stale_failure = error
+            print(f"dq gold_stale_failed=1 {type(error).__name__}: {error}")
+        else:
+            stale_runs = count_stale_run(stale)
+            print(f"dq gold_stale_runs={stale_runs}")
+            gauges.append(("lakehouse.dq.gold_stale_runs", stale_runs, {}))
         gauges.append(("lakehouse.dq.reconcile_verdict_timestamp_seconds", time.time(), {}))
         export(*gauges)
         print(f"dq reconcile_seconds={time.time() - started:.1f}")
@@ -338,9 +383,13 @@ def dq_checks() -> None:
             message = "values differ at rest:\n" + "\n".join(v.summary() for v in wrong)
             if gmv_failure is not None:
                 message += f"\nthe GMV step failed as well: {gmv_failure!r}"
+            if stale_failure is not None:
+                message += f"\nthe gold snapshot check failed as well: {stale_failure!r}"
             raise ValueError(message) from gmv_failure
         if gmv_failure is not None:
             raise gmv_failure
+        if stale_failure is not None:
+            raise stale_failure
 
     @task
     def report() -> None:

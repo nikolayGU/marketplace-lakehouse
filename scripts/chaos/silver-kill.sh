@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Chaos 10b: kill the silver merge between two tables (OPERATIONS.md, scenario 10b). The three DAGs
 # that touch silver are paused, a burst piles up events in bronze, then silver_upsert is unpaused
-# and `lakehouse-silver-merge` is killed once its log shows a table merged. No manual trigger: the
-# scheduler creates the run itself, at once for the interval missed while paused or on the next */5
-# border, so the wait is up to 6 minutes. The merge goes through the tables one after another, so
-# silver is then part new, part old; the retry of the task must bring it level with Postgres without
-# a duplicate or a lost row. Needs orchestrate up and no replay. A container left behind by the kill
-# is never removed here: that is the owner's call.
+# and `lakehouse-silver-merge` is killed once its log shows a table merged. No manual trigger of the
+# merge: the scheduler creates the run itself, at once for the interval missed while paused or on
+# the next */5 border, so the wait is up to 6 minutes. The merge goes through the tables one after
+# another, so silver is then part new, part old; the retry of the task must bring it level with
+# Postgres without a duplicate or a lost row. Needs orchestrate up and no replay. A container left
+# behind by the kill is never removed here: that is the owner's call.
 . "$(dirname "$0")/lib.sh"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
@@ -44,11 +44,17 @@ merged_lines() { { docker logs "$merge" 2>&1 || true; } | grep 'events merged in
 diff_tables() { grep -c DIFF <<<"$1" || true; }
 stop_burst() { [ -z "$burst" ] || kill -TERM -- -"$burst" 2>/dev/null || true; }
 # Only the DAGs this script paused are unpaused again; a DAG that was paused before stays so.
+# dbt_build is then triggered once, if this script paused it.
 cleanup() {
   stop_burst
   local d
   for d in ${paused_by_me[@]+"${paused_by_me[@]}"}; do
     airflow_cli dags unpause "$d" >/dev/null || echo "could not unpause $d: do it by hand" >&2
+    # Airflow queues no Asset event for a paused DAG and does not replay it: the lake.silver event
+    # of the merge came while dbt_build was paused here, so gold would stay behind silver.
+    [ "$d" != dbt_build ] ||
+      airflow_cli dags trigger dbt_build >/dev/null ||
+      echo "could not trigger dbt_build: do it by hand" >&2
   done
 }
 

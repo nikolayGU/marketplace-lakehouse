@@ -121,6 +121,17 @@ groups:
         labels:
           severity: warn
 
+      # Gold was not rebuilt after the last data commit of silver while the stand is at rest (audit
+      # F-01, F-03): dbt_build paused or red. By Iceberg snapshots, not by data, so a deleted order
+      # that keeps the watermarks of SilverGoldNotCompared apart does not fire it. dbt_build after
+      # a merge takes less than a minute and dq_checks runs every 15 minutes, so one run that sees
+      # it stale at rest can still be the build on its way; two in a row (30 minutes) are not.
+      # No `for`: the count already is the wait; last_over_time as in the rule above.
+      - alert: GoldStaleAtRest
+        expr: last_over_time(lakehouse_dq_gold_stale_runs[1h]) >= 2
+        labels:
+          severity: warn
+
       # A target Prometheus cannot scrape: its own alerts go quiet with it (ADR-023). The stateful
       # job runs only with PROFILE=stateful, so its target is down by design otherwise.
       - alert: ScrapeTargetDown

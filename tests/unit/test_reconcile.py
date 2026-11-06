@@ -1,5 +1,7 @@
 import json
 import re
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -230,3 +232,62 @@ def test_the_report_lists_at_most_twenty_keys() -> None:
 
     assert len(verdict.only_left) == 50
     assert len(verdict.summary().splitlines()) <= 22
+
+
+def test_gold_is_stale_only_when_silver_changed_after_the_last_rebuild() -> None:
+    assert reconcile.gold_stale(3000.0, 2000.0)
+    assert not reconcile.gold_stale(2000.0, 2000.0)
+    assert not reconcile.gold_stale(1000.0, 2000.0)
+    assert not reconcile.gold_stale(None, 2000.0)  # silver never changed: nothing to be behind
+    assert reconcile.gold_stale(1000.0, None)  # a gold table without a snapshot
+
+
+def test_silver_change_query_covers_the_contract_tables_without_replace() -> None:
+    query = reconcile.SILVER_DATA_CHANGED
+    for table in TABLES_OF_CONTRACT:
+        assert f'lake.silver."{table}$snapshots"' in query
+    assert "quarantine" not in query and "orders_per_minute" not in query
+    assert query.count("operation <> 'replace'") == len(TABLES_OF_CONTRACT)
+
+
+def test_rebuilt_gold_tables_are_the_table_marts_of_dbt() -> None:
+    # An incremental mart may add no snapshot on an empty increment; every other mart is a table
+    # that `+on_table_exists: replace` commits again on each build.
+    marts = {p.stem for p in MODELS.glob("*.sql")}
+    incremental = {
+        p.stem for p in MODELS.glob("*.sql") if "materialized='incremental'" in p.read_text()
+    }
+
+    assert set(reconcile.GOLD_REBUILT_TABLES) == marts - incremental
+    for table in reconcile.GOLD_REBUILT_TABLES:
+        assert f'lake.gold."{table}$snapshots"' in reconcile.GOLD_REBUILT
+    assert "min(" in reconcile.GOLD_REBUILT
+
+
+TABLES_OF_CONTRACT = sorted(p.stem for p in CONTRACTS.glob("*.json"))
+
+
+def test_reconcile_sql_script_imports_without_pydantic_settings_or_airflow() -> None:
+    # make verify and make reconcile run scripts/reconcile_sql.py with the host python3.
+    script = Path(__file__).parents[2] / "scripts" / "reconcile_sql.py"
+    code = (
+        "import sys, runpy\n"
+        "for name in ('pydantic_settings', 'airflow'):\n"
+        "    sys.modules[name] = None\n"
+        f"sys.path.insert(0, {str(script.parent)!r})\n"
+        "import reconcile_sql\n"
+    )
+    result = subprocess.run([sys.executable, "-I", "-c", code], capture_output=True, text=True)
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_silver_change_query_reads_the_same_tables_as_settings() -> None:
+    from lakehouse.settings import SOURCE_TABLES
+
+    assert set(reconcile.TABLES) == set(SOURCE_TABLES)
+
+
+def test_gold_rebuilt_is_null_when_one_table_has_no_snapshot() -> None:
+    # min() skips a NULL branch; without this a table never built would hide behind the others.
+    assert "if(count_if(rebuilt is null) > 0, null, min(rebuilt))" in reconcile.GOLD_REBUILT

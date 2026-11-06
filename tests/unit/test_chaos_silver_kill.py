@@ -74,6 +74,7 @@ case "$*" in
   rm*) exit 0 ;;
   *"airflow dags list -o json"*) echo "$dag_json" ;;
   *"dags pause "*|*"dags unpause "*) exit 0 ;;
+  *"dags trigger "*) [ -z "${TRIGGER_FAIL:-}" ] || exit 1 ;;
   *"dags list-runs "*)
     id="scheduled__2026-11-05T10:00:00+00:00"
     echo "[{\"run_id\": \"$id\", \"state\": \"${DAG_STATE:-success}\"}]" ;;
@@ -207,7 +208,7 @@ def test_burst_that_brought_nothing_refuses_and_gives_the_pauses_back(tmp_path: 
     assert result.returncode == 1, result.stderr
     assert "burst brought nothing to merge" in result.stderr
     assert (state / "burst-started").exists()
-    assert not any(" dags trigger " in call for call in calls)
+    assert not any(" dags trigger " in call and "dbt_build" not in call for call in calls)
     assert not any(call.startswith("kill ") for call in calls)
     assert not any("dagRuns" in call for call in calls)
     for dag in ("silver_upsert", "dbt_build", "dq_checks"):
@@ -225,13 +226,14 @@ def test_kill_and_retry_that_heals_ends_ok(tmp_path: Path) -> None:
     assert "6 tables differ from Postgres right after the kill" in result.stdout
     assert "scenario" not in result.stdout
     assert calls.count("kill lakehouse-silver-merge") == 1
-    # The pause comes before the burst, the unpause before the kill, and nothing triggers a run:
-    # the merge killed is the one the scheduler made, and the retry is proved on that very run.
+    # The pause comes before the burst, the unpause before the kill, and no run of silver_upsert is
+    # triggered: the merge killed is the one the scheduler made, and the retry is proved on that
+    # very run. Only dbt_build is triggered, once the script has given its pause back.
     pause = next(i for i, c in enumerate(calls) if c.endswith("dags pause silver_upsert"))
     unpause = next(i for i, c in enumerate(calls) if c.endswith("dags unpause silver_upsert"))
     kill = calls.index("kill lakehouse-silver-merge")
     assert pause < unpause < kill
-    assert not any(" dags trigger " in call for call in calls)
+    assert not any(" dags trigger " in call and "dbt_build" not in call for call in calls)
     assert not any(call.startswith("rm ") for call in calls)
     assert any(
         "dagRuns/scheduled__2026-11-05T10:00:00+00:00/taskInstances/merge" in c for c in calls
@@ -475,3 +477,30 @@ def test_a_merge_task_that_is_not_a_success_is_not_ok(tmp_path: Path) -> None:
 
     assert result.returncode == 1, result.stderr
     assert "the merge task of the run is up_for_retry" in result.stderr
+
+
+def test_dbt_build_is_triggered_once_after_the_script_gave_its_pause_back(tmp_path: Path) -> None:
+    # Airflow queues no Asset event for a paused DAG and does not replay it: the lake.silver event
+    # that came while the script held dbt_build paused is lost, so the script runs the build itself.
+    result, calls, _ = run_script(tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    triggers = [i for i, c in enumerate(calls) if " dags trigger " in c]
+    assert len(triggers) == 1
+    assert calls[triggers[0]].endswith("dags trigger dbt_build")
+    unpause = next(i for i, c in enumerate(calls) if c.endswith("dags unpause dbt_build"))
+    assert unpause < triggers[0]
+
+
+def test_dbt_build_that_was_paused_before_the_script_is_not_triggered(tmp_path: Path) -> None:
+    result, calls, _ = run_script(tmp_path, DBT_PAUSED="True")
+
+    assert result.returncode == 0, result.stderr
+    assert not any(" dags trigger " in call for call in calls)
+
+
+def test_a_failed_trigger_of_dbt_build_is_printed_and_keeps_the_exit_code(tmp_path: Path) -> None:
+    result, _, _ = run_script(tmp_path, TRIGGER_FAIL="1")
+
+    assert result.returncode == 0, result.stderr
+    assert "could not trigger dbt_build" in result.stderr

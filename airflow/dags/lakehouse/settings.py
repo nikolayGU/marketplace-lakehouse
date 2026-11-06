@@ -15,6 +15,9 @@ CDC_STATE_SEEN = "dq_checks_cdc_state"
 # How many dq_checks runs in a row did not compare silver with gold (bronze not yet in silver, or
 # gold behind silver); a comparison resets it to 0. The alert SilverGoldNotCompared reads it.
 GOLD_NOT_COMPARED_RUNS = "dq_gold_not_compared_runs"
+# How many dq_checks runs in a row found the stand at rest and gold not rebuilt since the last
+# data commit of silver (reconcile.gold_stale); the alert GoldStaleAtRest reads it.
+GOLD_STALE_RUNS = "dq_gold_stale_runs"
 # The replication slot Debezium reads (connect/shop-connector.json, slot.name).
 SHOP_SLOT = "shop_slot"
 LAKE_WRITERS_POOL = "lake_writers"

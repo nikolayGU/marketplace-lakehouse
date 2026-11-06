@@ -175,6 +175,47 @@ select cast(max(u) as varchar) from (
     union all select max(_updated_at) from silver.payments)
 """
 
+# Gold is stale when silver took a data commit after the newest rebuild of the oldest-built gold
+# table. Snapshots, not data: a deleted order leaves the watermarks above apart for good, a gold
+# that dbt_build did not rebuild leaves the snapshots apart until it does. `replace` commits
+# (compaction, rewrite by iceberg_maintenance) change no rows and are left out. The marts that are
+# tables get a new snapshot on every build (`+on_table_exists: replace`); the incremental
+# mart_daily_sales may add none on an empty increment, so it is not read here: dq_checks compares
+# its watermark MART_UPDATED with fct_orders instead. A test keeps the list equal to the models.
+# Both queries return epoch seconds; GOLD_REBUILT is NULL when any table has no snapshot.
+GOLD_REBUILT_TABLES = (
+    "dim_customers",
+    "dim_products",
+    "dim_sellers",
+    "fct_order_items",
+    "fct_orders",
+    "mart_delivery_sla",
+    "mart_seller_performance",
+)
+SILVER_DATA_CHANGED = (
+    "select to_unixtime(max(committed_at)) from (\n"
+    + "\nunion all\n".join(
+        f"select committed_at from lake.silver.\"{table}$snapshots\" where operation <> 'replace'"
+        for table in TABLES
+    )
+    + "\n)"
+)
+GOLD_REBUILT = (
+    "select to_unixtime(if(count_if(rebuilt is null) > 0, null, min(rebuilt))) from (\n"
+    + "\nunion all\n".join(
+        f'select max(committed_at) as rebuilt from lake.gold."{table}$snapshots"'
+        for table in GOLD_REBUILT_TABLES
+    )
+    + "\n)"
+)
+
+
+def gold_stale(silver_changed: float | None, gold_rebuilt: float | None) -> bool:
+    """Whether silver changed after gold was last rebuilt (epoch seconds, None: no snapshot)."""
+    if silver_changed is None:
+        return False
+    return gold_rebuilt is None or silver_changed > gold_rebuilt
+
 
 def row_hash_sql_postgres(column: Column) -> str:
     """One column as canonical text, in Postgres."""

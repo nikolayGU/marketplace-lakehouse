@@ -602,3 +602,38 @@ tests:
       - eval_time: 8m
         alertname: FreshnessAbove15m
         exp_alerts: []
+
+  # GoldStaleAtRest: fires on 2 stale runs in a row, quiet on 1 and after a reset to 0.
+  - interval: 1m
+    input_series:
+      - series: 'lakehouse_dq_gold_stale_runs{job="statsd-exporter"}'
+        values: '0x4 1x9 2x9'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: GoldStaleAtRest
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: GoldStaleAtRest
+        exp_alerts: []
+      - eval_time: 16m
+        alertname: GoldStaleAtRest
+        exp_alerts:
+          - exp_labels:
+              severity: warn
+              job: statsd-exporter
+
+  # A build brings the count back to 0: quiet again (the last value counts, not the maximum).
+  - interval: 1m
+    input_series:
+      - series: 'lakehouse_dq_gold_stale_runs{job="statsd-exporter"}'
+        values: '2x5 0x10'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: GoldStaleAtRest
+        exp_alerts:
+          - exp_labels:
+              severity: warn
+              job: statsd-exporter
+      - eval_time: 12m
+        alertname: GoldStaleAtRest
+        exp_alerts: []

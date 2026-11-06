@@ -27,6 +27,7 @@ from lakehouse.maintenance_commands import (
 from lakehouse.settings import (
     CDC_STATE_SEEN,
     GOLD_NOT_COMPARED_RUNS,
+    GOLD_STALE_RUNS,
     GOLD_WRITERS_POOL,
     LAST_BRONZE_SNAPSHOT,
     MAINTENANCE_TABLES,
@@ -260,6 +261,8 @@ class DqChecks:
         self.cdc_moves_after: str | None = None
         self.cdc_moved: tuple[int, str] = (12, "0/10")
         self.cdc_second_read_fails = False
+        self.silver_changed: float | None = 1000.0
+        self.gold_rebuilt: float | None = 2000.0
         variables = self.variables
 
         class Variable:
@@ -365,6 +368,10 @@ class DqChecks:
             return self.mart_updated
         if query == reconcile.SILVER_UPDATED:
             return "2026-10-01 00:00:00"
+        if query == reconcile.SILVER_DATA_CHANGED:
+            return self.silver_changed
+        if query == reconcile.GOLD_REBUILT:
+            return self.gold_rebuilt
         return "10 fp"
 
     def at_rest(self) -> None:
@@ -1227,3 +1234,159 @@ def test_the_cdc_position_is_read_before_the_comparisons_and_again_before_the_gm
     assert len(reads) == 2
     assert reads[0] < first_source
     assert mart < reads[1] < gmv
+
+
+def test_gold_older_than_silver_at_rest_counts_a_stale_run(
+    dq: DqChecks, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Snapshots, not data: a deleted order leaves the watermarks apart for good, a gold that was
+    # not rebuilt after the last silver commit (dbt_build paused or red) does not.
+    dq.at_rest()
+    dq.silver_changed, dq.gold_rebuilt = 3000.0, 2000.0
+    dq.variables[GOLD_STALE_RUNS] = "1"
+
+    dq.run("reconcile_values", False)
+
+    assert "dq gold_stale_runs=2" in capsys.readouterr().out
+    assert dq.gauge("lakehouse.dq.gold_stale_runs") == 2
+    assert dq.variables[GOLD_STALE_RUNS] == "2"
+
+
+def test_gold_rebuilt_after_silver_resets_the_stale_count(dq: DqChecks) -> None:
+    dq.at_rest()
+    dq.variables[GOLD_STALE_RUNS] = "5"
+
+    dq.run("reconcile_values", False)
+
+    assert dq.gauge("lakehouse.dq.gold_stale_runs") == 0
+    assert dq.variables[GOLD_STALE_RUNS] == "0"
+
+
+def test_work_in_flight_resets_the_stale_count_and_asks_no_metadata(dq: DqChecks) -> None:
+    dq.variables[LAST_BRONZE_SNAPSHOT] = "4"
+    dq.silver_changed, dq.gold_rebuilt = 3000.0, 2000.0
+    dq.variables[GOLD_STALE_RUNS] = "1"
+
+    dq.run("reconcile_values", False)
+
+    assert reconcile.SILVER_DATA_CHANGED not in dq.queries
+    assert dq.gauge("lakehouse.dq.gold_stale_runs") == 0
+    assert dq.variables[GOLD_STALE_RUNS] == "0"
+
+
+def test_a_stalled_cdc_and_a_gold_that_is_behind_still_count_a_stale_run(dq: DqChecks) -> None:
+    # Neither skip_source nor gold_ready (gold behind silver by data) gates the snapshot count.
+    dq.at_rest()
+    dq.gold_updated = "2026-09-30 00:00:00"
+    dq.silver_changed, dq.gold_rebuilt = 3000.0, 2000.0
+
+    dq.run("reconcile_values", True)
+
+    assert dq.gauge("lakehouse.dq.gold_stale_runs") == 1
+
+
+@pytest.mark.parametrize("remembered", [None, "", "garbage", "-5"])
+def test_a_stale_count_that_is_missing_or_unreadable_starts_from_zero(
+    dq: DqChecks, remembered: str | None
+) -> None:
+    dq.at_rest()
+    dq.silver_changed, dq.gold_rebuilt = 3000.0, 2000.0
+    if remembered is not None:
+        dq.variables[GOLD_STALE_RUNS] = remembered
+
+    dq.run("reconcile_values", False)
+
+    assert dq.variables[GOLD_STALE_RUNS] == "1"
+
+
+@pytest.mark.parametrize("failing", [reconcile.SILVER_DATA_CHANGED, reconcile.GOLD_REBUILT])
+def test_a_failing_metadata_query_keeps_the_verdicts_and_the_count_then_fails(
+    dq: DqChecks, failing: str
+) -> None:
+    dq.at_rest()
+    dq.trino_fails_on = failing
+    dq.variables[GOLD_STALE_RUNS] = "1"
+
+    with pytest.raises(RuntimeError, match="trino is down"):
+        dq.run("reconcile_values", False)
+
+    gold = next(iter(reconcile.GOLD_PAIRS))
+    assert (
+        "lakehouse.dq.reconcile_values_differing",
+        0,
+        {"pair": "silver_gold", "table": gold},
+    ) in dq.sent
+    assert dq.variables[GOLD_STALE_RUNS] == "1"
+    assert not any(name == "lakehouse.dq.gold_stale_runs" for name, _, _ in dq.sent)
+
+
+def test_a_mart_behind_fct_orders_counts_a_stale_run_though_the_snapshots_are_fresh(
+    dq: DqChecks,
+) -> None:
+    # dbt build skips mart_daily_sales alone when int_daily_sales fails its test: the table
+    # marts are fresh, the incremental mart is not read through snapshots.
+    dq.at_rest()
+    dq.mart_updated = "2026-09-30 00:00:00"
+    dq.variables[GOLD_STALE_RUNS] = "1"
+
+    dq.run("reconcile_values", False)
+
+    assert dq.gauge("lakehouse.dq.gold_stale_runs") == 2
+
+
+def test_a_mart_that_caught_up_with_fct_orders_is_not_stale(dq: DqChecks) -> None:
+    dq.at_rest()
+    dq.mart_updated = dq.gold_updated
+    dq.variables[GOLD_STALE_RUNS] = "1"
+
+    dq.run("reconcile_values", False)
+
+    assert dq.gauge("lakehouse.dq.gold_stale_runs") == 0
+
+
+def test_a_mart_behind_counts_with_a_stalled_cdc_too(dq: DqChecks) -> None:
+    dq.at_rest()
+    dq.mart_updated = "2026-09-30 00:00:00"
+
+    dq.run("reconcile_values", True)
+
+    assert dq.gauge("lakehouse.dq.gold_stale_runs") == 1
+
+
+def test_a_mart_behind_counts_while_gold_is_behind_silver_too(dq: DqChecks) -> None:
+    # A deleted order keeps gold_ready False for good; a mart behind fct_orders still counts.
+    dq.at_rest()
+    dq.gold_updated = "2026-09-30 00:00:00"
+    dq.mart_updated = "2026-09-29 00:00:00"
+
+    dq.run("reconcile_values", False)
+
+    assert dq.gauge("lakehouse.dq.gold_stale_runs") == 1
+
+
+def test_a_failing_mart_query_is_handled_as_a_failing_metadata_query(dq: DqChecks) -> None:
+    dq.at_rest()
+    dq.trino_fails_on = reconcile.MART_UPDATED
+    dq.variables[GOLD_STALE_RUNS] = "1"
+
+    with pytest.raises(RuntimeError, match="trino is down"):
+        dq.run("reconcile_values", True)
+
+    gold = next(iter(reconcile.GOLD_PAIRS))
+    assert (
+        "lakehouse.dq.reconcile_values_differing",
+        0,
+        {"pair": "silver_gold", "table": gold},
+    ) in dq.sent
+    assert dq.variables[GOLD_STALE_RUNS] == "1"
+
+
+def test_a_value_difference_and_a_failing_metadata_query_are_both_reported(dq: DqChecks) -> None:
+    dq.at_rest()
+    dq.gold_differs = True
+    dq.trino_fails_on = reconcile.SILVER_DATA_CHANGED
+
+    with pytest.raises(ValueError, match="values differ at rest") as failure:
+        dq.run("reconcile_values", False)
+
+    assert "the gold snapshot check failed as well" in str(failure.value)
