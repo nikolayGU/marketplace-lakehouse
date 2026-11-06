@@ -472,6 +472,17 @@ $COMPOSE exec -T airflow-scheduler airflow dags unpause iceberg_maintenance
 **Сделать.** `kafka-configs.sh --describe` до, «ок», `--alter --add-config segment.ms=3600000`,
 `--describe` после.
 
+**Итог 29.10 (блок записан 06.11 по журналу «ок», W6-T10 п. 4).**
+
+```text
+Критерий: «kafka-configs.sh --describe до, «ок», --alter --add-config segment.ms=3600000, --describe после» (14-closeout-spec.md, W6-T08)
+Изменение: без коммита кода (карточка так и задана); живая настройка топика oltp.message; запись в OPERATIONS.md:1486-1488 и журнал «ок» HANDOFF (29.10 17:00)
+Проверка: kafka-configs.sh --describe до: segment.ms не задан, топик пуст (earliest = latest = 17); --alter --entity-name oltp.message --add-config segment.ms=3600000; --describe после: segment.ms=3600000, остальные ключи прежние, коннектор RUNNING; 29.10 17:00 UTC
+Независимо: W6-D10 «да» владельца 29.10 17:00; ревью не нужно (класс C по «ок», без diff)
+Не проверено: удаление сегмента по retention на живом топике (топик пуст)
+Риски: нет; новый топик создаёт connect/register.sh с тем же segment.ms (OPERATIONS.md:1486)
+```
+
 ### W6-T01 Дашборд «Marketplace» по gold
 
 **Зависит от:** W6-D11, W5-T05b. **Оценка** 3 ч. **Область:** `obs`.

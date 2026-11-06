@@ -1137,7 +1137,7 @@ why nothing is lost or duplicated (or where it can be). Filled in as scenarios a
 | 8 | Kafka down | `chaos-kafka-down` | done 2026-10-23 |
 | 9 | Airflow task failure (dbt test) | `chaos-break-dbt-test` | done 2026-10-18 |
 | 10 (optional) | Partial processing (Trino memory) | `chaos-trino-memory` | planned (week 3) |
-| 10b | Silver merge killed between two tables (`lakehouse-silver-merge`, through the `silver_upsert` DAG; pauses `silver_upsert`, `dbt_build`, `dq_checks`, plays a 30 s burst, unpauses `silver_upsert` and does not trigger it: the run the scheduler creates (at once for the missed interval, or on the next `*/5` border, so up to 6 min of waiting) is the one killed, right after the first table in its log; the retry of the merge task must bring silver level with Postgres and is proved by more than one attempt of that task in that run, otherwise the result is inconclusive; `dbt_build` stays paused during the run, so gold can lag until the next merge with events or a manual `dbt_build`; never removes a leftover container) | `chaos-silver-kill` | not run yet |
+| 10b | Silver merge killed between two tables (`lakehouse-silver-merge`, through the `silver_upsert` DAG; pauses `silver_upsert`, `dbt_build`, `dq_checks`, plays a 30 s burst, unpauses `silver_upsert` and does not trigger it: the run the scheduler creates (at once for the missed interval, or on the next `*/5` border, so up to 6 min of waiting) is the one killed, right after the first table in its log; the retry of the merge task must bring silver level with Postgres and is proved by more than one attempt of that task in that run, otherwise the result is inconclusive; `dbt_build` stays paused during the run, so gold can lag until the next merge with events or a manual `dbt_build`; never removes a leftover container) | `chaos-silver-kill` | done 2026-11-06 |
 
 ### Template
 
@@ -1575,6 +1575,40 @@ Verification SQL:
 select committed_at, operation from gold."mart_daily_sales$snapshots"
 order by committed_at desc limit 3;
 ```
+
+### 10b. Silver merge killed between two tables
+
+```
+make chaos-silver-kill   # waits up to 6 min for the run the scheduler creates
+```
+
+What happened (2026-11-06): the script paused `silver_upsert`, `dbt_build` and `dq_checks`, played a
+30 s burst and unpaused `silver_upsert` at 12:07:07 without triggering it. The scheduler created
+`scheduled__2026-11-06T12:10:00+00:00`, running at 12:10:01. The script killed
+`lakehouse-silver-merge` at 12:10:23, right after the first of the 4 tables with events
+(`order_items`, 97 events in 2.9 s). The task failed with `DockerContainerFailedException`
+(`StatusCode` 137) and, with `retries: 1` and `retry_delay` of one minute
+(`airflow/dags/silver_upsert.py:38-39`), started attempt 2 at 12:11:24. The run ended `success` at
+12:11:52 (task `merge`, `try 2`, attempt 2 from 12:11:24 to 12:11:49 UTC).
+What monitoring shows: `ContainerRestarting` for `lakehouse-silver-merge`, `activeAt` 12:11:34 UTC:
+attempt 2 started a container with the same name, and the start time moved inside the 15 minute
+window of the rule. `AirflowDagFailed` did not fire, because the run ended `success`. The failed
+attempt is visible only in the task log and in the try number of the task.
+Data at risk: none. Right after the kill silver was partly merged: 3 tables differed from Postgres
+(`orders` 96258 against 96346, `payments` 100623 against 100715, `reviews` keys), `order_items` was
+level (109178).
+Recovery: automatic, by the Airflow retry. From the kill (12:10:23) to silver level with Postgres
+(12:11:49): about 86 s, of which one minute is the retry delay.
+Why no loss or duplication: bronze is append-only, so attempt 2 could read the same events again. It merged
+`order_items` again (97 events, silver stays at 109178 rows with the same values, the MERGE is
+keyed by primary key), then `orders` (155 events), `payments` (92) and `reviews` (2).
+Verification: the script ends with `silver-kill ok` only if all of these hold after the retry: the
+run state is `success`; `reconcile` is 7 of 7 (rows, keys, sums, values ok); every Kafka offset is in
+bronze exactly once; `silver.quarantine` did not grow (4 rows before the burst); the Variable equals
+the last bronze snapshot; task `merge` of that run is `success` with more than one try
+(`scripts/chaos/silver-kill.sh:195-231`). Otherwise the result is inconclusive. Exit 0 on
+2026-11-06; `make verify-fast` at 12:13 UTC: `verify ok`, 7 of 7. `dbt_build` stayed paused during
+the run, so gold lags until the next merge with events or a manual `dbt_build`.
 
 ## Runbooks
 

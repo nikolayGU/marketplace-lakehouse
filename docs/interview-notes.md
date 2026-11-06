@@ -265,7 +265,7 @@ nothing. A new checkpoint is a new query id, so the guarantee ends there.
 
 In this project: a unit test deletes `commits/1` of a checkpoint, the state a kill in the commit
 window leaves, and Spark re-runs batch 1 with no new rows and no new snapshot. With a new checkpoint
-every file is appended again ([tests/unit/test_iceberg_sink.py:58](../tests/unit/test_iceberg_sink.py);
+every file is appended again ([tests/unit/test_iceberg_sink.py:129](../tests/unit/test_iceberg_sink.py);
 [ADR-007](../DECISIONS.md#adr-007-bronze-streaming-append-silver-batch-merge), Iceberg 1.11 `SparkWrite`).
 
 **17. How does silver stay correct when events arrive twice or out of order?**

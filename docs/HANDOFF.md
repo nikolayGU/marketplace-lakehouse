@@ -299,6 +299,11 @@ unit), smoke красный (образы MinIO), W5-T05b не начата, г�
 
 | Дата UTC | Действие | Кто дал | Где видно |
 |---|---|---|---|
+| 06.11 12:17-12:19 | Цикл verify: пауза трёх DAG, `stop airflow-scheduler`, `make verify` verify ok 7 из 7 (full 12:18:29Z), `make dbt-build` `PASS=79 WARN=4 ERROR=0`, `start airflow-scheduler` | рутина закрытия 06.11 ~12:01 | этот раздел |
+| 06.11 12:05-12:12 | Б10 живьём: `timeout -s TERM 2100 make chaos-silver-kill` по точному тексту вопроса (с ожиданием окна */5), код 0, `silver-kill ok`; burst 30 с из W6-D13 (5 ч 53 мин виртуальных) | владелец в Claude Code, вопрос с вариантами, 06.11 ~12:01 | аудит, раздел 10, «Итог» Б10 |
+| 06.11 ~12:01 | Удаление трёх неотслеживаемых патчей (`15-audit-b10-silver-kill.patch`, `15-audit-b10-rel07-test.patch`, `15-audit-p5-harness-wip.patch`): «да, удалить»; выполнено `rm` 12:04 | владелец в Claude Code, вопрос с вариантами | `git status` |
+| 06.11 ~12:01 | Гейты владельца (`LEARNING.md`, п. 8 раздела 6 спеки 14): «отложить с записью»; `LEARNING.md:4` («task the AI») остаётся исключением гигиены, файл владельца | владелец в Claude Code, вопрос с вариантами | спека 14, «Итог» W6-T10 |
+| 06.11 ~12:01 | Рутина закрытия на сессию: циклы verify, коммиты docs и ops после verify, `git push origin main` без force, `gh workflow run smoke.yml --ref main` на итоговом HEAD, `make dbt-build` при паузе `dbt_build` | владелец в Claude Code, вопрос с вариантами | этот раздел |
 | 05.11 ~18:20 | «Ждём агентов, коммитим, на сегодня хватит»: живой `make chaos-silver-kill` не в этой сессии | владелец в Claude Code | этот раздел, NEXT_SESSION |
 | 05.11 18:15 | П-5 применён владельцем `git apply docs/planning/15-audit-p5-harness.patch` (подтвердил на вопрос) | владелец | `git log`, аудит, раздел 10, Б18 |
 | 05.11 16:54 | Б17 живьём по тексту 7 шагов: пауза трёх DAG, `docker stop lakehouse-minio-1`, `VERIFY_WAIT=60 timeout -k 5 120 make verify-fast`, сразу `docker start lakehouse-minio-1`, `verify-fast`, снятие пауз, алерты. Выполнено, MinIO лежал 22 с | владелец в Claude Code, вопрос с вариантами | аудит, раздел 10, Б17 |

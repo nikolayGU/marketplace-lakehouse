@@ -53,7 +53,7 @@ silver and silver to gold (`reconcile_values`); its run at 16:45 on 2026-10-29 h
 
 ## Failure scenarios 1 to 9
 
-Each scenario is `make chaos-<name>` ([`scripts/chaos/`](../scripts/chaos)) and ends in a check that
+Each scenario (1 to 9, and 10b at the end of the table) is `make chaos-<name>` ([`scripts/chaos/`](../scripts/chaos)) and ends in a check that
 fails on any duplicate or missing Kafka offset or any difference from Postgres. Full write-ups:
 what happened, what monitoring shows, data at risk, recovery, why nothing is lost.
 
@@ -69,8 +69,9 @@ what happened, what monitoring shows, data at risk, recovery, why nothing is los
 | 7 | Corrupted event in topic | 2026-10-23 | One non-envelope record: one `silver.quarantine` row after the first merge, still one after the second; the rest of the batch merged | [7](../OPERATIONS.md#7-corrupted-event-in-topic) |
 | 8 | Kafka down for 6 minutes | 2026-10-23 | Kafka healthy 20 s after the start, connector `RUNNING` after 20 s, bronze caught up after 25 s; `spark-bronze` restarted 15 times, resumed from the checkpoint each time; 21 partitions without duplicate or missing offset; silver matches Postgres (rows, keys, sums) 7 of 7; `SparkNoBatch5m` did not fire (see Alerts) | [8](../OPERATIONS.md#8-kafka-down-for-6-minutes) |
 | 9 | Airflow task failure (dbt test) | 2026-10-18 (run), 2026-10-23 (alert) | `dbt_build` red on a broken test, children skipped, `mart_daily_sales` kept its 9 snapshots; `AirflowDagFailed` 17 s after the red run ended | [9](../OPERATIONS.md#9-airflow-task-failure-dbt-test) |
+| 10b | Silver merge killed between two tables | 2026-11-06 | `lakehouse-silver-merge` killed 12:10:23 after the first of 4 tables (`order_items`, 97 events); 3 tables differed from Postgres right after; the Airflow retry (`merge` try 2, 12:11:24 to 12:11:49) brought silver level about 86 s after the kill; run `success` 12:11:52, so `AirflowDagFailed` did not fire; `ContainerRestarting` firing (`activeAt` 12:11:34); `reconcile` 7 of 7 | [10b](../OPERATIONS.md#10b-silver-merge-killed-between-two-tables) |
 
-Scenario 10 (partial processing, Trino memory) is optional and `planned`. The 2026-10-23 run of
+Scenario 10 (partial processing, Trino memory) is optional and `planned`; 10b is in the table above. The 2026-10-23 run of
 scenario 6 used an uncommitted script version whose logical-message padding of the WAL stopped CDC for about 8 minutes
 with no loss; it is described in the write-up, together with the fix.
 

@@ -23,4 +23,6 @@
 | `15-audit-p1-harness.patch` | патч П-1: guard, settings, `session_context.py`, `agent_state.py` | применён в `8577de1`, история |
 | `15-audit-p3-harness.patch` | патч П-3 (Б11, Б12): stop_gate после Markdown, стек по метке compose, строка вердикта | применён в `90c64b2`, история |
 | `15-audit-p4-harness.patch` | патч П-4 (Б14): guard на код через пайп и heredoc, перенос строки, `-z` в `agent_state.py` | применён владельцем 04.11, коммит после ревью на дереве, история |
+| `15-audit-p5-harness.patch` | патч П-5 (Б18): токенный разбор простых команд в guard, откат `WRAPPER_ARGS` | применён владельцем 05.11, коммит `7e5af85`, история |
+| `15-audit-p5-review/` | корпус команд ревьюера П-5 (`corpus.json`, 7324 формы) и скрипт сравнения guard с HEAD | справка для следующей правки guard |
 | `archive/` | перенесённая история (HANDOFF до 24.10) | история |
