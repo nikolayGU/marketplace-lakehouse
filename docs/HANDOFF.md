@@ -2,6 +2,36 @@
 
 Обновляется в конце каждой недели или смыслового блока. Читать первым в каждой сессии.
 
+## Состояние на 06.11.2026, вечер: полный аудит 16 и исправления P1 (спека 17), Superset живой
+
+Сессия 13:19-16:35 UTC по запросу владельца «полный аудит системы». Аудит только чтением:
+`docs/planning/16-audit-2026-11-06/` (вердикт PASS WITH FIXES, 31 находка: 6 MEDIUM, 25 LOW,
+коммит `f5c9c8f`). Затем по «ок» владельца на всё P1 (журнал ниже) исправления, спека
+`docs/planning/17-audit-fixes.md`, «Итог» там.
+
+| Что | Команда | Результат |
+|---|---|---|
+| Коммиты | `git log --oneline -5` | `f5c9c8f` docs аудит; `85f84bb` orchestrate К1; `bd8ad43` infra К2; `a9dfa55` docs К4; итоговый docs этой записи. Push не сделан (не входил в «ок») |
+| К1 | `make check`, `make alerts-test`, `dq_checks` 16:15 и 16:30 | 1852 passed; 16 правил; `gold_stale_runs=0`, 13 пар по 0 |
+| К2, К3 | `check.py`, MCP JSON-RPC, `claude mcp list`, ACL Trino | Superset 4 графика с данными; MCP чужой Host 421, Origin 403; Connected; `superset` только `lake_ro.gold` marts |
+| К5 живой E2E | `make replay-burst SECONDS=30` 16:17 | заказ `1aa7e750...` от Kafka до gold, Grafana и Superset через Airflow без ручных шагов; Asset создал run `dbt_build` |
+| Цикл verify | 16:05-16:08 по «ок» | verify ok 7 из 7 (full 16:07:12Z), dbt `PASS=79 WARN=4 ERROR=0`, паузы сняты 16:09 |
+| Стек | `docker ps` | 20 контейнеров healthy: прежние 18 плюс `superset`, `superset-mcp`; консоль MinIO на 9001; `superset-init` Exited (0) |
+
+Бюджет реплея W6 (W6-D13): порция 06.11 16:17, 30 с, `virtual_now` 2026-07-18 00:06:35 ->
+06:02:03 (5:55:28 виртуальных), 28 событий (`events_emitted` 77422 -> 77450). Итого W6 32:28:21 из
+48:00, остаток 15:31:39, 592 события.
+
+Ошибки сессии: агенты аудита сначала пошли на Sonnet (`scout`), владелец поправил: аудит и
+перепроверка на Opus (агенты перезапущены, память обновлена); `implementer` К1 на промежуточном
+дереве сломал `make reconcile` импортом `pydantic_settings` в `lakehouse/reconcile.py` (поймал
+`make verify-fast` хука stop_gate, исправлено тестом на импорт); первая версия `.mcp.json` в
+репозитории отменена владельцем (MCP только `--scope local`); времена «ок» в журнале сначала были
+записаны по оценке и исправлены по времени коммита.
+
+Открыто: push `f5c9c8f..` в `origin/main` и CI на них (нужно «ок»); P2 и P3 аудита 16 (раздел 10
+`AUDIT_REPORT.md`); прежние остатки ниже (п. 11 холодный старт, Б6, Б17-Б19, Б20, миграция 003).
+
 ## Состояние на 06.11.2026: Б10 живьём доказан, проект закрыт по пп. 1-10 (W6-T10), дальше поддержка
 
 Сессия с 11:55 UTC по NEXT_SESSION. Хост перезапускался: стек поднят 11:52 UTC, `/tmp`
@@ -350,7 +380,9 @@ unit), smoke красный (образы MinIO), W5-T05b не начата, г�
 
 | Дата UTC | Действие | Кто дал | Где видно |
 |---|---|---|---|
-| 06.11 ~15:05 | «да ок на всё начни вносить правки необходимы и подключай mcp superset если необходимо» на четыре пункта аудита 06.11: оживить Superset (F-02); класс C из P1: пересоздание `kafka` и `minio`, `make up PROFILE=stateful`, `make up PROFILE=bi`; `make replay-burst SECONDS=30` для живого E2E; строка аудита в индексе планов и коммиты. Push не входит. MCP Superset признан ненужным (`docs/planning/17-audit-fixes.md`) | владелец в Claude Code | `docs/planning/17-audit-fixes.md` |
+| 06.11 ~15:04 | «mcp ставим официальный в claude code в репозиторий не постим его настройки»: `.mcp.json` удалён и в `.gitignore`; `claude mcp add --transport http --scope local superset http://127.0.0.1:5008/mcp` (локальный конфиг, 15:05) | владелец в Claude Code | `docs/planning/17-audit-fixes.md` |
+| 06.11 ~14:30 | «настрой и подключи MCP для Superset»: встроенный MCP-сервис Superset 6.1 (`superset-mcp`, порт 5008, `MCP_DEV_USERNAME=admin`), в карточке К2 | владелец в Claude Code | `docs/planning/17-audit-fixes.md` |
+| 06.11 ~14:15 | «да ок на всё начни вносить правки необходимы и подключай mcp superset если необходимо» на четыре пункта аудита 06.11: оживить Superset (F-02); класс C из P1: пересоздание `kafka` и `minio`, `make up PROFILE=stateful`, `make up PROFILE=bi`; `make replay-burst SECONDS=30` для живого E2E; строка аудита в индексе планов и коммиты. Push не входит. MCP Superset признан ненужным (`docs/planning/17-audit-fixes.md`) | владелец в Claude Code | `docs/planning/17-audit-fixes.md` |
 | 06.11 12:21-12:22 | `git push origin main` (`0395bcf..bccd194`), снятие пауз трёх DAG, `gh workflow run smoke.yml --ref main` (run 42216951898, success) | рутина закрытия 06.11 ~12:01 | `gh run list`, `git log` |
 | 06.11 12:51 | `kafka-configs.sh --describe --entity-name oltp.message` (только чтение, повтор W6-T08 по ревью): `segment.ms=3600000` | не нужно (класс A) | «Итог» W6-T08 |
 | 06.11 12:17-12:19 | Цикл verify: пауза трёх DAG, `stop airflow-scheduler`, `make verify` verify ok 7 из 7 (full 12:18:29Z), `make dbt-build` `PASS=79 WARN=4 ERROR=0`, `start airflow-scheduler` | рутина закрытия 06.11 ~12:01 | этот раздел |
