@@ -5,7 +5,7 @@ source: a section of [OPERATIONS.md](../OPERATIONS.md), a file, a GitHub run or 
 anyone with the stack up can repeat. Anything not run live is marked `not proven`.
 
 Contents: [Reconciliation](#reconciliation-source-against-silver) |
-[Failure scenarios](#failure-scenarios-1-to-9) | [Maintenance](#maintenance-before-and-after) |
+[MinIO probe](#probe-minio-stopped) | [Failure scenarios](#failure-scenarios) | [Maintenance](#maintenance-before-and-after) |
 [Alerts](#alerts-and-time-to-fire) | [CI and smoke](#ci-and-smoke) | [Dashboard](#dashboard) |
 [Trino access control](#trino-access-control) |
 [Not proven](#not-proven-yet) | [How it was built](#how-it-was-built)
@@ -51,9 +51,18 @@ run that this page records: `verify ok`, 2026-10-29 19:16 UTC, before commit `46
 silver and silver to gold (`reconcile_values`); its run at 16:45 on 2026-10-29 had every
 `reconcile_*_differing` at 0 and `reconcile_in_flight` at 0 ([OPERATIONS, Maintenance step 11](../OPERATIONS.md#first-live-run-2026-10-29)).
 
-## Failure scenarios 1 to 9
+## Probe: MinIO stopped
 
-Each scenario (1 to 9, and 10b at the end of the table) is `make chaos-<name>` ([`scripts/chaos/`](../scripts/chaos)) and ends in a check that
+A live probe of the third `verify` check, not a chaos scenario (commit `2b0fce1`, 2026-11-05).
+`docker stop lakehouse-minio-1` at 16:54:53 UTC, then `VERIFY_WAIT=60 timeout -k 5 120 make
+verify-fast`: exit 2 after 11.7 s with `verify failed: Trino and catalog lake answer, but the object
+store (MinIO) fails: curl: (6) Could not resolve host: minio`. `docker start` at 16:55:15, so MinIO
+was down 22 s; healthy at 16:55:27, and `verify-fast` ended `verify ok`. Why the third probe exists
+and what a paused MinIO would read as: [OPERATIONS, Daily commands](../OPERATIONS.md#daily-commands).
+
+## Failure scenarios
+
+Each scenario is `make chaos-<name>` ([`scripts/chaos/`](../scripts/chaos)) and ends in a check that
 fails on any duplicate or missing Kafka offset or any difference from Postgres. Full write-ups:
 what happened, what monitoring shows, data at risk, recovery, why nothing is lost.
 
@@ -69,7 +78,7 @@ what happened, what monitoring shows, data at risk, recovery, why nothing is los
 | 7 | Corrupted event in topic | 2026-10-23 | One non-envelope record: one `silver.quarantine` row after the first merge, still one after the second; the rest of the batch merged | [7](../OPERATIONS.md#7-corrupted-event-in-topic) |
 | 8 | Kafka down for 6 minutes | 2026-10-23 | Kafka healthy 20 s after the start, connector `RUNNING` after 20 s, bronze caught up after 25 s; `spark-bronze` restarted 15 times, resumed from the checkpoint each time; 21 partitions without duplicate or missing offset; silver matches Postgres (rows, keys, sums) 7 of 7; `SparkNoBatch5m` did not fire (see Alerts) | [8](../OPERATIONS.md#8-kafka-down-for-6-minutes) |
 | 9 | Airflow task failure (dbt test) | 2026-10-18 (run), 2026-10-23 (alert) | `dbt_build` red on a broken test, children skipped, `mart_daily_sales` kept its 9 snapshots; `AirflowDagFailed` 17 s after the red run ended | [9](../OPERATIONS.md#9-airflow-task-failure-dbt-test) |
-| 10b | Silver merge killed between two tables | 2026-11-06 | `lakehouse-silver-merge` killed 12:10:23 after the first of 4 tables (`order_items`, 97 events); 3 tables differed from Postgres right after; the Airflow retry (`merge` try 2, 12:11:24 to 12:11:49) brought silver level about 86 s after the kill; run `success` 12:11:52, so `AirflowDagFailed` did not fire; `ContainerRestarting` firing (`activeAt` 12:11:34); `reconcile` 7 of 7 | [10b](../OPERATIONS.md#10b-silver-merge-killed-between-two-tables) |
+| 10b | Silver merge killed between two tables | 2026-11-06 | `lakehouse-silver-merge` killed 12:10:23 after the first of 4 tables (`order_items`, 97 events); 3 tables differed from Postgres right after; the Airflow retry (`merge` try 2, 12:11:24 to 12:11:49) brought silver level about 86 s after the kill; run `success` 12:11:50 (REST), so `AirflowDagFailed` did not fire; `ContainerRestarting` firing (`activeAt` 12:11:34); `reconcile` 7 of 7 | [10b](../OPERATIONS.md#10b-silver-merge-killed-between-two-tables) |
 
 Scenario 10 (partial processing, Trino memory) is optional and `planned`; 10b is in the table above. The 2026-10-23 run of
 scenario 6 used an uncommitted script version whose logical-message padding of the WAL stopped CDC for about 8 minutes
@@ -217,6 +226,10 @@ not a person with an admin login, a shell or network access.
   `SparkRestartLoop` as a live firing.
 - The offline start of Grafana with a new `grafana` volume (the plugin install is synchronous).
 - The 24 hour unattended window: not run, cancelled by the owner on 2026-11-04.
+- Live loss of the silver checkpoint: covered by a Spark unit test only. A live run with an empty
+  checkpoint on the live tables would rewrite about 506 thousand rows without an LSN (owner
+  decision, 2026-11-04).
+- A live schema change (migration 003, `sales_channel`): the owner's Modify gate, not done.
 - The learning gates in [LEARNING.md](../LEARNING.md): `planned`.
 - Trino authentication: not done. Access control (W6-T11) limits the `grafana` user, but the user
   name is only a label ([OPERATIONS, Access control](../OPERATIONS.md#access-control)).

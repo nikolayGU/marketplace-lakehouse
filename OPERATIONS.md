@@ -1584,12 +1584,12 @@ make chaos-silver-kill   # waits up to 6 min for the run the scheduler creates
 
 What happened (2026-11-06): the script paused `silver_upsert`, `dbt_build` and `dq_checks`, played a
 30 s burst and unpaused `silver_upsert` at 12:07:07 without triggering it. The scheduler created
-`scheduled__2026-11-06T12:10:00+00:00`, running at 12:10:01. The script killed
+`scheduled__2026-11-06T12:10:00+00:00`, started at 12:10:00 (REST). The script killed
 `lakehouse-silver-merge` at 12:10:23, right after the first of the 4 tables with events
 (`order_items`, 97 events in 2.9 s). The task failed with `DockerContainerFailedException`
 (`StatusCode` 137) and, with `retries: 1` and `retry_delay` of one minute
 (`airflow/dags/silver_upsert.py:38-39`), started attempt 2 at 12:11:24. The run ended `success` at
-12:11:52 (task `merge`, `try 2`, attempt 2 from 12:11:24 to 12:11:49 UTC).
+12:11:50 (REST; task `merge`, `try 2`, attempt 2 from 12:11:24 to 12:11:49 UTC).
 What monitoring shows: `ContainerRestarting` for `lakehouse-silver-merge`, `activeAt` 12:11:34 UTC:
 attempt 2 started a container with the same name, and the start time moved inside the 15 minute
 window of the rule. `AirflowDagFailed` did not fire, because the run ended `success`. The failed
@@ -1606,7 +1606,10 @@ Verification: the script ends with `silver-kill ok` only if all of these hold af
 run state is `success`; `reconcile` is 7 of 7 (rows, keys, sums, values ok); every Kafka offset is in
 bronze exactly once; `silver.quarantine` did not grow (4 rows before the burst); the Variable equals
 the last bronze snapshot; task `merge` of that run is `success` with more than one try
-(`scripts/chaos/silver-kill.sh:195-231`). Otherwise the result is inconclusive. Exit 0 on
+(`scripts/chaos/silver-kill.sh:195-231`). A failed check after the retry ends with `FAIL: ...` and
+exit 1. The script reports an inconclusive result only before or around the kill: another run is
+already running or queued, the merge ended before its first table, the kill came too late to
+catch it, or the kill came after the last table with events. Exit 0 on
 2026-11-06; `make verify-fast` at 12:13 UTC: `verify ok`, 7 of 7. `dbt_build` stayed paused during
 the run, so gold lags until the next merge with events or a manual `dbt_build`.
 

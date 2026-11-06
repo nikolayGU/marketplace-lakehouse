@@ -478,7 +478,7 @@ $COMPOSE exec -T airflow-scheduler airflow dags unpause iceberg_maintenance
 Критерий: «kafka-configs.sh --describe до, «ок», --alter --add-config segment.ms=3600000, --describe после» (14-closeout-spec.md, W6-T08)
 Изменение: без коммита кода (карточка так и задана); живая настройка топика oltp.message; запись в OPERATIONS.md:1486-1488 и журнал «ок» HANDOFF (29.10 17:00)
 Проверка: kafka-configs.sh --describe до: segment.ms не задан, топик пуст (earliest = latest = 17); --alter --entity-name oltp.message --add-config segment.ms=3600000; --describe после: segment.ms=3600000, остальные ключи прежние, коннектор RUNNING; 29.10 17:00 UTC
-Независимо: W6-D10 «да» владельца 29.10 17:00; ревью не нужно (класс C по «ок», без diff)
+Независимо: повтор 06.11 12:51 UTC, kafka-configs.sh --describe --entity-name oltp.message (только чтение): segment.ms=3600000, retention.ms=3600000 (DYNAMIC_TOPIC_CONFIG); W6-D10 «да» владельца 29.10 17:00 это согласие, не проверка; ревью W6-T10 06.11
 Не проверено: удаление сегмента по retention на живом топике (топик пуст)
 Риски: нет; новый топик создаёт connect/register.sh с тем же segment.ms (OPERATIONS.md:1486)
 ```
@@ -587,6 +587,31 @@ check` зелёный; вердикт `reviewer`.
 **Оценка** 1 ч. **Область:** `docs`. HANDOFF итоговый, статусы в `01-roadmap.md`, `NEXT_SESSION.md`
 на поддержку, раздел 6 этой спеки с доказательствами.
 
+**Итог 06.11 (раздел 6, пункты 1-11; вход scout 05.11 в HANDOFF «Состояние на 05.11»).**
+
+```text
+Критерий: «Проект принят, когда у каждой строки есть запись по 13-harness.md, раздел 6» (14-closeout-spec.md, раздел 6)
+Изменение: bccd194 (docs Б10: OPERATIONS 10b, evidence, interview-notes:268, «Итог» W6-T08, журнал «ок»), итоговый docs-коммит (этот блок, HANDOFF, статусы 01-roadmap и README планов, NEXT_SESSION, README 10b); кода нет
+Проверка: команды и вывод по пунктам в таблице ниже, 06.11 11:57-12:51 UTC (часы хоста примерно на 95 с впереди GitHub: времена gh по GitHub, остальные по хосту); HEAD bccd194, дерево fbf8b45c плюс правки по ревью (только Markdown после полного verify 12:18:29Z)
+Независимо: reviewer (Opus, свежий контекст, предмет «документ», дерево fbf8b45c): «принять с замечаниями», 6 средних и 6 низких, высоких нет; исправлены до итогового коммита (Markdown); ревьюер сам повторил REST, лог, ALERTS за 11:50-12:40, smoke и ci, бюджет, 34 ссылки file:N, gitleaks; круг 1 по исправлениям (дерево 7281c5b6): «принять с замечаниями», 12 закрыты, 2 новых низких (оглавление evidence, эта строка) закрыты оркестратором; 240 ссылок, 0 битых (5 относительных ссылок на GitHub Actions локально не проверить); код с 50659c5 не менялся, его ревью в «Итоге» Б10 аудита
+Не проверено: CI итогового docs-коммита (gh run list --workflow ci.yml --limit 1); чистое дерево после него (git status -sb); холодный старт (п. 11)
+Риски: гейты владельца открыты (отложены им); остатки бэклога аудита в разделе 10 и раздел 7 этой спеки идут в поддержку
+```
+
+| п. | Проверка | Доказательство, 06.11 UTC | Статус |
+|---|---|---|---|
+| 1 | smoke по кнопке, ci на итоговом HEAD | smoke 42216951898 (`workflow_dispatch`, `bccd194`): success 12:32:34, шаг «bootstrap again (idempotent)» `verify ok` (`gh run view --log`); ci 42216887610 (`bccd194`): success; после `bccd194` только Markdown; ci итогового docs-коммита: `gh run list --workflow ci.yml --limit 1` | частично: smoke и ci на `bccd194` зелёные; ci итогового коммита проверит п. 11 |
+| 2 | verify, reconcile, `dq_checks`, dbt | `make verify` 12:17-12:18 verify ok, 7 из 7 rows, keys, sums, values (full 12:18:29Z, HEAD `0395bcf` плюс Markdown); `make dbt-build` 12:18:36-12:18:59 `PASS=79 WARN=4 ERROR=0` (4 warn: известные аномалии источника, W3-T03); `dq_checks` в покое: run `scheduled__2026-11-06T12:30:00+00:00` success 12:30:10, все 6 задач success; в логе `reconcile_values` 27 метрик равны 0 (14 source_silver по 7 таблицам, 10 silver_gold с `reconcile_keys_missing` 0+0, 2 source_gold `mart_daily_sales_gmv`, `gold_not_compared_runs`), `reconcile_seconds=5.8` (REST `taskInstances/reconcile_values/logs/1`) | закрыто |
+| 3 | W5-T05b числа | `OPERATIONS.md` «Maintenance», «First live run, 2026-10-29» (12 шагов с числами до и после, `OPERATIONS.md:879-911`), ADR-025 (`DECISIONS.md`), «Итог» W5-T05b выше; удалено только одобренное (orphans 21 = набор dry run, журнал 29.10 16:33) | закрыто 29.10 |
+| 4 | W6-T05..T08 | «Итог» W6-T05 и W6-T06, W6-T07 (29.10), W6-T08 (блок 06.11 по журналу 29.10 17:00) | закрыто |
+| 5 | B6 | W6-T09 отменён владельцем 04.11 (карточка W6-T09, README, evidence «Not proven yet») | закрыто решением владельца |
+| 6 | покой без алертов, `make alerts-test` | `make alerts-test` ~12:06: `SUCCESS: 15 rules found`, test `SUCCESS`; алерты в покое: `curl -s 127.0.0.1:9090/api/v1/alerts` 12:34:21 «total 0» (до этого `ContainerRestarting` по `lakehouse-silver-merge` от Б10 и по `airflow-scheduler` от цикла verify, оба погасли по окну 15m) | закрыто |
+| 7 | доки, ссылки | 05.11: 238 ссылок, 0 битых; 06.11 scout: 34 ссылки `file:N` в interview-notes, 1 сдвинута (`:268`), исправлена; в README, ARCHITECTURE, DECISIONS, evidence номеров строк нет, в OPERATIONS две ссылки на код в разделе 10b (`airflow/dags/silver_upsert.py:38-39`, `scripts/chaos/silver-kill.sh:195-231`), сверены ревью 06.11; ревью: 239 ссылок, 0 битых; 20 хэшей коммитов существуют (3 не коммиты и так названы); сценарий 10b в README, OPERATIONS, evidence | закрыто |
+| 8 | гейты `LEARNING.md` | отложены владельцем 06.11 ~12:01 (журнал «ок» HANDOFF); README и evidence называют их `planned` | отложено владельцем с записью |
+| 9 | гигиена, `git status`, push | `gitleaks git`: 123 commits на `0395bcf` (оркестратор), 124 на `bccd194` (ревью), `no leaks found`; длинного тире в отслеживаемых 0; имён владельца в публичных доках нет; агенты только в «How it was built» и `README.md:13`, исключения: `DECISIONS.md:143,229` (имена файлов), `LEARNING.md:4` (файл владельца, решение 06.11); push `0395bcf..bccd194` по «ок» 06.11; `git status --short` перед итоговым коммитом: только файлы этого коммита (неотслеживаемых нет, три патча удалены по «ок» 06.11); итоговый push по «ок» 06.11 | частично: гигиена закрыта; чистое дерево и gitleaks итогового коммита проверит п. 11 |
+| 10 | бюджет реплея | HANDOFF «Состояние на 06.11»: W6 26:32:53 из 48 ч, остаток 21:27:07 | закрыто |
+| 11 | холодный старт | следующая сессия по `docs/NEXT_SESSION.md` (поддержка) | не проверено, проверит следующая сессия |
+
 ### Гейты владельца (агент не выполняет)
 
 | Гейт | Что делает владелец | Что готовит агент |
@@ -657,7 +682,9 @@ check` зелёный; вердикт `reviewer`.
   `kafka-connect`, `oltp-replayer`, `airflow-api-server`, `container-exporter`) тоже нет
   `pull_policy` (`yaml.safe_load` по `services`, 27.10), а `lakehouse` на Docker Hub чужой
   неймспейс; `spark-silver` и `spark-orders-per-minute` уже с `never`. Кандидат в буфер:
-  `pull_policy: never` и тот же тест; `minio` и `minio-init` закрыты в W6-T00.
+  `pull_policy: never` и тот же тест; `minio` и `minio-init` закрыты в W6-T00. Закрыто 30.10 в
+  `8fafdbb` (аудит Б7): `pull_policy: never` у всех 7 сервисов с `build`, тест
+  `tests/unit/test_pinning.py`; проверено ревью 06.11 (`yaml.safe_load` по `services`).
 - Ревью харнесса v0.3, круг 1 (29.10, «принять с замечаниями», дерево `ea241e4`), не исправлено:
   владелец попросил закончить после часа работы агентов, а правка кода гейта требует ещё одного
   прохода `reviewer`. Кандидаты в следующую правку харнесса:
@@ -694,7 +721,8 @@ check` зелёный; вердикт `reviewer`.
   (`coalesce(..., 0)`), мутация её удаления эквивалентна.
 - Ревью W6-T02 (29.10), низкая, гигиена раздела 6 п. 9: `tests/unit/test_agent_hooks.py:375` содержит
   путь с домашним каталогом владельца (`/home/<имя>/...`); заменить на `/home/user/...` (тест
-  харнесса: правка с `make check` и ревью). `LEARNING.md:4` «task the AI with a change»: файл
+  харнесса: правка с `make check` и ревью). Закрыто 30.10 в `01bf497`: в файле только
+  `/home/user/...` (`grep -n /home/ tests/unit/test_agent_hooks.py`, ревью 06.11). `LEARNING.md:4` «task the AI with a change»: файл
   гейтов владельца, правит владелец.
 - Процесс 29.10: второй прогон `make dbt-build` (19:17-19:18 UTC) запущен после снятия паузы с
   `dbt_build`, что нарушает условие класса A; пересечения не было (последний запуск `dbt_build`

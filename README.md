@@ -151,9 +151,10 @@ offset or difference from Postgres; write-ups in [OPERATIONS.md](OPERATIONS.md#f
 | 7 | Corrupted event in topic | measured, 2026-10-23 | one quarantine row, batch carried on |
 | 8 | Kafka down for 6 minutes | measured, 2026-10-23 | 15 Spark restarts, nothing lost; `SparkNoBatch5m` stayed silent |
 | 9 | Airflow task failure (dbt test) | measured, 2026-10-18 | `AirflowDagFailed` 17 s after the red run, marts untouched |
+| 10b | Silver merge killed between two tables | measured, 2026-11-06 | killed after 1 of 4 tables, the Airflow retry brought silver level in about 86 s, `reconcile` 7 of 7 |
 | 10 | Partial processing (Trino memory), optional | planned | `make chaos-trino-memory` is not written |
 
-Details and sources for every row: [docs/evidence.md](docs/evidence.md#failure-scenarios-1-to-9).
+Details and sources for every row: [docs/evidence.md](docs/evidence.md#failure-scenarios).
 
 ## Repository
 
