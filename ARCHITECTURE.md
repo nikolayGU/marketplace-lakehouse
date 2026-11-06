@@ -37,6 +37,8 @@ flowchart TB
   DB --> TR
   TR --> G
   G -- "Trino datasource, lake_ro" --> GF["Grafana<br/>Marketplace dashboard"]
+  G -- "Trino user superset, lake_ro (profile bi)" --> SS["Superset<br/>Marketplace dashboard"]
+  SS --- MCP["superset-mcp<br/>MCP endpoint :5008"]
   MT["Airflow iceberg_maintenance, daily 03:30<br/>optimize on silver"] -.-> S
   DQ["Airflow dq_checks, every 15 min<br/>source vs silver vs gold"] -.-> PG
   DQ -.-> S
@@ -45,7 +47,7 @@ flowchart TB
   OPM --> S
 
   subgraph OBS["Observability"]
-    EX["Connect JMX, postgres-exporter (slot lag),<br/>kafka-exporter, Spark listener,<br/>Airflow and dq_checks StatsD, container-exporter"] --> PR["Prometheus<br/>15 alert rules"]
+    EX["Connect JMX, postgres-exporter (slot lag),<br/>kafka-exporter, Spark listener,<br/>Airflow and dq_checks StatsD, container-exporter"] --> PR["Prometheus<br/>16 alert rules"]
     PR --> GF2["Grafana<br/>Pipeline health, Infra"]
   end
 ```
@@ -87,7 +89,11 @@ docker run --rm -v "$T:/in" -v "$PWD/docs/img:/out" minlag/mermaid-cli:11.4.2 \
 6. dbt on Trino builds `stg_*` views, `int_*` models and marts (`fct_orders`, `fct_order_items`,
    `dim_*`, `mart_daily_sales` incremental by purchase date, `mart_seller_performance`,
    `mart_delivery_sla`) after every silver merge, triggered by the Asset `lake.silver`. Tests run
-   with it; docs are generated on demand (`make dbt-docs`).
+   with it; docs are generated on demand (`make dbt-docs`). One catch: Airflow 3.3 queues no Asset
+   event for a DAG that is paused and does not replay it on unpause, so a merge that lands while
+   `dbt_build` is paused leaves gold behind silver until someone triggers the DAG. `dq_checks` counts
+   the runs that find gold older than silver at rest and the alert `GoldStaleAtRest` fires on two in
+   a row ([OPERATIONS, Airflow](OPERATIONS.md#airflow)).
 7. `dq_checks` (every 15 minutes) fails on a duplicate key in silver and on silver differing from
    Postgres at rest, compares row fingerprints source to silver and silver to gold and GMV per
    day source to `mart_daily_sales` (`reconcile_values`), and logs delivery repeats, source
@@ -99,7 +105,7 @@ docker run --rm -v "$T:/in" -v "$PWD/docs/img:/out" minlag/mermaid-cli:11.4.2 \
 8. Prometheus scrapes Kafka, Connect, PostgreSQL (slot lag, retained WAL), the Spark driver
    (custom `StreamingQueryListener` metrics: input rows, batch duration, Kafka lag), Airflow
    (StatsD) and a small `container-exporter` on the Docker API (ADR-023). Grafana shows
-   "Pipeline health" and "Infra". 15 alert rules in `observability/prometheus/alerts.yml`, tested
+   "Pipeline health" and "Infra". 16 alert rules in `observability/prometheus/alerts.yml`, tested
    by promtool (`make alerts-test`); no Alertmanager, alerts are read in Prometheus and Grafana.
 9. Grafana with a Trino datasource shows the "Marketplace" dashboard: four panels over
    `lake_ro.gold` (daily sales, GMV by category, delivery SLA by state, cancellations). `lake_ro`
@@ -107,7 +113,11 @@ docker run --rm -v "$T:/in" -v "$PWD/docs/img:/out" minlag/mermaid-cli:11.4.2 \
    `grafana` user read its marts `fct_*`, `dim_*`, `mart_*` and nothing else (W6-D17; probes in
    [docs/evidence.md](docs/evidence.md#trino-access-control)). Trino has no authentication, so the
    user name is only a label: [OPERATIONS, Access control](OPERATIONS.md#access-control) lists the
-   residual risk. Superset is optional (ADR-014).
+   residual risk. Superset is optional (ADR-014, profile `bi`, not needed by `core`): it shows the
+   same four questions as a dashboard `Marketplace`, reads `lake_ro.gold` as the Trino user
+   `superset` (the same rights as `grafana`), and `superset-mcp` exposes Superset to MCP clients
+   on `127.0.0.1:5008`, checked for Host and Origin and running every tool as `admin`
+   ([OPERATIONS, Superset](OPERATIONS.md#superset-profile-bi)).
 
 ## Where exactly-once comes from
 
@@ -122,16 +132,15 @@ epoch is reproduced by `tests/unit/test_iceberg_sink.py`, not by a live run. The
 
 ## What is deliberately absent
 
-Multi-broker Kafka, Spark cluster, Schema Registry (stretch), Superset (optional), ClickHouse,
-Kubernetes, Terraform, Ansible, Loki, managed cloud. Each is either already known to the author or does not close a
-skill gap this project targets. See [DECISIONS.md](DECISIONS.md) (ADR-012, ADR-014, ADR-015).
+Multi-broker Kafka, Spark cluster, Schema Registry (stretch), ClickHouse, Kubernetes, Terraform, Ansible, Loki, managed cloud. Each is either already known to the author or does not close a
+skill gap this project targets. See [DECISIONS.md](DECISIONS.md) (ADR-012, ADR-015).
 
 ## Resource model
 
 Compose profiles let the platform run in pieces: `core` always (the REST catalog Lakekeeper
 included), `query` almost always, `orchestrate` only while batch work is being developed or
-demoed, `obs` for monitoring, `bi` only if there is time left (not runnable today, OPERATIONS
-"Profiles"). Every long-running service has a memory limit, log rotation, ports bound to
+demoed, `obs` for monitoring, `bi` (Superset and its MCP endpoint) only for a demo and not
+together with `orchestrate` (OPERATIONS "Profiles"). Every long-running service has a memory limit, log rotation, ports bound to
 `${BIND_IP}` (`127.0.0.1`; compose refuses to start without it), a real healthcheck and
 `restart: unless-stopped`, except `kafka-ui` (no healthcheck). One-shot jobs (`minio-init`,
 `lakekeeper-migrate`, `lakekeeper-bootstrap`, `spark-silver`) have `restart: "no"` and no

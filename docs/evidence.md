@@ -7,7 +7,7 @@ anyone with the stack up can repeat. Anything not run live is marked `not proven
 Contents: [Reconciliation](#reconciliation-source-against-silver) |
 [MinIO probe](#probe-minio-stopped) | [Failure scenarios](#failure-scenarios) | [Maintenance](#maintenance-before-and-after) |
 [Alerts](#alerts-and-time-to-fire) | [CI and smoke](#ci-and-smoke) | [Dashboard](#dashboard) |
-[Trino access control](#trino-access-control) |
+[Trino access control](#trino-access-control) | [Superset and local access](#superset-and-local-access) |
 [Not proven](#not-proven-yet) | [How it was built](#how-it-was-built)
 
 ## Reconciliation: source against silver
@@ -122,8 +122,8 @@ The orphans dry run of `silver.orders` on 2026-10-30 17:48 UTC found 0 candidate
 
 ## Alerts and time to fire
 
-15 rules in [`observability/prometheus/alerts.yml`](../observability/prometheus/alerts.yml) (12 named
-alerts, some with two expressions), tested by `make alerts-test` (promtool; `SUCCESS: 15 rules found`, 2026-10-30; failure cases first). No Alertmanager
+16 rules in [`observability/prometheus/alerts.yml`](../observability/prometheus/alerts.yml) (13 named
+alerts, three of them with two expressions), tested by `make alerts-test` (promtool; `SUCCESS: 16 rules found`, 2026-11-06; it was 15 rules on 2026-10-30, before `GoldStaleAtRest`; failure cases first). No Alertmanager
 (ADR-023): the alerts are read in Prometheus and in the Grafana "Firing alerts" panel. The table is
 in [OPERATIONS, Alerts](../OPERATIONS.md#alerts).
 
@@ -137,7 +137,14 @@ in [OPERATIONS, Alerts](../OPERATIONS.md#alerts).
 | `ContainerRestarting` | live, scenarios 5 and 8 (2026-10-23) | 15 s after the restart |
 | `CdcStalledSourceWrites` | live, scenario 6 (2026-10-29) | firing 18:20:04; `cdc_stalled` was 1 from 18:01 (W6-T07 result in [the W6 spec](planning/14-closeout-spec.md), [HANDOFF](HANDOFF.md) log 29.10 18:22) |
 | `SparkRestartLoop` | rule run over the stored data of scenario 8, not a live firing | true from 17:11:15, 51 s after the first restart (17:10:24) |
-| `SlotWalHeldIdle`, `DqChecksStale`, `ScrapeTargetDown`, `SilverGoldNotCompared` | promtool only | not shown live |
+| `SlotWalHeldIdle`, `DqChecksStale`, `ScrapeTargetDown`, `SilverGoldNotCompared`, `GoldStaleAtRest` | promtool only | not shown live |
+
+`GoldStaleAtRest` (audit of 2026-11-06) exists because of a finding that was live: Airflow 3.3 queues
+no Asset event for a paused DAG (`airflow/assets/manager.py:354` in the image), so the `lake.silver`
+event of 12:11:49 UTC on 2026-11-06, which came while `dbt_build` was paused during chaos 10b, created
+no `dbt_build` run and gold stayed behind silver. The rule fires when `dq_checks` finds that state at
+rest on two runs in a row. It compares commit times of Iceberg snapshots, not the snapshot dbt read,
+and `expire_silver` after `optimize` can remove the newest data snapshot; both only miss an alert.
 
 `SparkNoBatch5m` did not fire in scenario 8: a crash-looping driver dies before its first batch and
 Kafka came back inside the 5 minutes of the `gone` rule. That gap is why `SparkRestartLoop` exists
@@ -217,6 +224,30 @@ Afterwards: `make dbt-build` `PASS=68 WARN=4 ERROR=0` (19:16), `check_dashboards
 user name is only a label; a Grafana admin who adds a datasource with another user, or a client
 that reaches port 8080, gets that user's rights. The rules protect the provisioned datasource,
 not a person with an admin login, a shell or network access.
+
+## Superset and local access
+
+Profile `bi` (2026-11-06): `superset-init` (one-shot: migration, `admin`, import of the bundle in
+[`docker/superset/dashboards`](../docker/superset/dashboards)), `superset` and `superset-mcp`
+([OPERATIONS, Superset](../OPERATIONS.md#superset-profile-bi)). Checks on the running stack:
+
+| Check | Result |
+|---|---|
+| `docker exec lakehouse-superset-1 python /app/check.py` (15:52 UTC), every chart of the dashboard `Marketplace` through the REST API | `Cancellations: 601 rows`, `Daily sales: 601 rows`, `Delivery SLA by state: 27 rows`, `GMV by category, top 10: 10 rows`, exit code 0 |
+| Trino user `superset` (after the Trino restart, 15:02 UTC) | the rules of `grafana` (`docker/trino/etc/rules.json`, `grafana\|superset`): `select count(*) from lake_ro.gold.fct_orders` 96346; `lake_ro.silver.orders`, catalog `lake`, `lake_ro.gold.stg_orders` and `create table lake_ro.gold.x` get `Access Denied`; `grafana` and `dbt` read as before. The database is imported with `allow_dml: false` |
+| `superset-mcp` with `FASTMCP_HTTP_HOST_ORIGIN_PROTECTION` (15:52 UTC) | `POST /mcp initialize`: `Host: evil.example:5008` 421, `Origin: http://evil.example` 403, loopback 200; every tool runs as `admin` (`MCP_DEV_USERNAME`), so a deployment beyond loopback needs a JWT provider |
+| MCP client session | server `Superset MCP Server 3.4.11`; `tools/list`: `get_instance_info`, `health_check`, `search_tools`, `call_tool`; `tools/call get_instance_info`: 1 dashboard, 4 charts, 4 datasets, 1 database (trino); `claude mcp list` (client registered with `--scope local`, no client settings in the repository): `superset ... Connected` |
+| Rerun of `superset-init` on an initialized metadata database (15:51 UTC) | `admin exists`, exit 0; then `check.py` as above. By the import flags (`docker/compose.yaml:859-862`) the database, datasets and charts are kept (`overwrite=False`) and the dashboard `Marketplace` is replaced |
+| `GET http://127.0.0.1:8088/health` | 200 |
+
+Other web entries checked by `GET` on 2026-11-06: the MinIO console on `http://127.0.0.1:9001` answers
+200 (port 9000 redirects there from a browser), the Lakekeeper UI on `http://127.0.0.1:8181/ui/`
+answers 200. Kafka from the host (15:01 UTC): a `confluent-kafka` admin client with bootstrap
+`127.0.0.1:9092` lists broker `1: localhost:9092` and the seven `oltp.shop.*` topics; the broker
+advertises `localhost:9092` (`docker/compose.yaml:76`); before the fix it advertised
+`localhost:29092`, which nothing listened on. Not proven: `bi` together with the other profiles under
+the 16 GB limit (on 2026-11-06 it ran beside core, query, orchestrate, obs and stateful, but the
+peak was not measured).
 
 ## Not proven yet
 

@@ -420,16 +420,16 @@ live ([OPERATIONS.md, Alerts](../OPERATIONS.md#alerts), "Limits worth knowing" b
 Test the rule on synthetic series, failure cases first, then cause the real failure and time how long
 the alert takes. Record what the alert does not cover.
 
-In this project: `make alerts-test` checks `alerts.yml` with promtool (`SUCCESS: 15 rules found` on
-2026-10-30) and runs the rule tests in `alerts_test.yml` (`SUCCESS`,
-[evidence](evidence.md#alerts-and-time-to-fire)). There are 12 alert names and 15
+In this project: `make alerts-test` checks `alerts.yml` with promtool (`SUCCESS: 16 rules found` on
+2026-11-06) and runs the rule tests in `alerts_test.yml` (`SUCCESS`,
+[evidence](evidence.md#alerts-and-time-to-fire)). There are 13 alert names and 16
 rules, because three names have two expressions each. Seven alerts were shown firing live, with
 times. Six in their own scenarios on 2026-10-23: `ConnectorNotRunning` 95 s, `SlotWalRetainedHigh`
 326 s, `SparkNoBatch5m` 315 s, `FreshnessAbove15m` 1561 s, `AirflowDagFailed` 17 s,
 `ContainerRestarting` 15 s. The seventh, `CdcStalledSourceWrites`, fired on 2026-10-29 at 18:20:04 UTC
 in chaos 6, 33 minutes after the connector was stopped at 17:47:02. `SparkRestartLoop` is not a live
 firing: its expression was run over the stored data of chaos 8 and was true 51 s after the first
-restart. `DqChecksStale`, `ScrapeTargetDown`, `SlotWalHeldIdle`, `SilverGoldNotCompared` and the
+restart. `DqChecksStale`, `ScrapeTargetDown`, `SlotWalHeldIdle`, `SilverGoldNotCompared`, `GoldStaleAtRest` and the
 `absent` form of `FreshnessAbove15m` are proven by promtool only
 ([OPERATIONS.md, Alerts](../OPERATIONS.md#alerts), table). Known limits are written down: `absent()`
 alerts burn when `core` is off, the `lakehouse_*` gauges arrive every 15 minutes so their alerts lag

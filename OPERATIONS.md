@@ -7,7 +7,7 @@
 | Daily work on ingestion | `make start` | ~11 GB limits, ~7 GB real |
 | Working on dbt / Airflow | `make start && make up PROFILE=orchestrate` (Trino `Xmx` drops to 2g via `TRINO_XMX`); stop `orchestrate` when not working on batch | ~13 GB limits, ~9 GB real |
 | Full pipeline with monitoring | `TRINO_XMX=2g make start && make up PROFILE=orchestrate,obs` | 13.7 GB limits (sum of `deploy` limits, grafana 384M since 2026-10-29), 5.2 GB real at rest (2026-10-19, before the Trino plugin) |
-| Demo dashboard (optional Superset, not runnable today) | `make down PROFILE=orchestrate && make up PROFILE=bi` | swap orchestrate for bi; compose mounts `docker/superset/superset_config.py`, which the repo does not have, so `bi` does not start from a clean clone (README: planned) |
+| Demo dashboard (optional Superset and its MCP endpoint, [section](#superset-profile-bi)) | `make down PROFILE=orchestrate && make up PROFILE=bi` | swap orchestrate for bi; ~1.8 GB of limits running (superset 1280M, superset-mcp 512M) and 1024M while the one-shot `superset-init` runs; needs `SUPERSET_ADMIN_PASSWORD` in `.env` (`make secrets`) |
 | Stateful job (`orders_per_minute`) | `make up PROFILE=stateful` on top of `core` | +1.75 GB limit; 495 MiB at rest, 842 MiB while reading 24 h of the topic (2026-10-23) |
 | Debugging Kafka visually | `make up PROFILE=tools` for 15 minutes, then `make down PROFILE=tools` | +0.4 GB |
 
@@ -26,31 +26,42 @@ starts the container on purpose, for a continuous demo; stop it with
 
 ## Ports (all on 127.0.0.1)
 
-| Service | Port |
-|---|---|
-| postgres-oltp | 5432 |
-| postgres-meta | 5433 |
-| kafka | 9092 |
-| kafka-connect | 8083 |
-| minio (S3 API) | 9000 |
-| lakekeeper | 8181 |
-| spark-bronze UI | 4040 |
-| spark-bronze metrics | 4041 |
-| spark-silver UI (while `make silver` runs) | 4042 |
-| spark-orders-per-minute UI | 4043 |
-| trino | 8080 |
-| airflow api-server | 8090 |
-| prometheus | 9090 |
-| grafana | 3000 |
-| superset | 8088 |
-| kafka-ui | 8085 |
+| Service | Profile | Port |
+|---|---|---|
+| postgres-oltp | `core` | 5432 |
+| postgres-meta | `core`, also `orchestrate` and `bi` | 5433 |
+| kafka | `core` | 9092 (host listener, see below) |
+| kafka-connect | `core` | 8083 |
+| minio S3 API | `core` | 9000 (a browser is redirected to the console) |
+| minio web console | `core` | 9001 |
+| lakekeeper (API and UI at `/ui/`) | `core` | 8181 |
+| spark-bronze UI | `core` | 4040 |
+| spark-bronze metrics | `core` | 4041 |
+| oltp-replayer `/metrics`, `/status` | `core`, only through `make replay-live` | 8000 |
+| spark-silver UI (while `make silver` runs) | `jobs` | 4042 |
+| spark-orders-per-minute UI | `stateful` | 4043 |
+| trino | `query` | 8080 |
+| airflow api-server | `orchestrate` | 8090 |
+| prometheus | `obs` | 9090 |
+| grafana | `obs` | 3000 |
+| superset | `bi` | 8088 |
+| superset-mcp | `bi` | 5008 |
+| kafka-ui | `tools` | 8085 |
+
+`make start` starts `core` without the replayer, plus `trino`. Every other profile (`orchestrate`,
+`obs`, `stateful`, `bi`, `tools`) is started on purpose with `make up PROFILE=<name>`, and `jobs`
+only runs when a make target starts its container, so most rows above answer nothing by default.
+`BIND_IP` in `.env` is `127.0.0.1`. From the host, Kafka clients use the bootstrap `127.0.0.1:9092`:
+the broker publishes port 29092 of the container as 9092 and advertises `localhost:9092` on its
+`HOST` listener (`docker/compose.yaml:76`), so the broker address a client gets back works (an
+earlier setup advertised `localhost:29092`, which nothing listened on). Containers use `kafka:9092`.
 
 ## Daily commands
 
 First run, from a fresh clone:
 
 ```
-make secrets         # .env with generated passwords; REPLAY_DATA=sample skips the download
+make secrets         # .env with generated passwords; on an existing .env it only appends missing keys; REPLAY_DATA=sample skips the download
 make data            # download Olist into data/raw (not needed with REPLAY_DATA=sample)
 make bootstrap       # start, migrate, connector, replay-load, verify, protect; safe to re-run
 ```
@@ -119,7 +130,7 @@ make logs S=spark-bronze
 make psql            # psql into shop
 make trino           # trino cli, catalog lake
 make kafka-topics    # list topics with partitions
-make kafka-groups    # consumer groups and lag (connect only; Spark lag is in Grafana)
+make kafka-groups    # classic consumer groups and lag; Spark keeps offsets in its checkpoint (lag is in Grafana), and the Connect group is listed only by kafka-groups.sh --list
 make connector-status
 make replay-status   # replayer position and virtual clock
 make iceberg-demo    # snapshots, time travel, rollback, compaction, expiration
@@ -337,7 +348,8 @@ profile `core`: `lakekeeper-migrate` (one-shot schema migration of the `lakekeep
 `lakekeeper-bootstrap`, so every `up` of them runs the one-shots again (`minio-init`,
 `lakekeeper-migrate`, `lakekeeper-bootstrap`), all idempotent. Without `lakekeeper` Spark cannot
 commit and Trino cannot load a table. The API has no authentication (allow-all), which is why the
-port stays on 127.0.0.1.
+port stays on 127.0.0.1. The same port serves the catalog UI, http://127.0.0.1:8181/ui/ (HTTP 200,
+2026-11-06): the warehouse `lake`, its namespaces and tables; it needs no login either.
 
 `make silver` and `make iceberg-demo` run `spark-silver` with `--no-deps`: they never start
 Lakekeeper, so it must already be running (`make status`; `make lakekeeper-bootstrap` starts it).
@@ -358,8 +370,9 @@ and changes nothing, since it never updates an existing warehouse. It runs in
 otherwise compose stops with `No such image`.
 
 Encryption key. `LAKEKEEPER_ENCRYPTION_KEY` encrypts the warehouse's S3 keys inside the
-`lakekeeper` database. `make secrets` generates it only for a new `.env`; it never touches an
-existing one, and without the key every compose command fails, `make lint` and `make up`
+`lakekeeper` database. `make secrets` generates every secret of a new `.env`; on an existing one it
+never changes a key, it only appends the keys of `.env.example` that are missing (so a new service
+can ship its secret), and without the key every compose command fails, `make lint` and `make up`
 included, whatever the profile (`required variable LAKEKEEPER_ENCRYPTION_KEY is missing a
 value`). Add it to an existing `.env` once, from the repo root; the command prints nothing:
 
@@ -438,6 +451,73 @@ curl -sS -X POST -H 'Content-Type: application/json' \
   "$lk/management/v1/warehouse/$wid/deleted-tabulars/undrop"   # 204 on success
 ```
 
+## MinIO console
+
+The console of MinIO is on http://127.0.0.1:9001 (`docker/compose.yaml:163`, `:171`), profile `core`.
+Log in with `S3_ACCESS_KEY` and `S3_SECRET_KEY` from `.env`. The bucket named by `S3_BUCKET` holds
+the Iceberg data and metadata files of bronze, silver and gold. Port 9000 is the S3 API: opened in a
+browser, it redirects to the console. Look, do not delete: a file removed by hand breaks the table
+that owns it.
+
+## Superset (profile `bi`)
+
+Optional BI over the gold marts, with an MCP endpoint for agents. `make up PROFILE=bi` on top of
+`core` and `query` (swap `orchestrate` for `bi`, never together); three services, all built from
+`docker/superset/Dockerfile` (Superset 6.1.0 plus the drivers `psycopg2-binary`, `trino` and
+`fastmcp`, pinned by `constraints.txt`):
+
+| Service | Port | Limit | Does |
+|---|---|---|---|
+| `superset-init` | none | 1024M | one-shot, `restart: "no"`: `superset db upgrade`, creates `admin` if absent, `superset init`, imports the bundle `docker/superset/dashboards/` (`docker/superset/init.sh`); skips the import with a warning when Trino is not reachable, run it again once Trino is up |
+| `superset` | 8088 | 1280M | UI and REST API, metadata in the database `superset` of `postgres-meta`; waits for `superset-init` |
+| `superset-mcp` | 5008 | 512M | the MCP server built into Superset 6.1 (`superset mcp run`), endpoint `http://127.0.0.1:5008/mcp`; waits for `superset-init` |
+
+(`docker/compose.yaml:790-897`.) The admin password is `SUPERSET_ADMIN_PASSWORD` in `.env`. Compose
+requires it (`${SUPERSET_ADMIN_PASSWORD:?...}`), so after updating the repository run `make secrets`
+once: it appends the keys of `.env.example` that `.env` lacks and never changes an existing one
+(`scripts/make_env.py`). Without it every compose command, whatever the profile, stops with that
+message.
+
+The bundle holds the database `Lakehouse (Trino lake_ro)` (`trino://superset@trino:8080/lake_ro`),
+4 datasets, 4 charts and the dashboard `Marketplace`, the same four questions as the Grafana
+dashboard. A rerun of `superset-init` is safe: the database, datasets and charts are kept as they
+are (imported with `overwrite=False`, so a chart edited in the UI stays edited), but the dashboard
+`Marketplace` and its chart list are replaced (`superset import-dashboards` imports dashboards with
+`overwrite=True`).
+
+Check that the charts answer, from the host (reads only; the password comes from the container
+environment):
+
+```
+docker exec lakehouse-superset-1 python /app/check.py
+```
+
+It logs in through the REST API and runs every chart of the dashboard. Measured on 2026-11-06 15:52
+UTC: `Cancellations: 601 rows`, `Daily sales: 601 rows`, `Delivery SLA by state: 27 rows`,
+`GMV by category, top 10: 10 rows`, exit code 0 (it exits 1 for a failing or empty chart).
+
+Data boundary. Superset queries Trino as the user `superset`, which has the rights of `grafana`:
+`select` on the `fct_*`, `dim_*` and `mart_*` tables of `lake_ro.gold` and nothing else
+(`docker/trino/etc/rules.json`, rule `grafana|superset`; `lake_ro` is read-only at the connector).
+The database is imported with `allow_dml: false`. As with Grafana, Trino has no authentication, so
+the user name is a label ([Access control](#access-control)).
+
+MCP and its limits. Any MCP client can connect to `http://127.0.0.1:5008/mcp`; the client settings
+are not kept in the repository (`.mcp.json` is in `.gitignore`). Example for Claude Code:
+`claude mcp add --transport http --scope local superset http://127.0.0.1:5008/mcp`.
+- Every tool runs as the Superset user `admin` (`MCP_DEV_USERNAME`,
+  `docker/superset/superset_config.py:32`). There is no login on the endpoint: it is the local
+  single-user mode, like Airflow without a login. A client can create and change charts,
+  dashboards and saved queries in the Superset metadata; the data it can read stays inside the ACL
+  above.
+- The port is bound to `BIND_IP` (`127.0.0.1`). On top of that `FASTMCP_HTTP_HOST_ORIGIN_PROTECTION`
+  and `FASTMCP_HTTP_ALLOWED_HOSTS` (`127.0.0.1`, `localhost`, `::1`) make the server check the Host
+  and Origin headers: a foreign Host gets 421, a foreign Origin 403. Without them a web page could
+  reach the local port by DNS rebinding.
+- A deployment reachable from outside the machine must turn on `MCP_AUTH_ENABLED` with a JWT
+  provider and drop `MCP_DEV_USERNAME` (the comment in `superset_config.py:28-31`). This repository
+  does not configure that.
+
 ## Airflow
 
 Profile `orchestrate`: `airflow-api-server` (UI and REST API on `127.0.0.1:8090`, no login, every
@@ -508,6 +588,16 @@ run: two processes on one checkpoint (`make verify` refuses while the scheduler 
 manual merge: `airflow dags pause silver_upsert` in the scheduler container, wait until its
 running `merge` ends, `make silver`, then `airflow dags unpause silver_upsert`. The first run from
 Airflow continues from the checkpoint of the last `make silver`.
+
+A paused `dbt_build` loses Asset events. Airflow 3.3 queues no Asset event for a DAG that is paused
+(`airflow/assets/manager.py:354` in the Airflow image: `if not ref.dag.is_paused`) and does not
+replay it on unpause. On 2026-11-06 the `lake.silver` event of 12:11:49 UTC, which came while
+`dbt_build` was paused, created no run, and gold stayed behind silver. So after you unpause
+`dbt_build`, trigger it once by hand (`airflow dags trigger dbt_build`), unless a silver merge with
+events will follow. `make chaos-silver-kill` does this itself after it lifts its own pause
+(`scripts/chaos/silver-kill.sh:46-59`). If it is forgotten, `dq_checks` counts the runs that find the
+stand at rest and gold older than silver (Variable `dq_gold_stale_runs`) and the alert
+`GoldStaleAtRest` fires after two in a row (see "Alerts").
 
 Timeouts (audit 30.10, B1). Every task has an `execution_timeout` and every DAG a
 `dagrun_timeout`; all attempts of a task fit in its run (`make dags-check` and
@@ -633,6 +723,7 @@ stops instead of showing its last value for ever.
 | `lakehouse_dq_reconcile_gold_compared` | none | 1 when the run compared silver and gold, 0 when it did not: nothing at rest, or gold behind silver |
 | `lakehouse_dq_reconcile_gmv_compared` | none | 1 when the run compared GMV per day with Postgres, 0 when it did not: not at rest, CDC stalled or moved during the run, gold behind silver, the mart behind `fct_orders`, or a failed GMV step |
 | `lakehouse_dq_gold_not_compared_runs` | none | runs in a row without a silver-gold comparison (Airflow Variable `dq_gold_not_compared_runs`), 0 after a comparison |
+| `lakehouse_dq_gold_stale_runs` | none | runs in a row that found the stand at rest and gold stale (Airflow Variable `dq_gold_stale_runs`), 0 after a run that did not; not sent when the check itself failed. Stale means: the newest data snapshot (operation other than `replace`) of the seven silver tables is newer than the oldest of the latest rebuilds of the seven table marts of gold (`dim_*`, `fct_order_items`, `fct_orders`, `mart_delivery_sla`, `mart_seller_performance`), or the watermark of `mart_daily_sales` is behind `fct_orders` (`airflow/dags/lakehouse/reconcile.py:170-218`, `SILVER_DATA_CHANGED`, `GOLD_REBUILT`, `MART_UPDATED`) |
 
 Values come at the cadence of `dq_checks` (15 minutes), so an alert on them can lag by that long.
 A negative value is never sent (StatsD would read it as a decrement). The quarantine count stays
@@ -677,14 +768,15 @@ curl -s 127.0.0.1:3000/api/health
   shows as a new `docker_container_start_time_seconds`.
 ### Alerts
 
-Twelve alerts in `observability/prometheus/alerts.yml`, tested by `make alerts-test` (promtool, failure
+Thirteen alerts in `observability/prometheus/alerts.yml`, tested by `make alerts-test` (promtool, failure
 cases first). The first six are each shown firing in their own scenario; the next three, added after
 the review of weeks 4 and 5, watch for a source that went silent, two more (week 6) catch a
-slot that holds WAL on an idle source and a Spark restart loop, and `SilverGoldNotCompared` (audit
-30.10) says `dq_checks` has not compared silver and gold for 24 runs in a row. These six are proven
+slot that holds WAL on an idle source and a Spark restart loop, `SilverGoldNotCompared` (audit
+30.10) says `dq_checks` has not compared silver and gold for 24 runs in a row, and `GoldStaleAtRest`
+(audit 06.11) says gold was not rebuilt after silver changed. These seven are proven
 by promtool;
 `CdcStalledSourceWrites` also fired live in chaos 6 (2026-10-29), and `SparkRestartLoop` was run
-over the stored chaos 8 data (below), never live. Twelve names make 15 rules: `SparkNoBatch5m`,
+over the stored chaos 8 data (below), never live. Thirteen names make 16 rules (`make alerts-test`: `SUCCESS: 16 rules found`, 2026-11-06): `SparkNoBatch5m`,
 `FreshnessAbove15m` and `DqChecksStale` have two each. No Alertmanager (ADR-023):
 read them in the Prometheus UI (`/alerts`), `curl 127.0.0.1:9090/api/v1/alerts` or the "Firing
 alerts" panel. After editing the file: `docker exec lakehouse-prometheus-1 kill -HUP 1` (see above
@@ -709,6 +801,7 @@ lists project containers that are down although their restart policy is `unless-
 | `ScrapeTargetDown` | `up{job!="spark-orders-per-minute"} == 0` | 2m | an exporter that is down silences its own alerts (ADR-023); the stateful job runs only with `PROFILE=stateful` | promtool | |
 | `SlotWalHeldIdle` | `min_over_time(lakehouse_slot_retained_bytes[1h])` over 64 MiB, slot active, now at most 512 MiB | 0 | an active slot moves only when the source writes (about 24 MB held after a day idle), so a whole hour above 64 MiB (at least 200 samples in the hour) means no traffic reached it; inactive or over 512 MiB is `SlotWalRetainedHigh` | promtool | |
 | `SparkRestartLoop` | `changes(docker_container_start_time_seconds{name="lakehouse-spark-bronze-1"}[10m]) > 2` | 0 | a driver that dies before its first batch keeps both `SparkNoBatch5m` rules inside their window; one planned restart stays under the threshold | chaos 8 data, TSDB replay | 51 s after the first restart (23.10 data, rule not loaded then) |
+| `GoldStaleAtRest` | `last_over_time(lakehouse_dq_gold_stale_runs[1h]) >= 2`, severity `warn` | 0 | gold is older than silver while nothing is in flight: `dbt_build` paused or red, or its Asset event lost for a paused DAG (see "Airflow"). By Iceberg snapshots, not by data. One run that sees it stale can still be the build on its way (`dbt_build` takes under a minute, `dq_checks` runs every 15 minutes); two in a row (30 minutes) are not. Limits: it compares commit times, not the snapshot that dbt read; `expire_silver` after `optimize` can remove the newest data snapshot. Both only miss an alert, they do not raise a false one | promtool only | not shown live |
 | `SilverGoldNotCompared` | `last_over_time(lakehouse_dq_gold_not_compared_runs[1h]) >= 24` | 0 | `dq_checks` compares silver and gold only at rest; a continuous replay or a deleted order keeps it from comparing, silently. 24 runs of every 15 minutes are 6 hours of `dq_checks` working: counted in runs, so host sleep and scrape gaps do not reset or stall it, and the 60 s replay bursts leave rest between them; the 24 h run of B6 fires it by design. A dead `dq_checks` is `DqChecksStale`, not this | promtool only | not shown live |
 
 Limits worth knowing: `absent()` alerts also burn when the source is off (obs up, core down); a
@@ -1004,6 +1097,7 @@ branch cancels the older pull request run.
 |---|---|
 | `lint-and-test` | `uv sync --locked`, ruff, `bash -n` on every tracked shell script, mypy, yamllint, sqlfluff, `dbt parse`, `pytest tests/unit`, compose config, gitleaks |
 | `hadolint` | one run per Dockerfile (matrix, a test compares it with `find`), fails on warning and above; accepted findings sit in the Dockerfile as `# hadolint ignore=` with the reason |
+| `alerts-test` | `make alerts-test`: promtool `check rules` of `alerts.yml` and `test rules` of `alerts_test.yml` in the pinned Prometheus image (QA-01) |
 | `spark-tests` | builds `lakehouse/spark:ci` (layer cache `type=gha`, scope `spark`) and runs `make test-spark SPARK_IMAGE=lakehouse/spark:ci`; `FAIL_ON_SKIP=1` (`tests/unit/conftest.py`) turns any skip, `pytest.skip()` and `importorskip` included, into a failure |
 | `airflow-image` | builds `lakehouse/airflow:ci` (scope `airflow`), imports Airflow, trino, psycopg and pydantic-settings, runs `dbt --version` in its venv, and `make dags-check`: every DAG file imports in the image, offline, with `docker/airflow/airflow.env`; every task has an `execution_timeout` whose attempts fit in the DAG's `dagrun_timeout`, every DockerOperator removes its container with force, and the merge has its fixed name |
 | `minio-images` | builds `lakehouse/minio:ci` and `lakehouse/mc:ci` from `docker/minio/Dockerfile` (scopes `minio`, `mc`) and runs `bash scripts/check-minio-images.sh`: the release and commit each binary prints, `sh` and `wget` in both images, a throwaway MinIO healthy on the compose healthcheck, `create-bucket.sh` (minio-init) twice |
@@ -1062,8 +1156,9 @@ converges one of them recreates it; volumes stay:
 
 Recreating `postgres-oltp`, `kafka`, `postgres-meta` or `trino` on a live stack is a restart of
 the source, of the log, of the catalog and the Airflow metadata, of the dbt queries in flight: each
-needs its own "ok". `superset` and `kafka-ui` have no container and no local image yet, their
-digests come from the registry and they are pulled on their first start. The digests of the other
+needs its own "ok". `superset` and `kafka-ui` had no container and no local image then (since 2026-11-06 `superset` is
+built locally, [Superset](#superset-profile-bi)), their digests came from the registry and they
+were pulled on their first start. The digests of the other
 nine are the ones in the local store on 2026-10-30, so nothing is pulled for them.
 
 The rebuild that `--build` runs after this commit:
@@ -1137,7 +1232,7 @@ why nothing is lost or duplicated (or where it can be). Filled in as scenarios a
 | 8 | Kafka down | `chaos-kafka-down` | done 2026-10-23 |
 | 9 | Airflow task failure (dbt test) | `chaos-break-dbt-test` | done 2026-10-18 |
 | 10 (optional) | Partial processing (Trino memory) | `chaos-trino-memory` | planned (week 3) |
-| 10b | Silver merge killed between two tables (`lakehouse-silver-merge`, through the `silver_upsert` DAG; pauses `silver_upsert`, `dbt_build`, `dq_checks`, plays a 30 s burst, unpauses `silver_upsert` and does not trigger it: the run the scheduler creates (at once for the missed interval, or on the next `*/5` border, so up to 6 min of waiting) is the one killed, right after the first table in its log; the retry of the merge task must bring silver level with Postgres and is proved by more than one attempt of that task in that run, otherwise the result is inconclusive; `dbt_build` stays paused during the run, so gold can lag until the next merge with events or a manual `dbt_build`; never removes a leftover container) | `chaos-silver-kill` | done 2026-11-06 |
+| 10b | Silver merge killed between two tables (`lakehouse-silver-merge`, through the `silver_upsert` DAG; pauses `silver_upsert`, `dbt_build`, `dq_checks`, plays a 30 s burst, unpauses `silver_upsert` and does not trigger it (its cleanup then triggers `dbt_build` once if it paused it): the run the scheduler creates (at once for the missed interval, or on the next `*/5` border, so up to 6 min of waiting) is the one killed, right after the first table in its log; the retry of the merge task must bring silver level with Postgres and is proved by more than one attempt of that task in that run, otherwise the result is inconclusive; `dbt_build` stays paused during the run, so gold lags until the cleanup triggers it (`airflow dags trigger dbt_build`; Airflow queues no Asset event for a paused DAG); never removes a leftover container) | `chaos-silver-kill` | done 2026-11-06 |
 
 ### Template
 
@@ -1611,7 +1706,9 @@ exit 1. The script reports an inconclusive result only before or around the kill
 already running or queued, the merge ended before its first table, the kill came too late to
 catch it, or the kill came after the last table with events. Exit 0 on
 2026-11-06; `make verify-fast` at 12:13 UTC: `verify ok`, 7 of 7. `dbt_build` stayed paused during
-the run, so gold lags until the next merge with events or a manual `dbt_build`.
+the run and its Asset event was lost (see "Airflow"), so gold lagged silver until `dbt_build` was
+run by hand; since the audit fix the `cleanup` of the script triggers `dbt_build` once after it
+lifts its pause (`scripts/chaos/silver-kill.sh:46-59`).
 
 ## Runbooks
 
