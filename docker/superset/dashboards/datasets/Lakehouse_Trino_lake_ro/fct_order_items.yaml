@@ -1,0 +1,138 @@
+table_name: fct_order_items
+main_dttm_col: purchase_date
+description: lake_ro.gold.fct_order_items
+default_endpoint: null
+offset: 0
+cache_timeout: null
+catalog: lake_ro
+schema: gold
+sql: null
+params: null
+template_params: null
+filter_select_enabled: true
+fetch_values_predicate: null
+extra: null
+normalize_columns: false
+uuid: 7053ca35-4c44-5339-9f9b-23027c55ad61
+metrics:
+  - metric_name: count
+    verbose_name: COUNT(*)
+    metric_type: count
+    expression: COUNT(*)
+    description: null
+    d3format: null
+    extra: {}
+    warning_text: null
+columns:
+  - column_name: order_id
+    verbose_name: null
+    is_dttm: false
+    is_active: true
+    type: VARCHAR
+    groupby: true
+    filterable: true
+    expression: null
+    description: null
+    python_date_format: null
+  - column_name: order_item_id
+    verbose_name: null
+    is_dttm: false
+    is_active: true
+    type: BIGINT
+    groupby: true
+    filterable: true
+    expression: null
+    description: null
+    python_date_format: null
+  - column_name: product_id
+    verbose_name: null
+    is_dttm: false
+    is_active: true
+    type: VARCHAR
+    groupby: true
+    filterable: true
+    expression: null
+    description: null
+    python_date_format: null
+  - column_name: seller_id
+    verbose_name: null
+    is_dttm: false
+    is_active: true
+    type: VARCHAR
+    groupby: true
+    filterable: true
+    expression: null
+    description: null
+    python_date_format: null
+  - column_name: price
+    verbose_name: null
+    is_dttm: false
+    is_active: true
+    type: DECIMAL(38, 2)
+    groupby: true
+    filterable: true
+    expression: null
+    description: null
+    python_date_format: null
+  - column_name: freight_value
+    verbose_name: null
+    is_dttm: false
+    is_active: true
+    type: DECIMAL(38, 2)
+    groupby: true
+    filterable: true
+    expression: null
+    description: null
+    python_date_format: null
+  - column_name: is_deleted
+    verbose_name: null
+    is_dttm: false
+    is_active: true
+    type: BOOLEAN
+    groupby: true
+    filterable: true
+    expression: null
+    description: null
+    python_date_format: null
+  - column_name: order_status
+    verbose_name: null
+    is_dttm: false
+    is_active: true
+    type: VARCHAR
+    groupby: true
+    filterable: true
+    expression: null
+    description: null
+    python_date_format: null
+  - column_name: purchase_date
+    verbose_name: null
+    is_dttm: true
+    is_active: true
+    type: DATE
+    groupby: true
+    filterable: true
+    expression: null
+    description: null
+    python_date_format: null
+  - column_name: product_category
+    verbose_name: null
+    is_dttm: false
+    is_active: true
+    type: VARCHAR
+    groupby: true
+    filterable: true
+    expression: null
+    description: null
+    python_date_format: null
+  - column_name: seller_state
+    verbose_name: null
+    is_dttm: false
+    is_active: true
+    type: VARCHAR
+    groupby: true
+    filterable: true
+    expression: null
+    description: null
+    python_date_format: null
+version: 1.0.0
+database_uuid: 79bbb35b-561c-5745-90ba-985f5803b2d3

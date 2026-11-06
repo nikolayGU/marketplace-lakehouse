@@ -1,0 +1,108 @@
+table_name: mart_daily_sales
+main_dttm_col: purchase_date
+description: lake_ro.gold.mart_daily_sales
+default_endpoint: null
+offset: 0
+cache_timeout: null
+catalog: lake_ro
+schema: gold
+sql: null
+params: null
+template_params: null
+filter_select_enabled: true
+fetch_values_predicate: null
+extra: null
+normalize_columns: false
+uuid: 20afb06f-bbff-5f3b-b805-e50f4cddafda
+metrics:
+  - metric_name: count
+    verbose_name: COUNT(*)
+    metric_type: count
+    expression: COUNT(*)
+    description: null
+    d3format: null
+    extra: {}
+    warning_text: null
+columns:
+  - column_name: purchase_date
+    verbose_name: null
+    is_dttm: true
+    is_active: true
+    type: DATE
+    groupby: true
+    filterable: true
+    expression: null
+    description: null
+    python_date_format: null
+  - column_name: seller_state
+    verbose_name: null
+    is_dttm: false
+    is_active: true
+    type: VARCHAR
+    groupby: true
+    filterable: true
+    expression: null
+    description: null
+    python_date_format: null
+  - column_name: orders_count
+    verbose_name: null
+    is_dttm: false
+    is_active: true
+    type: BIGINT
+    groupby: true
+    filterable: true
+    expression: null
+    description: null
+    python_date_format: null
+  - column_name: canceled_orders
+    verbose_name: null
+    is_dttm: false
+    is_active: true
+    type: BIGINT
+    groupby: true
+    filterable: true
+    expression: null
+    description: null
+    python_date_format: null
+  - column_name: items_count
+    verbose_name: null
+    is_dttm: false
+    is_active: true
+    type: BIGINT
+    groupby: true
+    filterable: true
+    expression: null
+    description: null
+    python_date_format: null
+  - column_name: gmv
+    verbose_name: null
+    is_dttm: false
+    is_active: true
+    type: DECIMAL(38, 2)
+    groupby: true
+    filterable: true
+    expression: null
+    description: null
+    python_date_format: null
+  - column_name: freight_value
+    verbose_name: null
+    is_dttm: false
+    is_active: true
+    type: DECIMAL(38, 2)
+    groupby: true
+    filterable: true
+    expression: null
+    description: null
+    python_date_format: null
+  - column_name: canceled_gmv
+    verbose_name: null
+    is_dttm: false
+    is_active: true
+    type: DECIMAL(38, 2)
+    groupby: true
+    filterable: true
+    expression: null
+    description: null
+    python_date_format: null
+version: 1.0.0
+database_uuid: 79bbb35b-561c-5745-90ba-985f5803b2d3

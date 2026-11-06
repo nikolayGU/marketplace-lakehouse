@@ -76,6 +76,7 @@ jobs:
           - airflow/Dockerfile
           - docker/connect/Dockerfile
           - docker/minio/Dockerfile
+          - docker/superset/Dockerfile
           - observability/container-exporter/Dockerfile
           - oltp/Dockerfile
           - streaming/Dockerfile

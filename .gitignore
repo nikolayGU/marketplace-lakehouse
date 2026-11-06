@@ -18,3 +18,5 @@ docs/HANDOFF.local.md
 .idea/
 .vscode/
 .claude/settings.local.json
+# MCP client settings stay local (claude mcp add --scope local), never in the repository.
+.mcp.json

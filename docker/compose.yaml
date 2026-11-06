@@ -1,9 +1,9 @@
 # Rules: every service has profiles and log rotation, and every published port is bound to
 # ${BIND_IP} (required: compose refuses to start with it empty). A long-running service also has
 # a healthcheck, restart: unless-stopped and a memory limit. Exceptions: kafka-ui has no
-# healthcheck; the one-shot jobs minio-init, lakekeeper-migrate, lakekeeper-bootstrap and
-# spark-silver have no healthcheck and no restart (restart: "no", minio-init the default), and
-# minio-init has no memory limit.
+# healthcheck; the one-shot jobs minio-init, lakekeeper-migrate, lakekeeper-bootstrap,
+# spark-silver and superset-init have no healthcheck and no restart (restart: "no", minio-init
+# the default), and minio-init has no memory limit.
 # Images: every one taken from a registry is name:tag@sha256:<digest>; the tag is for the
 # reader and the digest is what runs (OPERATIONS.md, "Pinned images and actions"). The
 # lakehouse/* images are built from this repo, carry no digest and have pull_policy: never
@@ -73,7 +73,7 @@ services:
       KAFKA_PROCESS_ROLES: broker,controller
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
       KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,HOST://:29092
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,HOST://localhost:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,HOST://localhost:9092
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT,HOST:PLAINTEXT
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
@@ -160,7 +160,7 @@ services:
     # absent (a clean clone) compose would try the registry before it builds.
     pull_policy: never
     profiles: [core]
-    command: server /data
+    command: server /data --console-address :9001
     environment:
       MINIO_ROOT_USER: ${S3_ACCESS_KEY}
       MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY}
@@ -168,6 +168,7 @@ services:
       - minio:/data
     ports:
       - "${BIND_IP:?set BIND_IP in .env}:9000:9000"
+      - "${BIND_IP:?set BIND_IP in .env}:9001:9001"   # web console
     healthcheck:
       test: ["CMD-SHELL", "wget -q --spider http://localhost:9000/minio/health/live"]
       interval: 10s
@@ -216,7 +217,7 @@ services:
     environment: &lakekeeper-env
       LAKEKEEPER__PG_DATABASE_URL_WRITE: postgresql://${META_USER}:${META_PASSWORD}@postgres-meta:5432/${LAKEKEEPER_DB}
       # Encrypts the warehouse S3 keys stored in that database. Never change it once a warehouse exists.
-      LAKEKEEPER__PG_ENCRYPTION_KEY: ${LAKEKEEPER_ENCRYPTION_KEY:?add it to .env per OPERATIONS.md; make secrets skips an existing .env}
+      LAKEKEEPER__PG_ENCRYPTION_KEY: ${LAKEKEEPER_ENCRYPTION_KEY:?run make secrets, it appends the missing keys to an existing file}
     restart: "no"
     healthcheck:
       disable: true
@@ -788,16 +789,28 @@ services:
   # ---------------------------------------------------------------- bi
   superset:
     <<: *common
-    image: apache/superset:6.1.0@sha256:16b50bbef6648912a79e3293d418fefa743ce555d36c5af6b85d859119ed7f88
+    # Built from ./superset: the base image plus the postgres, trino and MCP drivers (ADR-026 rules).
+    build:
+      context: ./superset
+    image: lakehouse/superset:6.1.0
+    pull_policy: never
     profiles: [bi]
     depends_on:
       postgres-meta:
         condition: service_healthy
+      superset-init:
+        condition: service_completed_successfully
+      trino:
+        condition: service_healthy
+        required: false   # profile query: without Trino the charts are empty, the UI still works
     environment:
       SUPERSET_SECRET_KEY: ${SUPERSET_SECRET_KEY}
+      SUPERSET_DATABASE_URI: postgresql+psycopg2://${META_USER}:${META_PASSWORD}@postgres-meta:5432/${SUPERSET_DB}
+      SUPERSET_ADMIN_PASSWORD: ${SUPERSET_ADMIN_PASSWORD:?run make secrets, it appends the missing key}   # read by superset/check.py
       SUPERSET_CONFIG_PATH: /app/superset_config.py
     volumes:
       - ./superset/superset_config.py:/app/superset_config.py:ro
+      - ./superset/check.py:/app/check.py:ro
       - superset:/app/superset_home
     ports:
       - "${BIND_IP:?set BIND_IP in .env}:8088:8088"
@@ -811,6 +824,76 @@ services:
       resources:
         limits:
           memory: 1280M
+    networks: [lake]
+
+  # One-shot setup, safe to repeat: metadata migration, admin user, roles, Marketplace bundle.
+  superset-init:
+    image: lakehouse/superset:6.1.0
+    pull_policy: never
+    profiles: [bi]
+    depends_on:
+      postgres-meta:
+        condition: service_healthy
+      trino:
+        condition: service_healthy
+        required: false   # the bundle import lists Trino catalogs; without Trino it is skipped
+    restart: "no"
+    command: ["bash", "/init/init.sh"]
+    environment:
+      SUPERSET_SECRET_KEY: ${SUPERSET_SECRET_KEY}
+      SUPERSET_DATABASE_URI: postgresql+psycopg2://${META_USER}:${META_PASSWORD}@postgres-meta:5432/${SUPERSET_DB}
+      SUPERSET_ADMIN_PASSWORD: ${SUPERSET_ADMIN_PASSWORD:?run make secrets, it appends the missing key}
+      SUPERSET_CONFIG_PATH: /app/superset_config.py
+    volumes:
+      - ./superset/superset_config.py:/app/superset_config.py:ro
+      - ./superset/init.sh:/init/init.sh:ro
+      - ./superset/dashboards:/bundle:ro
+    logging: *logging
+    deploy:
+      resources:
+        limits:
+          memory: 1024M
+    networks: [lake]
+
+  # MCP endpoint of Superset for agents (http://127.0.0.1:5008/mcp). Every tool runs as `admin`
+  # (MCP_DEV_USERNAME). Through it an agent writes Superset metadata (charts, dashboards, saved
+  # queries). A rerun of `superset-init` keeps the database, datasets and charts as they are
+  # (imported with overwrite=False) but replaces the Marketplace dashboard and its chart list
+  # (the CLI imports dashboards with overwrite=True). The data boundary is the ACL of the Trino user
+  # `superset` (SELECT on lake_ro.gold marts, docker/trino/etc/rules.json) and allow_dml: false.
+  # FASTMCP_HTTP_* makes fastmcp check Host and Origin (421 and 403 otherwise); off by default,
+  # without it a web page could reach the port by DNS rebinding.
+  superset-mcp:
+    <<: *common
+    image: lakehouse/superset:6.1.0
+    pull_policy: never
+    profiles: [bi]
+    depends_on:
+      postgres-meta:
+        condition: service_healthy
+      superset-init:
+        condition: service_completed_successfully
+    command: ["superset", "mcp", "run", "--host", "0.0.0.0", "--port", "5008"]
+    environment:
+      SUPERSET_SECRET_KEY: ${SUPERSET_SECRET_KEY}
+      SUPERSET_DATABASE_URI: postgresql+psycopg2://${META_USER}:${META_PASSWORD}@postgres-meta:5432/${SUPERSET_DB}
+      SUPERSET_CONFIG_PATH: /app/superset_config.py
+      FASTMCP_HTTP_HOST_ORIGIN_PROTECTION: "true"
+      FASTMCP_HTTP_ALLOWED_HOSTS: '["127.0.0.1", "localhost", "::1"]'
+    volumes:
+      - ./superset/superset_config.py:/app/superset_config.py:ro
+    ports:
+      - "${BIND_IP:?set BIND_IP in .env}:5008:5008"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 5008), 3).close()"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
     networks: [lake]
 
   # ---------------------------------------------------------------- tools

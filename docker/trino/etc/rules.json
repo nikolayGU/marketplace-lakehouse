@@ -1,32 +1,32 @@
 {
   "catalogs": [
-    {"user": "grafana", "catalog": "lake_ro", "allow": "read-only"},
-    {"user": "grafana", "catalog": ".*", "allow": "none"},
+    {"user": "grafana|superset", "catalog": "lake_ro", "allow": "read-only"},
+    {"user": "grafana|superset", "catalog": ".*", "allow": "none"},
     {"catalog": ".*", "allow": "all"}
   ],
   "schemas": [
-    {"user": "grafana", "owner": false},
+    {"user": "grafana|superset", "owner": false},
     {"owner": true}
   ],
   "tables": [
-    {"user": "grafana", "catalog": "lake_ro", "schema": "gold", "table": "(fct|dim|mart)_.*", "privileges": ["SELECT"]},
-    {"user": "grafana", "privileges": []},
+    {"user": "grafana|superset", "catalog": "lake_ro", "schema": "gold", "table": "(fct|dim|mart)_.*", "privileges": ["SELECT"]},
+    {"user": "grafana|superset", "privileges": []},
     {"privileges": ["SELECT", "INSERT", "DELETE", "UPDATE", "OWNERSHIP", "GRANT_SELECT"]}
   ],
   "procedures": [
-    {"user": "grafana", "privileges": []},
+    {"user": "grafana|superset", "privileges": []},
     {"privileges": ["EXECUTE"]}
   ],
   "functions": [
-    {"user": "grafana", "privileges": []},
+    {"user": "grafana|superset", "privileges": []},
     {"privileges": ["EXECUTE"]}
   ],
   "queries": [
-    {"user": "grafana", "allow": ["execute"]},
+    {"user": "grafana|superset", "allow": ["execute"]},
     {"allow": ["execute", "view", "kill"]}
   ],
   "system_information": [
-    {"user": "grafana", "allow": []},
+    {"user": "grafana|superset", "allow": []},
     {"allow": ["read", "write"]}
   ]
 }

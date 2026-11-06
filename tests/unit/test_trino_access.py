@@ -1,4 +1,4 @@
-"""File-based access control in Trino: `grafana` reads marts of lake_ro.gold only, others as before.
+"""File-based access control in Trino: `grafana` and `superset` read marts of lake_ro.gold only.
 
 Before access control every Trino user could do everything. The rules file must keep that for
 dbt, Airflow, the CLI (`trino`) and any new user, and take it away from the Grafana datasource,
@@ -28,6 +28,7 @@ ETC = REPO / "docker" / "trino" / "etc"
 PROPERTIES = ETC / "access-control.properties"
 CATALOGS = ETC / "catalog"
 GRAFANA = "grafana"
+SUPERSET = "superset"
 READ_ONLY_CATALOG = "lake_ro"
 OTHERS = ["dbt", "airflow", "trino", "dashboard-check", "a-new-client"]
 ALL_TABLE_PRIVILEGES = {"SELECT", "INSERT", "DELETE", "UPDATE", "OWNERSHIP", "GRANT_SELECT"}
@@ -291,3 +292,47 @@ def test_a_user_named_like_grafana_is_not_matched_by_prefix() -> None:
     assert table_privileges("grafana-admin", *gold) == ALL_TABLE_PRIVILEGES
     assert table_privileges("grafana", *gold) == {"SELECT"}
     assert catalog_access("grafana-admin", "lake") == "all"
+
+
+@pytest.mark.parametrize("table", GOLD_TABLES)
+def test_superset_selects_gold_marts_of_the_read_only_catalog(table: str) -> None:
+    assert table_privileges(SUPERSET, READ_ONLY_CATALOG, "gold", table) == {"SELECT"}
+
+
+def test_superset_has_exactly_the_rights_of_grafana() -> None:
+    probes = [
+        (catalog, schema, table)
+        for catalog in ["lake", READ_ONLY_CATALOG, "system", "memory"]
+        for schema in ["gold", "silver", "bronze", "runtime", "brand_new_schema"]
+        for table in [*GOLD_TABLES, *HIDDEN_GOLD_TABLES, "category_translation", "orders"]
+    ]
+    for catalog, schema, table in probes:
+        assert table_privileges(SUPERSET, catalog, schema, table) == table_privileges(
+            GRAFANA, catalog, schema, table
+        ), (catalog, schema, table)
+        assert schema_owner(SUPERSET, catalog, schema) == schema_owner(GRAFANA, catalog, schema)
+        assert can_call(SUPERSET, catalog, schema, "register_table") == can_call(
+            GRAFANA, catalog, schema, "register_table"
+        )
+        assert can_use_function(SUPERSET, catalog, schema, "table_changes") == can_use_function(
+            GRAFANA, catalog, schema, "table_changes"
+        )
+    for catalog in ["lake", READ_ONLY_CATALOG, "system", "memory", "a-new-catalog"]:
+        assert catalog_access(SUPERSET, catalog) == catalog_access(GRAFANA, catalog), catalog
+    assert system_information(SUPERSET) == system_information(GRAFANA) == set()
+    for action in ["execute", "view", "kill"]:
+        assert query_allowed(SUPERSET, action, "dbt") == query_allowed(GRAFANA, action, "dbt")
+
+
+def test_superset_can_only_select_and_only_in_the_read_only_catalog() -> None:
+    assert catalog_access(SUPERSET, READ_ONLY_CATALOG) == "read-only"
+    assert catalog_access(SUPERSET, "lake") == "none"
+    for table in [*GOLD_TABLES, *HIDDEN_GOLD_TABLES]:
+        assert table_privileges(SUPERSET, "lake", "gold", table) == set()
+    assert not query_allowed(SUPERSET, "kill", "dbt")
+
+
+def test_a_user_named_like_superset_is_not_matched_by_prefix() -> None:
+    gold = (READ_ONLY_CATALOG, "gold", "fct_orders")
+    assert table_privileges("superset-admin", *gold) == ALL_TABLE_PRIVILEGES
+    assert table_privileges("superset", *gold) == {"SELECT"}

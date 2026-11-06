@@ -1,0 +1,117 @@
+dashboard_title: Marketplace
+description: Sales, categories, delivery SLA and cancellations of the gold marts (lake_ro).
+css: ''
+slug: marketplace
+uuid: 69bb9cd2-263f-5985-b593-1dd532e399b7
+position:
+  DASHBOARD_VERSION_KEY: v2
+  ROOT_ID:
+    type: ROOT
+    id: ROOT_ID
+    children:
+      - GRID_ID
+  GRID_ID:
+    type: GRID
+    id: GRID_ID
+    children:
+      - ROW-1
+      - ROW-2
+    parents:
+      - ROOT_ID
+  HEADER_ID:
+    id: HEADER_ID
+    type: HEADER
+    meta:
+      text: Marketplace
+  ROW-1:
+    type: ROW
+    id: ROW-1
+    children:
+      - CHART-daily_sales
+      - CHART-gmv_by_category
+    parents:
+      - ROOT_ID
+      - GRID_ID
+    meta:
+      background: BACKGROUND_TRANSPARENT
+  CHART-daily_sales:
+    type: CHART
+    id: CHART-daily_sales
+    children: []
+    parents:
+      - ROOT_ID
+      - GRID_ID
+      - ROW-1
+    meta:
+      width: 6
+      height: 50
+      chartId: 1
+      uuid: fedd884c-a753-54d2-8d42-7f11d9bc5540
+      sliceName: Daily sales
+  CHART-gmv_by_category:
+    type: CHART
+    id: CHART-gmv_by_category
+    children: []
+    parents:
+      - ROOT_ID
+      - GRID_ID
+      - ROW-1
+    meta:
+      width: 6
+      height: 50
+      chartId: 2
+      uuid: 38fb522a-dbb6-534c-9c83-5345c61a1240
+      sliceName: GMV by category, top 10
+  ROW-2:
+    type: ROW
+    id: ROW-2
+    children:
+      - CHART-delivery_sla
+      - CHART-cancellations
+    parents:
+      - ROOT_ID
+      - GRID_ID
+    meta:
+      background: BACKGROUND_TRANSPARENT
+  CHART-delivery_sla:
+    type: CHART
+    id: CHART-delivery_sla
+    children: []
+    parents:
+      - ROOT_ID
+      - GRID_ID
+      - ROW-2
+    meta:
+      width: 6
+      height: 50
+      chartId: 3
+      uuid: 203f021c-39d0-5703-baa6-abd82d61b845
+      sliceName: Delivery SLA by state
+  CHART-cancellations:
+    type: CHART
+    id: CHART-cancellations
+    children: []
+    parents:
+      - ROOT_ID
+      - GRID_ID
+      - ROW-2
+    meta:
+      width: 6
+      height: 50
+      chartId: 4
+      uuid: 664e832f-1b2d-578a-b059-ac81f90ac19c
+      sliceName: Cancellations
+metadata:
+  color_scheme: supersetColors
+  refresh_frequency: 0
+  timed_refresh_immune_slices: []
+  expanded_slices: {}
+  label_colors: {}
+  shared_label_colors: []
+  color_scheme_domain: []
+  cross_filters_enabled: true
+  native_filter_configuration: []
+  chart_configuration: {}
+  global_chart_configuration: {}
+published: true
+version: 1.0.0

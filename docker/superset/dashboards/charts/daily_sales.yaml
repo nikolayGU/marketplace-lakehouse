@@ -1,0 +1,96 @@
+slice_name: Daily sales
+description: GMV and items sold per purchase date; log axis because the two scales differ.
+certified_by: null
+certification_details: null
+viz_type: echarts_timeseries_line
+params:
+  datasource: 0__table
+  viz_type: echarts_timeseries_line
+  x_axis: purchase_date
+  time_grain_sqla: P1D
+  x_axis_sort_asc: true
+  metrics:
+    - expressionType: SQL
+      sqlExpression: SUM(gmv)
+      label: Total GMV
+      hasCustomLabel: true
+      optionName: metric_total_gmv
+    - expressionType: SQL
+      sqlExpression: SUM(items_count)
+      label: Items
+      hasCustomLabel: true
+      optionName: metric_items
+  groupby: []
+  adhoc_filters:
+    - expressionType: SIMPLE
+      subject: purchase_date
+      operator: TEMPORAL_RANGE
+      comparator: No filter
+      clause: WHERE
+      sqlExpression: null
+      isExtra: false
+      isNew: false
+      datasourceWarning: false
+      filterOptionName: filter_mart_daily_sales_purchase_date
+  order_desc: true
+  row_limit: 10000
+  truncate_metric: true
+  show_empty_columns: true
+  rich_tooltip: true
+  show_legend: true
+  legendType: scroll
+  legendOrientation: top
+  x_axis_title_margin: 15
+  y_axis_title_margin: 15
+  y_axis_title_position: Left
+  sort_series_type: sum
+  sort_series_ascending: false
+  color_scheme: supersetColors
+  seriesType: line
+  only_total: true
+  opacity: 0.2
+  markerSize: 6
+  zoomable: true
+  minorTicks: false
+  show_value: false
+  forecastEnabled: false
+  forecastPeriods: 10
+  forecastInterval: 0.8
+  logAxis: true
+  contributionMode: null
+  stack: null
+  y_axis_format: SMART_NUMBER
+  extra_form_data: {}
+  annotation_layers: []
+  show_extra_controls: false
+query_context: '{"datasource": {"id": 0, "type": "table"}, "force": false, "queries": [{"filters": [{"col":
+  "purchase_date", "op": "TEMPORAL_RANGE", "val": "No filter"}], "extras": {"having": "", "where": "",
+  "time_grain_sqla": "P1D"}, "applied_time_extras": {}, "annotation_layers": [], "series_limit": 0, "order_desc":
+  true, "url_params": {}, "custom_params": {}, "custom_form_data": {}, "columns": [{"timeGrain": "P1D",
+  "columnType": "BASE_AXIS", "sqlExpression": "purchase_date", "label": "purchase_date", "expressionType":
+  "SQL"}], "metrics": [{"expressionType": "SQL", "sqlExpression": "SUM(gmv)", "label": "Total GMV", "hasCustomLabel":
+  true, "optionName": "metric_total_gmv"}, {"expressionType": "SQL", "sqlExpression": "SUM(items_count)",
+  "label": "Items", "hasCustomLabel": true, "optionName": "metric_items"}], "orderby": [[{"expressionType":
+  "SQL", "sqlExpression": "SUM(gmv)", "label": "Total GMV", "hasCustomLabel": true, "optionName": "metric_total_gmv"},
+  false]], "row_limit": 10000, "series_columns": [], "is_timeseries": false, "post_processing": [{"operation":
+  "pivot", "options": {"index": ["purchase_date"], "columns": [], "aggregates": {"Total GMV": {"operator":
+  "mean"}, "Items": {"operator": "mean"}}, "drop_missing_columns": false}}, {"operation": "flatten"}]}],
+  "form_data": {"datasource": "0__table", "viz_type": "echarts_timeseries_line", "x_axis": "purchase_date",
+  "time_grain_sqla": "P1D", "x_axis_sort_asc": true, "metrics": [{"expressionType": "SQL", "sqlExpression":
+  "SUM(gmv)", "label": "Total GMV", "hasCustomLabel": true, "optionName": "metric_total_gmv"}, {"expressionType":
+  "SQL", "sqlExpression": "SUM(items_count)", "label": "Items", "hasCustomLabel": true, "optionName":
+  "metric_items"}], "groupby": [], "adhoc_filters": [{"expressionType": "SIMPLE", "subject": "purchase_date",
+  "operator": "TEMPORAL_RANGE", "comparator": "No filter", "clause": "WHERE", "sqlExpression": null, "isExtra":
+  false, "isNew": false, "datasourceWarning": false, "filterOptionName": "filter_mart_daily_sales_purchase_date"}],
+  "order_desc": true, "row_limit": 10000, "truncate_metric": true, "show_empty_columns": true, "rich_tooltip":
+  true, "show_legend": true, "legendType": "scroll", "legendOrientation": "top", "x_axis_title_margin":
+  15, "y_axis_title_margin": 15, "y_axis_title_position": "Left", "sort_series_type": "sum", "sort_series_ascending":
+  false, "color_scheme": "supersetColors", "seriesType": "line", "only_total": true, "opacity": 0.2, "markerSize":
+  6, "zoomable": true, "minorTicks": false, "show_value": false, "forecastEnabled": false, "forecastPeriods":
+  10, "forecastInterval": 0.8, "logAxis": true, "contributionMode": null, "stack": null, "y_axis_format":
+  "SMART_NUMBER", "extra_form_data": {}, "annotation_layers": [], "show_extra_controls": false}, "result_format":
+  "json", "result_type": "full"}'
+cache_timeout: null
+uuid: fedd884c-a753-54d2-8d42-7f11d9bc5540
+version: 1.0.0
+dataset_uuid: 20afb06f-bbff-5f3b-b805-e50f4cddafda

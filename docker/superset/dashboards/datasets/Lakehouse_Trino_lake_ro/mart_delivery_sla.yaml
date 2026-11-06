@@ -1,0 +1,98 @@
+table_name: mart_delivery_sla
+main_dttm_col: purchase_month
+description: lake_ro.gold.mart_delivery_sla
+default_endpoint: null
+offset: 0
+cache_timeout: null
+catalog: lake_ro
+schema: gold
+sql: null
+params: null
+template_params: null
+filter_select_enabled: true
+fetch_values_predicate: null
+extra: null
+normalize_columns: false
+uuid: c0822663-9010-5fb9-aa39-8d903267a354
+metrics:
+  - metric_name: count
+    verbose_name: COUNT(*)
+    metric_type: count
+    expression: COUNT(*)
+    description: null
+    d3format: null
+    extra: {}
+    warning_text: null
+columns:
+  - column_name: purchase_month
+    verbose_name: null
+    is_dttm: true
+    is_active: true
+    type: DATE
+    groupby: true
+    filterable: true
+    expression: null
+    description: null
+    python_date_format: null
+  - column_name: customer_state
+    verbose_name: null
+    is_dttm: false
+    is_active: true
+    type: VARCHAR
+    groupby: true
+    filterable: true
+    expression: null
+    description: null
+    python_date_format: null
+  - column_name: delivered_orders
+    verbose_name: null
+    is_dttm: false
+    is_active: true
+    type: BIGINT
+    groupby: true
+    filterable: true
+    expression: null
+    description: null
+    python_date_format: null
+  - column_name: on_time_orders
+    verbose_name: null
+    is_dttm: false
+    is_active: true
+    type: BIGINT
+    groupby: true
+    filterable: true
+    expression: null
+    description: null
+    python_date_format: null
+  - column_name: on_time_rate
+    verbose_name: null
+    is_dttm: false
+    is_active: true
+    type: DOUBLE
+    groupby: true
+    filterable: true
+    expression: null
+    description: null
+    python_date_format: null
+  - column_name: avg_delivery_days
+    verbose_name: null
+    is_dttm: false
+    is_active: true
+    type: DOUBLE
+    groupby: true
+    filterable: true
+    expression: null
+    description: null
+    python_date_format: null
+  - column_name: p90_delivery_days
+    verbose_name: null
+    is_dttm: false
+    is_active: true
+    type: DOUBLE
+    groupby: true
+    filterable: true
+    expression: null
+    description: null
+    python_date_format: null
+version: 1.0.0
+database_uuid: 79bbb35b-561c-5745-90ba-985f5803b2d3

@@ -1,0 +1,14 @@
+database_name: Lakehouse (Trino lake_ro)
+sqlalchemy_uri: trino://superset@trino:8080/lake_ro
+cache_timeout: null
+expose_in_sqllab: true
+allow_run_async: false
+allow_ctas: false
+allow_cvas: false
+allow_dml: false
+allow_file_upload: false
+extra:
+  allows_virtual_table_explore: true
+  disable_data_preview: false
+uuid: 79bbb35b-561c-5745-90ba-985f5803b2d3
+version: 1.0.0

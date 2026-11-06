@@ -10,7 +10,7 @@ help: ## list targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-24s %s\n", $$1, $$2}'
 
 # ---------------------------------------------------------------- setup
-secrets: ## create .env from .env.example with generated passwords (never overwrites)
+secrets: ## create .env from .env.example with generated passwords; an existing .env only gets the missing keys appended
 	uv run python scripts/make_env.py
 
 hooks: ## install pre-commit hooks into .git
