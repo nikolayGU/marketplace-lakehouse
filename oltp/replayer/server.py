@@ -14,7 +14,7 @@ PENDING = Gauge("replayer_pending_events", "Scheduled events not emitted yet")
 SPEED = Gauge("replayer_speed", "Virtual seconds per real second")
 
 
-def serve(port: int, status: Callable[[], dict[str, Any]]) -> ThreadingHTTPServer:
+def serve(port: int, status: Callable[[], dict[str, Any]], host: str) -> ThreadingHTTPServer:
     """Start the server on its own thread and hand back the handle so callers can shut it down."""
 
     class Handler(BaseHTTPRequestHandler):
@@ -38,7 +38,8 @@ def serve(port: int, status: Callable[[], dict[str, Any]]) -> ThreadingHTTPServe
         def log_message(self, fmt: str, *args: Any) -> None:
             """Silence per-request logging; the healthcheck alone would flood the log."""
 
-    # Binds inside the container only; compose publishes it on ${BIND_IP}.
-    server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
+    # Loopback unless the caller says otherwise: on a host the port stays private; in the
+    # container compose sets HTTP_HOST=0.0.0.0 and publishes it on ${BIND_IP}.
+    server = ThreadingHTTPServer((host, port), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server

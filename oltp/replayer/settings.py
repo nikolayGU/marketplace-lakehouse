@@ -43,6 +43,8 @@ class Settings(BaseSettings):
     # Subdirectory of data_dir the loader reads: the full Olist download or the committed sample.
     replay_data: Literal["raw", "sample"] = "raw"
 
+    # Loopback on a host; compose sets HTTP_HOST=0.0.0.0 so the container port can be published.
+    http_host: str = "127.0.0.1"
     http_port: int = 8000
     # How many due events one pass of the loop claims. Bounds memory and transaction size.
     replay_batch_size: int = 500

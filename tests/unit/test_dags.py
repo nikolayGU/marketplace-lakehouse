@@ -857,10 +857,86 @@ def test_only_a_real_true_enables_expire_and_compaction(
     assert expire_and_compact_enabled(params) is enabled
 
 
-def test_every_spark_step_of_maintenance_waits_for_the_switch() -> None:
-    source = (REPO / "airflow" / "dags" / "iceberg_maintenance.py").read_text()
+def dependency_edges(dag_file: str) -> set[tuple[str, str]]:
+    """(upstream, downstream) pairs from the `>>` expressions of a DAG file, lists and chains
+    included; Airflow is not on the host, so the file is read, not imported."""
+    tree = ast.parse((REPO / "airflow" / "dags" / dag_file).read_text())
+    edges: set[tuple[str, str]] = set()
+    unreadable = {"chain", "chain_linear", "cross_downstream", "set_upstream", "set_downstream"}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.LShift):
+            raise AssertionError(
+                f"{dag_file}:{node.lineno}: `<<` is not read by this check; use `>>`"
+            )
+        if isinstance(node, ast.Call):
+            func = node.func
+            called = func.id if isinstance(func, ast.Name) else getattr(func, "attr", "")
+            if called in unreadable:
+                raise AssertionError(
+                    f"{dag_file}:{node.lineno}: `{called}` is not read by this check; use `>>`"
+                )
 
-    assert "switch >> [rewrite_position_deletes, gold_commands]" in source
+    def names(node: ast.expr) -> set[str]:
+        if isinstance(node, ast.Name):
+            return {node.id}
+        if isinstance(node, ast.List):
+            return set().union(*(names(item) for item in node.elts))
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.RShift):
+            return names(node.right)
+        raise AssertionError(f"unsupported operand in a dependency: {ast.dump(node)}")
+
+    def walk(node: ast.expr) -> None:
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.RShift):
+            walk(node.left)
+            edges.update((a, b) for a in names(node.left) for b in names(node.right))
+
+    for statement in ast.walk(tree):
+        if isinstance(statement, ast.Expr):
+            walk(statement.value)
+    return edges
+
+
+def ancestors(edges: set[tuple[str, str]], node: str) -> set[str]:
+    found: set[str] = set()
+    todo = [node]
+    while todo:
+        current = todo.pop()
+        for up, down in edges:
+            if down == current and up not in found:
+                found.add(up)
+                todo.append(up)
+    return found
+
+
+@pytest.mark.parametrize(
+    "step", ["rewrite_position_deletes", "expire_silver", "compact_bronze", "gold_commands"]
+)
+def test_every_spark_step_of_maintenance_waits_for_the_switch(step: str) -> None:
+    edges = dependency_edges("iceberg_maintenance.py")
+
+    assert "switch" in ancestors(edges, step)
+
+
+def test_optimize_of_maintenance_does_not_wait_for_the_switch() -> None:
+    edges = dependency_edges("iceberg_maintenance.py")
+
+    assert "switch" not in ancestors(edges, "optimized")
+
+
+def test_dependency_edges_refuse_forms_it_cannot_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dags = tmp_path / "airflow" / "dags"
+    dags.mkdir(parents=True)
+    monkeypatch.setattr(sys.modules[__name__], "REPO", tmp_path)
+    for body in [
+        "optimized << switch",
+        "chain(switch, optimized)",
+        "switch.set_downstream(optimized)",
+    ]:
+        (dags / "d.py").write_text(body + "\n")
+        with pytest.raises(AssertionError, match="is not read by this check"):
+            dependency_edges("d.py")
 
 
 def test_airflow_env_pauses_new_dags() -> None:

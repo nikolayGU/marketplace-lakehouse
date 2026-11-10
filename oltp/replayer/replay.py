@@ -221,10 +221,7 @@ class Replayer:
         return len(events)
 
     def pending(self) -> int:
-        with self.conn.cursor() as cur:
-            cur.execute("select count(*) from replay.schedule where emitted_at is null")
-            row = cur.fetchone()
-        return int(row[0]) if row else 0
+        return state.pending(self.conn)
 
     def status(self) -> dict[str, object]:
         return {
@@ -246,7 +243,7 @@ def run(settings: Settings) -> int:
         # The container may come up before anyone has run `load`. Bind the port once and swap
         # what /status reports, rather than exiting into a restart loop or rebinding later.
         report: list[Callable[[], dict[str, object]]] = [lambda: {"state": "waiting for load"}]
-        server.serve(settings.http_port, lambda: report[0]())
+        server.serve(settings.http_port, lambda: report[0](), settings.http_host)
         replayer = None
         while replayer is None:
             try:

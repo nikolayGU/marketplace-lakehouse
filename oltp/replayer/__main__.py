@@ -16,17 +16,21 @@ drop schema if exists replay cascade;
 """
 
 
+NO_STATE = "no replay state; run `make replay-load`"
+
+
 def cmd_status(settings: Settings) -> int:
-    with psycopg.connect(settings.dsn) as conn:
-        state.ensure_schema(conn)
-        current = state.read(conn)
-        if current is None:
-            print("no replay state; run `make replay-load`")
-            return 1
-        with conn.cursor() as cur:
-            cur.execute("select count(*) from replay.schedule where emitted_at is null")
-            row = cur.fetchone()
-        pending = int(row[0]) if row else 0
+    """Read-only: never creates the replay schema, so a bare database is reported, not changed."""
+    try:
+        with psycopg.connect(settings.dsn) as conn:
+            current = state.read(conn)
+            if current is None:
+                print(NO_STATE)
+                return 1
+            pending = state.pending(conn)
+    except psycopg.errors.UndefinedTable:
+        print(NO_STATE)
+        return 1
     print(
         json.dumps(
             {

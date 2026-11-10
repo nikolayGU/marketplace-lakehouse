@@ -18,6 +18,9 @@ Never start `orchestrate` and `bi` together. Never start all profiles.
 names `spark-bronze kafka-connect trino`, and their `depends_on` pull in the rest of `core`
 (ADR-016). `make up` refuses any `PROFILE` that contains `core`, because that would start the
 replayer container, which plays at `REPLAY_SPEED` (2880, one virtual day per 30 s) until stopped.
+`postgres-meta` (the Lakekeeper, Airflow and Superset databases) belongs to `core` only: the other
+profiles depend on it with `required: false`, so `make up PROFILE=orchestrate|bi|query` expects
+`make start` first, and `make down PROFILE=orchestrate|bi` leaves the catalog database running.
 The rest of the history is a budget for the remaining weeks (D2 in
 `docs/planning/07-w3-spec.md`), so traffic comes in bursts from the host:
 `make replay-burst SECONDS=<n>` plays `n` real seconds at 720x and stops. `make replay-live`
@@ -29,7 +32,7 @@ starts the container on purpose, for a continuous demo; stop it with
 | Service | Profile | Port |
 |---|---|---|
 | postgres-oltp | `core` | 5432 |
-| postgres-meta | `core`, also `orchestrate` and `bi` | 5433 |
+| postgres-meta | `core` | 5433 |
 | kafka | `core` | 9092 (host listener, see below) |
 | kafka-connect | `core` | 8083 |
 | minio S3 API | `core` | 9000 (a browser is redirected to the console) |
@@ -472,7 +475,7 @@ Optional BI over the gold marts, with an MCP endpoint for agents. `make up PROFI
 | `superset` | 8088 | 1280M | UI and REST API, metadata in the database `superset` of `postgres-meta`; waits for `superset-init` |
 | `superset-mcp` | 5008 | 512M | the MCP server built into Superset 6.1 (`superset mcp run`), endpoint `http://127.0.0.1:5008/mcp`; waits for `superset-init` |
 
-(`docker/compose.yaml:790-897`.) The admin password is `SUPERSET_ADMIN_PASSWORD` in `.env`. Compose
+(Services `superset`, `superset-init` and `superset-mcp` in `docker/compose.yaml`.) The admin password is `SUPERSET_ADMIN_PASSWORD` in `.env`. Compose
 requires it (`${SUPERSET_ADMIN_PASSWORD:?...}`), so after updating the repository run `make secrets`
 once: it appends the keys of `.env.example` that `.env` lacks and never changes an existing one
 (`scripts/make_env.py`). Without it every compose command, whatever the profile, stops with that

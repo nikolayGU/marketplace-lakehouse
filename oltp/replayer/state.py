@@ -99,3 +99,10 @@ def read(conn: Conn) -> State | None:
         events_emitted=row[4],
         started_at=row[5],
     )
+
+
+def pending(conn: Conn) -> int:
+    with conn.cursor() as cur:
+        cur.execute("select count(*) from replay.schedule where emitted_at is null")
+        row = cur.fetchone()
+    return int(row[0]) if row else 0

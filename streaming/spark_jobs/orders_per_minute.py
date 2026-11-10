@@ -24,7 +24,7 @@ from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
 
 from spark_jobs.bronze_cdc_ingest import ENVELOPE
-from spark_jobs.catalog import build_session
+from spark_jobs.catalog import METADATA_CLEANUP, build_session, set_missing_properties
 from spark_jobs.contracts import MAX_EPOCH_MS, MIN_EPOCH_MS
 from spark_jobs.metrics import start_metrics
 from spark_jobs.settings import Settings
@@ -41,7 +41,7 @@ create table if not exists {target} (
 )
 using iceberg
 partitioned by (days(window_start))
-tblproperties ('format-version' = '2')
+tblproperties ('format-version' = '2', 'write.metadata.delete-after-commit.enabled' = 'true')
 """
 COLUMNS = ("window_start", "orders", "_updated_at")
 
@@ -81,6 +81,7 @@ def ensure_table(spark: SparkSession, target: str) -> None:
     columns = tuple(spark.table(target).columns)
     if columns != COLUMNS:
         raise RuntimeError(f"{target} has columns {columns}, expected {COLUMNS}")
+    set_missing_properties(spark, target, METADATA_CLEANUP)
 
 
 def upsert(batch: DataFrame, batch_id: int, target: str) -> None:

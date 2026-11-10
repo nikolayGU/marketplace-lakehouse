@@ -171,7 +171,7 @@ test-spark: ## the Spark unit tests, inside $(SPARK_IMAGE) because the host has 
 
 AIRFLOW_IMAGE ?= lakehouse/airflow:dev
 
-dags-check: ## every DAG file imports in $(AIRFLOW_IMAGE), offline, with docker/airflow/airflow.env; every DAG and task has a timeout that fits its retries, every Docker task removes its container with force
+dags-check: ## every DAG file imports in $(AIRFLOW_IMAGE), offline, with docker/airflow/airflow.env; every DAG and task has a timeout that fits its retries, every Docker task removes its container with force; every maintenance task but optimize waits for the switch
 	docker run --rm --network none -v "$(CURDIR)/airflow/dags":/opt/airflow/dags:ro \
 	  --env-file docker/airflow/airflow.env -e PYTHONPATH=/opt/airflow/dags \
 	  -e AIRFLOW__METRICS__STATSD_ON=False --entrypoint python $(AIRFLOW_IMAGE) -c \
@@ -188,8 +188,12 @@ dags-check: ## every DAG file imports in $(AIRFLOW_IMAGE), offline, with docker/
 	  bad += [d.dag_id + '.' + t.task_id + ': all attempts do not fit in dagrun_timeout' for d, t in pairs if d.dagrun_timeout and t.execution_timeout and (t.retries + 1) * t.execution_timeout + t.retries * t.retry_delay >= d.dagrun_timeout]; \
 	  bad += [d.dag_id + '.' + t.task_id + ': auto_remove is not force' for d, t in docker if kw(t).get('auto_remove') != 'force']; \
 	  bad += [d.dag_id + '.merge: no container_name' for d, t in pairs if (d.dag_id, t.task_id) == ('silver_upsert', 'merge') and not t.container_name]; \
+	  m = b.dags['iceberg_maintenance']; \
+	  sw = 'expire_and_compact'; \
+	  bad += ['iceberg_maintenance.' + t.task_id + ': does not wait for ' + sw for t in m.tasks if t.task_id not in (sw, 'optimize') and sw not in t.get_flat_relative_ids(upstream=True)]; \
+	  bad += ['iceberg_maintenance.optimize waits for ' + sw for t in m.tasks if t.task_id == 'optimize' and sw in t.get_flat_relative_ids(upstream=True)]; \
 	  assert not bad, bad; \
-	  print(len(b.dags), 'dags import, timeouts, retry budget and force removal checked:', sorted(b.dags))"
+	  print(len(b.dags), 'dags import, timeouts, retry budget, force removal and the maintenance switch checked:', sorted(b.dags))"
 
 watermark-demo: ## orders_per_minute on a lab topic: inside the watermark updates, behind it drops (needs make start)
 	bash scripts/demo/watermark.sh

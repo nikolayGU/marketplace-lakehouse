@@ -1,5 +1,6 @@
 -- Grain: order_id, order_item_id. Deleted items stay with is_deleted: canceled GMV counts them
--- (D4, D8). The left join keeps an item whose order is missing; the relationships test fails then.
+-- (D4, D8). The left join keeps an item whose order is missing; a live one fails the relationships
+-- test (the test skips deleted items: an order is deleted only after its items).
 select
     i.order_id,
     i.order_item_id,

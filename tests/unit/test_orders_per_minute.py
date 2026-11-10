@@ -267,3 +267,27 @@ def test_upsert_runs_the_stateful_batch_once(spark: SparkSession, tmp_path: Path
     state = progress[-1]["stateOperators"][0]
     assert state["numRowsDroppedByWatermark"] == 1
     assert state["numRowsTotal"] == 2
+
+
+@needs_iceberg
+def test_the_table_cleans_its_metadata_new_or_existing(spark: SparkSession) -> None:
+    key = "write.metadata.delete-after-commit.enabled"
+    spark.sql("create namespace if not exists lake.silver")
+
+    def prop(table: str) -> str | None:
+        rows = spark.sql(f"show tblproperties {table}").collect()
+        return {r["key"]: r["value"] for r in rows}.get(key)
+
+    fresh = "lake.silver.opm_cleanup_new"
+    ensure_table(spark, fresh)
+    assert prop(fresh) == "true"
+
+    old = "lake.silver.opm_cleanup_old"
+    spark.sql(
+        f"create table {old} (window_start timestamp_ntz, orders bigint, _updated_at timestamp) "
+        "using iceberg partitioned by (days(window_start)) "
+        "tblproperties ('format-version' = '2')"
+    )
+    assert prop(old) is None
+    ensure_table(spark, old)
+    assert prop(old) == "true"

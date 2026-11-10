@@ -42,6 +42,8 @@ models:
               arguments:
                 to: ref('fct_orders')
                 field: order_id
+              config:
+                where: "not is_deleted"
       - name: order_item_id
         data_tests: [not_null]
       - name: product_id
@@ -50,12 +52,16 @@ models:
               arguments:
                 to: ref('dim_products')
                 field: product_id
+              config:
+                where: "not is_deleted"
       - name: seller_id
         data_tests:
           - relationships:
               arguments:
                 to: ref('dim_sellers')
                 field: seller_id
+              config:
+                where: "not is_deleted"
   - name: dim_customers
     description: >
       One row per person (customer_unique_id) with at least one order in silver (D3); the address

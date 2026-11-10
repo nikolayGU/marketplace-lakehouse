@@ -24,7 +24,9 @@ def _published_ports() -> list[tuple[str, str]]:
     ]
 
 
-def _compose_config(env_file: Path, bind_ip: str | None) -> subprocess.CompletedProcess[str]:
+def _compose_config(
+    env_file: Path, bind_ip: str | None, profile: str = "*"
+) -> subprocess.CompletedProcess[str]:
     # `config -q` prints nothing on success; without it the output holds every secret of the file.
     env = {k: v for k, v in os.environ.items() if k != "BIND_IP"}
     if bind_ip is not None:
@@ -32,7 +34,7 @@ def _compose_config(env_file: Path, bind_ip: str | None) -> subprocess.Completed
     return subprocess.run(
         [
             *("docker", "compose", "--env-file", str(env_file), "-f", str(COMPOSE)),
-            *("--profile", "*", "config", "-q"),
+            *("--profile", profile, "config", "-q"),
         ],
         capture_output=True,
         text=True,
@@ -171,3 +173,76 @@ def test_superset_mcp_checks_host_and_origin_of_every_request() -> None:
 
     assert env["FASTMCP_HTTP_HOST_ORIGIN_PROTECTION"] == "true"
     assert json.loads(env["FASTMCP_HTTP_ALLOWED_HOSTS"]) == ["127.0.0.1", "localhost", "::1"]
+
+
+def _load_services(text: str | None = None) -> dict[str, dict[str, Any]]:
+    compose: dict[str, Any] = yaml.safe_load(text if text is not None else COMPOSE.read_text())
+    return dict(compose["services"])
+
+
+def _profile_violations(services: dict[str, dict[str, Any]]) -> list[str]:
+    problems: list[str] = []
+    for name, service in services.items():
+        if name != "postgres-meta" and "core" not in service.get("profiles", []):
+            continue
+        extra = [p for p in service.get("profiles", []) if p != "core"]
+        if extra:
+            problems.append(f"{name} is core but also in {extra}")
+    profiles = {p for s in services.values() for p in s.get("profiles", [])}
+    for profile in sorted(profiles):
+        enabled = {n for n, s in services.items() if profile in s.get("profiles", [])}
+        for name in sorted(enabled):
+            deps = services[name].get("depends_on", {})
+            for dep, spec in deps.items() if isinstance(deps, dict) else [(d, {}) for d in deps]:
+                if dep not in enabled and spec.get("required", True) is not False:
+                    problems.append(f"{profile}: {name} requires {dep} outside the profile")
+    return problems
+
+
+def test_every_profile_is_valid_alone_and_core_is_not_shared() -> None:
+    assert _profile_violations(_load_services()) == []
+
+
+@pytest.mark.skipif(not _docker_compose_available(), reason="docker compose is not installed")
+@pytest.mark.parametrize(
+    "profile", sorted({p for s in _load_services().values() for p in s.get("profiles", [])})
+)
+def test_compose_accepts_every_profile_alone(profile: str) -> None:
+    result = _compose_config(ENV_EXAMPLE, None, profile)
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_profile_check_fails_on_the_pre_fix_layout() -> None:
+    broken = _load_services()
+    broken["postgres-meta"]["profiles"] = ["core", "orchestrate", "bi"]
+    broken["trino"]["depends_on"]["postgres-meta"] = {"condition": "service_healthy"}
+
+    problems = _profile_violations(broken)
+
+    assert any("postgres-meta is core but also in" in p for p in problems)
+    assert any(p.startswith("query: trino requires postgres-meta") for p in problems)
+
+
+_HEALTH_OK = '{"metadatabase": {"status": "healthy"}, "scheduler": {"status": null}}'
+_HEALTH_BAD = '{"metadatabase": {"status": "unhealthy"}, "scheduler": {"status": "healthy"}}'
+
+
+def _run_api_server_healthcheck(body: str) -> int:
+    test = _load_services()["airflow-api-server"]["healthcheck"]["test"]
+    assert test[0] == "CMD-SHELL"
+    _, _, tail = test[1].partition("|")
+    assert tail, "healthcheck must inspect the response body"
+    script = f"printf '%s' '{body}' |{tail}"
+    return subprocess.run(["sh", "-c", script], capture_output=True, check=False).returncode
+
+
+def test_api_server_healthcheck_passes_only_on_healthy_metadatabase() -> None:
+    assert _run_api_server_healthcheck(_HEALTH_OK) == 0
+    assert _run_api_server_healthcheck(_HEALTH_BAD) != 0
+
+
+def test_replayer_container_listens_on_all_interfaces() -> None:
+    env = _load_services()["oltp-replayer"]["environment"]
+
+    assert env["HTTP_HOST"] == "0.0.0.0"
