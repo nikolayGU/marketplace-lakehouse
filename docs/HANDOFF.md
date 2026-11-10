@@ -2,6 +2,40 @@
 
 Обновляется в конце каждой недели или смыслового блока. Читать первым в каждой сессии.
 
+## Состояние на 10.11.2026, вечер: R-01 память, правда в документах, smoke
+
+Запрос владельца ~17:18 UTC «сделай все что действительно необходимо» в ответ на три открытых
+пункта класса C (ниже первые три строки). Оркестратор проверил каждый по данным и сделал нужное;
+итог по бэклогу: `docs/planning/19-review-2026-11-10.md`, раздел 5, «Итог 10.11, вечер».
+
+| Что | Команда | Результат |
+|---|---|---|
+| `make up PROFILE=obs` | `--profile obs up -d --dry-run --no-build`; сервисы compose против коммитов на момент создания контейнеров; `docker inspect`, `printenv` одной переменной | не нужен: у `prometheus` и трёх экспортеров отличается только строка образа (`tag@sha256`, закрепление 30.10) и текст `${BIND_IP:?}`; ID работающих образов равны закреплённым digest; у `grafana` лимит 384M и `GF_PLUGINS_PREINSTALL_SYNC` уже действовали. Сойдутся при следующем `make up PROFILE=obs` без смены образов |
+| `minio`, `kafka-connect` «на прежних сборках» | `docker inspect -f '{{json .ImageManifestDescriptor}}'`, `docker image ls --tree` | запись утра неверна: контейнеры работают на манифестах текущих тегов (`cfdc8dde2542` у connect, `cf129f2f8fc8` у minio); сборка 15:44 взяла кэш, меняется только digest индекса. Пересоздавать `minio` не нужно |
+| `make replay-burst SECONDS=30` | | не запускался: полный поток на новом коде проверяет smoke (минута реплея на выборке с холодного клона); бюджет реплея только по «ок» на точный текст |
+| R-01 | cgroup внутри контейнеров (`memory.stat`, `memory.events`, `memory.swap.*`, `memory.pressure`); Prometheus 7d | swap у контейнеров до размера лимита, `docker stats` его не видит. Grafana anon 129 + swap 191 MiB при 384M, `events max` 2.73 млн, `pswpin` 7.79 млн страниц; exporter anon 24 + swap 28 при 64M; Connect heap max 1024, RSS до 1375 MiB (`max_over_time(process_resident_memory_bytes{job="kafka-connect"}[7d])`), anon 362 + swap 261 |
+| Код R-01 | `implementer` 3 захода; `make check`; `reviewer` 2 круга | `9ea802d`: Connect 1792M, Grafana 512M, exporter 128M, `superset-init` `healthcheck: disable`; тесты падают на старых значениях; `make check` 1881 passed, 146 skipped; круг 1 «принять с замечаниями» (4 средних), круг 2 «принять с замечаниями» (замечания только в Markdown и комментариях) |
+| Правда в документах | `docs-writer` 2 круга, DECISIONS оркестратор, `reviewer` документов | `3e00084`: R-60, PF-50, PF-51, около 30 правок в 9 файлах; links 122 из 122; grep стоп-фраз пуст |
+| Живой шаг | `--profile core up -d --no-deps kafka-connect` 18:09:35; `--profile obs up -d --no-deps grafana container-exporter` 18:09:38 (перед ними `--dry-run`) | healthy к 18:10:09; лимиты 1792, 512, 128 MiB; connector и task RUNNING, 17 плагинов; `shop_slot` active, `active_pid` 39 -> 9024; 8 из 8 targets; Grafana 200, `check_dashboards.py` `queries ok: 32` и 7 idle-панелей Spark до первого батча, rc 0. Память: Connect на старте anon 1131, пик 1652 из 1792, `events max` 0; Grafana через 6 мин anon 179, file 295, swap 60 MiB от стартового всплеска, не растёт, `events max` +18 за минуту (было около 100 в секунду); exporter пик 69 из 128 |
+| Цикл verify | пауза трёх DAG 18:11:04 (REST), stop scheduler 18:11:10, `make verify`, start | verify ok 7 из 7 (full 18:12:00Z); DAG сняты с паузы 18:12:30 |
+| Push | `git push origin main` | `63e5650..3e00084` |
+| CI и smoke | `gh run watch`; `gh workflow run smoke.yml` | ci 42872544001 на `3e00084` success, 12 из 12 job; smoke 42872707771 на `3e00084` success, 18:11:51-18:22:38 UTC (10 мин 47 с): bootstrap, минута реплея и verify, повторный bootstrap |
+| Память через 15 мин | cgroup внутри контейнеров 18:24 | Grafana anon 176, swap 61 (не растёт), `events max` 4130 (около 0.6 в секунду); Connect anon 1121, swap 31 (общее давление VM, `events max` 0), пик 1652 из 1792 |
+| About на GitHub | `gh repo edit --description ... --add-topic superset --add-topic minio --add-topic prometheus` | описание с Airflow, Prometheus, Grafana, Superset; R-68 закрыт |
+
+Ошибки сессии: оркестратор сначала признал Grafana и container-exporter здоровыми («у лимита кэш
+страниц»), не учтя swap; поймал ревьюер круга 1, лимиты подняты. Утренняя запись о «прежних
+сборках» `minio` и `kafka-connect` спутала digest индекса с манифестом. Пик памяти 7.79 GiB
+был артефактом подзапроса с шагом 1 мин, верный пик 8.33 GiB (06.11 16:20:30 UTC); оркестратор
+сначала велел убрать верное число 8.33 из OPERATIONS, вернул ревьюер круга 2. Исполнитель первой
+версии теста прочитал `KAFKA_HEAP` вместо `CONNECT_HEAP` (поймал сам на красном прогоне).
+
+Открыто: R-61 ADR-027 и ADR-028 (текст на «ок»); дашборд Superset (макет, вариант A); Grafana на
+512M проверить через сутки (файл 19, раздел 8; при росте swap отключить ненужные встроенные
+плагины); `superset-init` применит `healthcheck: disable` при следующем `make up PROFILE=bi`;
+живой тест полного потока `make replay-burst SECONDS=30` только по «ок» на точный текст; чистка
+R-40..R-46, R-62..R-66; решения R-25, R-45, R-46.
+
 ## Состояние на 10.11.2026: холодный старт п. 11, ревью кода и документов (файл 19), карточка Д1
 
 Сессия с 13:38 UTC по запросу владельца: этап проекта, лицензия и описание, обязательные баги,
@@ -433,6 +467,7 @@ unit), smoke красный (образы MinIO), W5-T05b не начата, г�
 
 | Дата UTC | Действие | Кто дал | Где видно |
 |---|---|---|---|
+| 10.11 ~17:18 | «сделай все что действительно необходимо» в ответ на три пункта C (`make up PROFILE=obs`, пересоздание `minio` и `kafka-connect`, `make replay-burst SECONDS=30`): оркестратор отобрал по данным; сделано пересоздание `kafka-connect`, `grafana` и `container-exporter` на лимитах R-01 (18:09), цикл verify, коммиты `9ea802d` и `3e00084`, push, `gh repo edit` (About и topics), smoke `workflow_dispatch`; не сделано как ненужное: obs целиком, `minio`, реплей | владелец в Claude Code | этот раздел, таблица выше |
 | 10.11 ~15:40 | «так сделай и проверь все и связанность всех сервисов»: `TRINO_XMX=2g make start` 15:44 (пересоздал и `postgres-oltp`, `trino` с ожидающим конфигом), пауза `dq_checks` на время старта, удаление старого образа Spark (не понадобилось), ручной запуск `dq_checks` 15:47, проверка связности; docs-коммит и push по рутине сессии | владелец в Claude Code | этот раздел, таблица выше |
 | 10.11 ~15:30 | «а вообще ок сделай сам, я держатель» на три точные команды: `docker compose --env-file .env -f docker/compose.yaml --profile orchestrate up -d --no-deps airflow-api-server`; `... --profile core build spark-bronze`; `... --profile stateful up -d --no-deps --force-recreate spark-orders-per-minute`; держатель прав MIT: владелец (записан логин `nikolayGU`); docs-коммит и push по рутине сессии | владелец в Claude Code | этот раздел, таблица выше |
 | 10.11 14:28 | PF-01: `docker exec lakehouse-prometheus-1 kill -HUP 1`; `/api/v1/rules` 16 с `GoldStaleAtRest` | вопрос с вариантами 10.11 ~14:27, текст команды в варианте «Defects and protection» | файл 18, «Обновление 10.11» |

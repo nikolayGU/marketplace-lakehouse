@@ -1,6 +1,6 @@
 # Следующая сессия: поддержка, холодный старт и выбор карточки (ревью 10.11, Д1)
 
-Обновлено 10.11.2026. Текст ниже копируется в новую сессию как есть. Запуск из корня репо в WSL:
+Обновлено 10.11.2026, вечер. Текст ниже копируется в новую сессию как есть. Запуск из корня репо в WSL:
 `claude --model opus --permission-mode acceptEdits` (оркестратор на Opus; не `--bare`: он
 выключает хуки; не `bypassPermissions`).
 
@@ -25,18 +25,24 @@ docs/planning/15-audit-2026-10-30.md, раздел 7 спеки 14; статус
 - Живые шаги 10.11 по «ок»: airflow-api-server пересоздан (новый healthcheck),
   lakehouse/spark:dev собран из 6ff434b, spark-orders-per-minute пересоздан (у
   silver.orders_per_minute свойство очистки metadata true), TRINO_XMX=2g make start пересоздал
-  spark-bronze, postgres-oltp и trino; проверка связности всех сервисов зелёная (HANDOFF,
-  «Состояние на 10.11»). Осталось (C): make up PROFILE=obs пересоздаст grafana, prometheus и три
-  экспортера (конфиг ждёт с 30.10); minio и kafka-connect на прежних сборках образов (make start
-  пересобирает их, но контейнеры не пересоздаёт; сборка MinIO невоспроизводима, PF-26);
-  oltp-replayer пересоздастся при следующем replay-live; живой тест полного потока
-  make replay-burst SECONDS=30 только по «ок» на точный текст.
+  spark-bronze, postgres-oltp и trino; проверка связности всех сервисов зелёная.
+- Вечер 10.11 («сделай все что действительно необходимо», HANDOFF «Состояние на 10.11.2026,
+  вечер»): R-01 закрыт коммитом 9ea802d (лимиты kafka-connect 1792M, grafana 512M,
+  container-exporter 128M по данным cgroup со swap; superset-init healthcheck disable), три
+  контейнера пересозданы 18:09; правда в документах (R-60, PF-50, PF-51) коммитом 3e00084; About и
+  topics на GitHub (R-68 закрыт); ci 42872544001 и smoke 42872707771 на 3e00084 success. Не нужны и не
+  делались: make up PROFILE=obs (у prometheus и трёх экспортеров отличается только строка образа
+  с digest, образы те же), пересоздание minio (работает на манифесте текущего тега), реплей.
+  oltp-replayer пересоздастся при следующем replay-live, superset-init перезапустится при
+  следующем make up PROFILE=bi; живой тест полного потока make replay-burst SECONDS=30 только по
+  «ок» на точный текст.
 - Решения владельца 10.11: лицензия кода MIT (LICENSE.md, держатель владелец, логин nikolayGU),
   выборка и seed Olist под CC BY-NC-SA 4.0 (README «Data»); дашборд Superset сначала макетом
   (Design-артефакт в Claude на реальных числах gold), потом код, вариант A (файл 19, раздел 6).
-- Память (файл 19, раздел 7): 20 контейнеров около 7.5 GiB из 11 GiB WSL, пик суммы за неделю
-  7.79 GiB; у потолка Kafka Connect 1433 из 1536 MiB и Grafana 384 из 384 (R-01): закрыть до
-  длинного теста полного потока.
+- Память (файл 19, раздел 7): 20 контейнеров 6.0 GiB в docker stats при Trino -Xmx2g, WSL
+  11.7 GiB; пик суммы за неделю 8.33 GiB (06.11 16:20:30 UTC, живой E2E; шаг подзапроса 15 s, шаг
+  1 мин его пропускает); docker stats не видит swap (у контейнеров swap до размера лимита), смотреть
+  cgroup внутри контейнера. Grafana на 512M проверить через сутки (файл 19, раздел 8).
 - Реплей: virtual_now 2026-07-18 06:02:03, осталось 21 701 событие (около 33 мин replay-live при
   2880); любая порция только по «ок» на точный текст.
 
@@ -51,14 +57,14 @@ docs/planning/15-audit-2026-10-30.md, раздел 7 спеки 14; статус
    без force); (б) что брать (список ниже) или ничего; (в) точный текст действий класса C, если
    выбранная карточка их требует.
 3. Кандидаты, каждый по циклу задачи и только по выбору владельца:
-   - правда в документах: R-60 ложные утверждения, R-61 ADR-027 Superset с MCP и ADR-028
-     lake_ro, PF-50, PF-51, PF-52; остаток R-68: атрибуция в dbt/seeds/_seeds.yml, About и topics
-     на GitHub через gh repo edit (видно снаружи, C);
+   - R-61: ADR-027 Superset с MCP и ADR-028 lake_ro (текст на «ок» владельца); PF-52 схема
+     ARCHITECTURE без postgres-meta и пути MCP;
+   - Grafana: проверка через сутки на 512M; при росте swap отключить ненужные встроенные плагины
+     (файл 19, раздел 8);
    - дашборд Superset: superpowers brainstorming, макет варианта A в Claude (Artifact, intent
      design) на числах gold через MCP только чтением, карточка с «Готово, когда», YAML бандла и
      тесты, make up PROFILE=bi по «ок», скриншот владельца в README; свой skill после первого
      дашборда;
-   - R-01 память до теста полного потока (Connect, Grafana, container-exporter; пересоздание C);
    - чистка: R-40 слой отката JDBC (строка в ADR-005, «ок»), R-62..R-66 документы и история в
      коде, R-41..R-44 упрощения, R-27 ускорение тестов (патч guard применяет владелец);
    - решения владельца: R-25 dbt_source_freshness, R-45 токенный разбор guard, R-46 инкремент
@@ -103,6 +109,11 @@ push origin main без force по «ок». Доказательство: ко�
   контейнер lakehouse-silver-merge (раннбук 409 в OPERATIONS «Timeouts»); docker rm только по «ок».
 - MCP Superset подключён в Claude Code только локально (claude mcp add --scope local); картинок
   он не отдаёт (только URL, ascii, таблица); скриншоты делает владелец в браузере.
+- Образы под containerd store: .Image контейнера это digest индекса, он меняется при каждой
+  сборке даже из кэша; сверять docker inspect -f '{{json .ImageManifestDescriptor}}' с
+  docker image ls --tree. Память: docker stats и RSS не видят swap, смотреть memory.stat,
+  memory.swap.current и memory.events внутри контейнера; пики суммы в Prometheus брать с шагом
+  подзапроса 15 s.
 - ContainerRestarting горит 15 минут после любого рестарта (и после stop/start scheduler в цикле
   verify, и после второй попытки merge): это не поломка, если рестарт твой.
 - Сон хоста роняет прогоны Airflow в полёте: это не поломка.
