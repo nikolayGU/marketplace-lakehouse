@@ -6,12 +6,20 @@
 |---|---|---|
 | Daily work on ingestion | `make start` | ~11 GB limits, ~7 GB real |
 | Working on dbt / Airflow | `make start && make up PROFILE=orchestrate` (Trino `Xmx` drops to 2g via `TRINO_XMX`); stop `orchestrate` when not working on batch | ~13 GB limits, ~9 GB real |
-| Full pipeline with monitoring | `TRINO_XMX=2g make start && make up PROFILE=orchestrate,obs` | 13.7 GB limits (sum of `deploy` limits, grafana 384M since 2026-10-29), 5.2 GB real at rest (2026-10-19, before the Trino plugin) |
+| Full pipeline with monitoring | `TRINO_XMX=2g make start && make up PROFILE=orchestrate,obs` | 14.2 GB limits (14496 MiB on 2026-11-10: `core` without `oltp-replayer` 7680, `trino` 3584, `orchestrate` 2100, `obs` 1132, sum of `deploy` limits, one-shot jobs not counted; raised that day: `kafka-connect` 1536M to 1792M, heap 1g plus native JVM memory, RSS up to 1375 MiB; `grafana` 384M to 512M, one process per datasource plugin, constant swapping; `container-exporter` 64M to 128M, each `/metrics` walks the Docker API), 5.2 GB real at rest (2026-10-19, before the Trino plugin) |
 | Demo dashboard (optional Superset and its MCP endpoint, [section](#superset-profile-bi)) | `make down PROFILE=orchestrate && make up PROFILE=bi` | swap orchestrate for bi; ~1.8 GB of limits running (superset 1280M, superset-mcp 512M) and 1024M while the one-shot `superset-init` runs; needs `SUPERSET_ADMIN_PASSWORD` in `.env` (`make secrets`) |
 | Stateful job (`orders_per_minute`) | `make up PROFILE=stateful` on top of `core` | +1.75 GB limit; 495 MiB at rest, 842 MiB while reading 24 h of the topic (2026-10-23) |
 | Debugging Kafka visually | `make up PROFILE=tools` for 15 minutes, then `make down PROFILE=tools` | +0.4 GB |
 
-Never start `orchestrate` and `bi` together. Never start all profiles.
+All profiles except `tools` (core, query, stateful, orchestrate, obs, bi) ran together on
+2026-11-10: 20 containers, 6.0 GiB in `docker stats` at rest with Trino at `-Xmx2g` (7.5 GiB
+earlier that day at `-Xmx2500m`). The largest sum over the 7 days before was 8.33 GiB, on
+2026-11-06 at 16:20:30 UTC during the live end-to-end run to gold and Superset, with the silver
+merge container at 0.96 GiB (Prometheus, `sum(docker_container_memory_usage_bytes)` at the 15 s
+scrape step; a 1 m step misses it). No OOM; WSL sees 11.7 GiB. Conditions: `TRINO_XMX=2g`, no
+`tools`, no parallel `make test-spark` (1.1 to 1.2 GiB, no limit), no image builds and no `make
+dags-check` meanwhile. `tools` and a second stack still do not run together with it. `docker stats`
+leaves out swap: a container may swap up to its own limit.
 
 `core` includes Lakekeeper, the Iceberg catalog, since the cutover on 2026-10-08; there is no
 `rest` profile any more. `make start` brings up `core` without `oltp-replayer`, plus `trino`: it
@@ -377,11 +385,7 @@ Encryption key. `LAKEKEEPER_ENCRYPTION_KEY` encrypts the warehouse's S3 keys ins
 never changes a key, it only appends the keys of `.env.example` that are missing (so a new service
 can ship its secret), and without the key every compose command fails, `make lint` and `make up`
 included, whatever the profile (`required variable LAKEKEEPER_ENCRYPTION_KEY is missing a
-value`). Add it to an existing `.env` once, from the repo root; the command prints nothing:
-
-```
-grep -q '^LAKEKEEPER_ENCRYPTION_KEY=' .env || printf 'LAKEKEEPER_ENCRYPTION_KEY=%s\n' "$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')" >> .env
-```
+value`). Run `make secrets` once on an existing `.env` to add it.
 
 Never change the key once the warehouse exists: Lakekeeper could no longer decrypt its S3 keys,
 and it writes every new metadata file with them, so commits depend on the key. Sending the
@@ -465,9 +469,10 @@ that owns it.
 ## Superset (profile `bi`)
 
 Optional BI over the gold marts, with an MCP endpoint for agents. `make up PROFILE=bi` on top of
-`core` and `query` (swap `orchestrate` for `bi`, never together); three services, all built from
-`docker/superset/Dockerfile` (Superset 6.1.0 plus the drivers `psycopg2-binary`, `trino` and
-`fastmcp`, pinned by `constraints.txt`):
+`core` and `query` (swap `orchestrate` for `bi` to stay lean; together they fit under the conditions
+in "Profiles and what runs together"); three services, all built from `docker/superset/Dockerfile`
+(Superset 6.1.0 plus the drivers `psycopg2-binary`, `trino` and `fastmcp`, pinned by
+`constraints.txt`):
 
 | Service | Port | Limit | Does |
 |---|---|---|---|
@@ -531,18 +536,24 @@ container) and `airflow-dag-processor`. One image, `lakehouse/airflow:dev` from
 `postgres-meta`; the same instance holds `lakekeeper` and `iceberg_catalog`, which nothing here
 touches.
 
-Before the first start, once per `.env`, from the repo root (each command prints nothing):
+Before the first start, once per `.env`, from the repo root: `make secrets`. It generates
+`AIRFLOW_FERNET_KEY` (urlsafe base64 of 32 bytes) and `AIRFLOW_API_SECRET_KEY` for a new `.env`,
+and on an existing one appends the keys that are missing. It leaves `DOCKER_GID` empty (as
+`.env.example` has it), so set it if it is empty (the command prints nothing):
 
 ```
-sed -i "s|^AIRFLOW_FERNET_KEY=.*|AIRFLOW_FERNET_KEY=$(python3 -c 'import base64, secrets; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())')|" .env
-grep -q '^AIRFLOW_API_SECRET_KEY=' .env || printf 'AIRFLOW_API_SECRET_KEY=%s\n' "$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')" >> .env
-grep -q '^DOCKER_GID=' .env || printf 'DOCKER_GID=%s\n' "$(stat -c %g /var/run/docker.sock)" >> .env
+sed -i "s/^DOCKER_GID=$/DOCKER_GID=$(stat -c %g /var/run/docker.sock)/" .env
 ```
 
 - Fernet key: a `.env` from `make secrets` before 2026-10-09 holds a 32-character
   `AIRFLOW_FERNET_KEY`, and Airflow accepts only urlsafe base64 of 32 bytes (44 characters).
-  Replace it only before Airflow first starts: once Airflow has stored connections or variables,
-  a new key makes them unreadable.
+  Replace such an old key, and only before Airflow first starts, with the output of the command
+  below edited into `.env`. Once Airflow has stored connections or variables, a new key makes them
+  unreadable.
+
+  ```
+  python3 -c 'import base64, secrets; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())'
+  ```
 - `AIRFLOW_API_SECRET_KEY` signs the api-server's requests for task logs, which the scheduler
   container serves. Without it each process makes up its own, and the UI shows no task log.
 - `DOCKER_GID` is the group of `/var/run/docker.sock`; the scheduler joins it (`group_add`) to
@@ -870,7 +881,7 @@ samples: no batch with data since start, or the job is down" on those panels.
 The Marketplace dashboard needs the plugin: `GF_PLUGINS_PREINSTALL_SYNC=trino-datasource@1.4.1` in
 the `grafana` service installs it from the Grafana catalog into the `grafana` volume before Grafana
 starts (synchronously, so provisioning finds the datasource type), so the first start after the
-change needs internet and a recreated container (limit 384M). A synchronous install that fails
+change needs internet and a recreated container (limit 512M). A synchronous install that fails
 halts Grafana as a whole: with a new or empty `grafana` volume and no network, Grafana does not
 start at all, the Prometheus dashboards included. Once the pinned version is in the volume, a
 restart does not ask the catalog and works offline. Datasource
@@ -1399,10 +1410,10 @@ moved the virtual clock from 2026-07-08 10:06 to 2026-07-09 10:03 (`make replay-
 took 2267 CDC events in the window (opened 2026-10-07 20:31:07 UTC).
 What monitoring shows: the replayer counts the repeats (`replayer_events_total{kind="duplicate"}` on
 its `/metrics`, `:8000` while the burst runs); nothing downstream reacts, by design.
-`bronze_duplicate_ratio` by `(source_table, key, lsn)`, a planned `dq_checks` metric (W3-T05),
+`lakehouse_dq_lsn_repeats_last_hour` (`dq_checks`, repeats by `(source_table, key, lsn)`)
 measures delivery repeats (chaos 2b) only: a source repeat is a new WAL record with a new LSN, so it
-never counts there and shows instead as `op = 'u'` with `before = after`. Until the metric exists
-the same check is `lsn_duplicates_since` in `scripts/chaos/lib.sh`.
+never counts there and shows instead as `op = 'u'` with `before = after`. The same check by hand is
+`lsn_duplicates_since` in `scripts/chaos/lib.sh`.
 Data at risk: none in silver. Bronze grows by the repeats (95 of the 2267 events in that run), and a
 consumer that counts bronze events as business changes (status changes per day, say) counts each
 repeat as one more: filter `before = after` out or read silver.
@@ -1466,30 +1477,28 @@ the re-sent record included. Of the 350 orders the burst changed, 180 had more t
 the pick is rarely short of candidates. It picked order `008819c6d5f6da6fa5cd9d50ca927cf4`: its
 insert (`op = 'c'`, `created`, LSN 1401450968) and its update to `approved` (LSN 1401679552) came in
 one bronze batch, and the first silver run left the row at `approved` with `_last_lsn` 1401679552.
-The script re-sent the insert at 20:59:17 UTC.
-What monitoring shows: nothing reacts, by design. Bronze takes one more record, and the second
-silver run logs an orders merge (`batch N: <k> events merged into lake.silver.orders`) while the row
-stays. The repeat check by `(source_table, key, lsn)` (`lsn_duplicates_since`, later the duplicate
-ratio in `dq_checks`, W3-T05) counts the re-sent record as one delivery repeat, as in 2b. In that
-run bronze took the record in at 20:59:20 UTC, and the second silver run logged
-`batch 15: 1 events merged into lake.silver.orders in 2.4 s`. The count is the orders events the
-silver batch read from bronze (before quarantine and before keeping one row per key), not rows MERGE
-changed: the snapshot that run committed has `changed-partition-count` 0, no `added-records` and the
-same `total-records` (98812) as the first run's. `lsn_duplicates_since` over the window reported
-orders with 1 key repeated and 1 extra event.
-Data at risk: none in silver. Bronze keeps the re-sent record for good, at a new offset with the
-old LSN: a consumer that reads bronze in offset or ingest order rather than by LSN sees the order
-go back to its older status.
-Recovery: nothing to recover; the MERGE guard drops the event. In that run the whole script (burst,
-catch-up, both silver runs, checks) took 3 min 12.6 s.
-Why no loss or duplication: silver keeps one row per key, and MERGE updates a matched row only when
-`t._last_lsn is null or s._last_lsn > t._last_lsn` (ADR-021; a null marks a row from an incremental
-snapshot read). The re-sent change has a lower LSN than the row, so the row and its `_last_lsn`
-stay; an equal LSN (a plain repeat, 2b) is skipped the same way. In that run bronze held LSN
-1401450968 twice in partition 1, both `created` with the same key and `after`: offset 74825,
-ingested at 20:57:40 UTC, and the re-sent copy at offset 74855, at 20:59:20 UTC. Silver read
-`approved` with `_last_lsn` 1401679552 before and after, and the row's `_updated_at`, 20:59:03 UTC,
-is from the first silver run, before the re-send.
+The script re-sent the insert at 20:59:17 UTC. What monitoring shows: nothing reacts, by design.
+Bronze takes one more record, and the second silver run logs an orders merge (`batch N: <k> events
+merged into lake.silver.orders`) while the row stays. The repeat check by `(source_table, key, lsn)`
+(`lsn_duplicates_since`, and the series `lakehouse_dq_lsn_repeats_last_hour` in `dq_checks`) counts
+the re-sent record as one delivery repeat, as in 2b. In that run bronze took the record in at
+20:59:20 UTC, and the second silver run logged `batch 15: 1 events merged into lake.silver.orders in
+2.4 s`. The count is the orders events the silver batch read from bronze (before quarantine and
+before keeping one row per key), not rows MERGE changed: the snapshot that run committed has
+`changed-partition-count` 0, no `added-records` and the same `total-records` (98812) as the first
+run's. `lsn_duplicates_since` over the window reported orders with 1 key repeated and 1 extra event.
+Data at risk: none in silver. Bronze keeps the re-sent record for good, at a new offset with the old
+LSN: a consumer that reads bronze in offset or ingest order rather than by LSN sees the order go
+back to its older status. Recovery: nothing to recover; the MERGE guard drops the event. In that run
+the whole script (burst, catch-up, both silver runs, checks) took 3 min 12.6 s. Why no loss or
+duplication: silver keeps one row per key, and MERGE updates a matched row only when `t._last_lsn is
+null or s._last_lsn > t._last_lsn` (ADR-021; a null marks a row from an incremental snapshot read).
+The re-sent change has a lower LSN than the row, so the row and its `_last_lsn` stay; an equal LSN
+(a plain repeat, 2b) is skipped the same way. In that run bronze held LSN 1401450968 twice in
+partition 1, both `created` with the same key and `after`: offset 74825, ingested at 20:57:40 UTC,
+and the re-sent copy at offset 74855, at 20:59:20 UTC. Silver read `approved` with `_last_lsn`
+1401679552 before and after, and the row's `_updated_at`, 20:59:03 UTC, is from the first silver
+run, before the re-send.
 
 Two meanings of "late". This scenario is late arrival: a change reaches the lake out of LSN order,
 which here only a delivery repeat produces, and silver guards against it. `REPLAY_LATE_RATIO` with

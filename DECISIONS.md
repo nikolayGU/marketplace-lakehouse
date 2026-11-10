@@ -130,8 +130,9 @@ matters.
 (`pgp_sym_encrypt`, aes256) with `LAKEKEEPER_ENCRYPTION_KEY`, a new `.env` variable, instead of
 `META_PASSWORD` as in the compose skeleton: a key equal to that database's password protects
 nothing when the database leaks, and a password change would silently cut the catalog off from
-MinIO. `make secrets` generates it for a fresh `.env`; an existing `.env` gets it from one command
-in OPERATIONS rather than from a merge mode in `make_env.py` built for a single clone. Compose
+MinIO. `make secrets` generates it for a fresh `.env`; an existing `.env` first got it from one
+command in OPERATIONS, and since 2026-11-06 `make secrets` appends it there too (it appends every
+missing key of `.env.example` and never changes a value). Compose
 refuses every command without it (`:?`), whatever the profile. The key never changes once a
 warehouse exists.
 
@@ -254,8 +255,10 @@ What changes with Lakekeeper as the live catalog:
   path: 0.14 waits for its own task and a backup of the `lakekeeper` database.
 
 Rollback: the free one ended with bronze's first commit through Lakekeeper. The JDBC rows in
-`iceberg_catalog` keep the pre-cutover pointers as the rollback point until the end of week 3;
-going back is DML on `iceberg_tables`, which only the owner runs (runbook, "Rollback"). Outside
+`iceberg_catalog` kept the pre-cutover pointers as the paid rollback point (DML on
+`iceberg_tables`, which only the owner runs; runbook, "Rollback") until the first maintenance run
+of 2026-10-29 deleted files those snapshots read (W6-D16, ADR-025); since then a rollback starts
+from the copy of `warehouse/` taken before that run (OPERATIONS.md, "Lakekeeper"). Outside
 that procedure no Spark job runs with `CATALOG_TYPE=jdbc` and Trino does not get the JDBC
 `lake.properties` back: the two histories would fork, and maintenance on one side would delete
 files the other still reads. `register.sh` refuses now that `CATALOG_TYPE` is `rest`.
@@ -275,8 +278,9 @@ new Kafka records. For Spark restarts the expectation is that the
 Iceberg sink skips an already committed epoch (it records `spark.sql.streaming.queryId` and
 `epochId` in the snapshot summary); chaos scenario 1 verifies this experimentally and the
 result is recorded here. Either way, the no-duplicates guarantee lives in silver
-(`MERGE` keyed by primary key with an LSN guard) and `bronze_duplicate_ratio` is a monitored
-metric, not an assumption.
+(`MERGE` keyed by primary key with an LSN guard), and repeated deliveries are counted, not
+assumed away: `dq_checks` sends `lakehouse_dq_lsn_repeats_last_hour` (keys of bronze seen twice
+with the same LSN in the last hour).
 
 Verified on 2026-09-26, re-run on 2026-10-07 with a script that asserts the result. Iceberg 1.11
 `SparkWrite` skips an epoch when the last snapshot of the same query id already carries an equal
@@ -299,7 +303,9 @@ unacked then, or a timed-out commit, are sent again as after a kill. A `docker k
 final commit, and everything since the last offset flush (at most `offset.flush.interval.ms`,
 60 s) arrives again with the same LSN: 253 events for a kill about 9 s after the flush on
 2026-10-07 (11 events about 2 s after it on 2026-09-26), and silver live row counts still matched
-Postgres both times. A Postgres restart (chaos 5) is not measured yet.
+Postgres both times. A Postgres restart (chaos 5, 2026-10-23) needed no manual step: the
+Debezium task retried by itself and streamed again 13 s after the restart, and `reconcile` gave 7
+of 7 tables (OPERATIONS.md, scenario 5).
 
 ## ADR-008 Bronze keeps the payload as JSON text
 
@@ -384,8 +390,8 @@ Decision (2026-10-09, D9 and D12 of the week 3 spec):
   it onto the Asset is the owner's Modify gate).
 - Maintenance in week 3 (D11): only `optimize` of the silver tables, in the pool `lake_writers`
   (1 slot) together with the silver merge, since two commits to `silver.orders` at once fail one
-  of them (ADR-010). `expire_snapshots` and `remove_orphan_files` wait for the policy of week 5
-  (ADR-021).
+  of them (ADR-010). `expire_snapshots` and `remove_orphan_files` came later with the maintenance
+  policy (ADR-025).
 
 Consequences: an image of 3.47 GB to build, the socket as the price of DockerOperator,
 the dbt version pinned twice (`uv.lock` and `airflow/Dockerfile`).
@@ -600,8 +606,9 @@ Retained WAL of the replication slot comes from a custom postgres-exporter query
 (`lakehouse_slot_retained_bytes`, `lakehouse_slot_active`): the built-in slot collector reports
 `confirmed_flush_lsn` only for active slots, which is exactly when it does not matter.
 
-Consequences: one more image to build (`lakehouse/container-exporter:dev`, 64 MB limit, ~30 MB
-used). The container holds the Docker socket, root on the host in effect, like the Airflow
+Consequences: one more image to build (`lakehouse/container-exporter:dev`, 128 MB limit, raised
+from 64 MB on 2026-11-10: its walk of the Docker API, about 50 MB with swap, kept it swapping). The
+container holds the Docker socket, root on the host in effect, like the Airflow
 scheduler (ADR-011); it has no host port. Metric names differ from cAdvisor's, so community
 dashboards for cAdvisor do not apply as is.
 

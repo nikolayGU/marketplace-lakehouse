@@ -34,12 +34,12 @@ make verify                                           # bronze holds every Kafka
 ```
 
 `make bootstrap` is the one command: it starts the stack, migrates the source, registers the
-connector, loads the data, runs `make verify` (prints `verify ok`) and protects the Lakekeeper warehouse. The same steps run unattended on GitHub as
-`smoke.yml` and finished green in 9 to 11 minutes on 2026-10-29 (cold, images built from scratch,
-[run 40907438614](../../actions/runs/40907438614)).
-Locally, from a fresh clone on the sample, `make bootstrap` took 4 minutes with the images built;
-the first build of the Spark image adds about 80 seconds with its base image already pulled
-(2026-10-17, [OPERATIONS](OPERATIONS.md#daily-commands)).
+connector, loads the data, runs `make verify` (prints `verify ok`) and protects the bronze and
+silver tables in Lakekeeper. The same steps run unattended on GitHub as `smoke.yml` and finished
+green in 9 to 11 minutes on 2026-10-29 (cold, images built from scratch, [run
+40907438614](../../actions/runs/40907438614)). Locally, from a fresh clone on the sample, `make
+bootstrap` took 4 minutes with the images built; the first build of the Spark image adds about 80
+seconds with its base image already pulled (2026-10-17, [OPERATIONS](OPERATIONS.md#daily-commands)).
 
 With the full dataset: `make data` downloads it into `data/raw` (Kaggle CLI or manual) and
 `REPLAY_DATA=raw` stays in `.env`. `make hooks` installs the pre-commit hooks (ruff, yamllint,
@@ -55,18 +55,20 @@ revision of the same Dockerfile) took about 4 minutes for MinIO and under half a
 after it; the cold time on a CI runner is not measured. On a host short of memory build them first:
 `docker compose --env-file .env -f docker/compose.yaml build --build-arg GOFLAGS=-p=2 minio minio-init`.
 
-`make start` brings up `core` and `query` without the replayer container, which would play the
-rest of the history at full speed; `make up` refuses any `PROFILE` that contains `core`
-(ADR-016). Never start every profile at once on 16 GB. Working combinations: [OPERATIONS.md](OPERATIONS.md).
+`make start` brings up `core` and `query` without the replayer container, which would play the rest
+of the history at full speed; `make up` refuses any `PROFILE` that contains `core` (ADR-016). All
+profiles except `tools` ran together on 2026-11-10 at 6.0 GiB in `docker stats` at rest under
+conditions (`TRINO_XMX=2g`, no parallel Spark tests or builds). Working combinations and conditions:
+[OPERATIONS.md](OPERATIONS.md).
 
 | Profile | Services | RAM (sum of limits in `docker/compose.yaml`) |
 |---|---|---|
 | `core` | postgres-oltp, postgres-meta (Lakekeeper's database), kafka, kafka-connect, minio, lakekeeper (Iceberg REST catalog), spark-bronze; oltp-replayer only through `make replay-live` | ~7.5 GB |
 | `query` | trino | 3.5 GB |
 | `orchestrate` | airflow api-server / scheduler / dag-processor | ~2.1 GB |
-| `obs` | prometheus, grafana, exporters, container-exporter | ~0.9 GB |
+| `obs` | prometheus, grafana, exporters, container-exporter | ~1.1 GB |
 | `stateful` | spark-orders-per-minute | 1.75 GB |
-| `bi` | superset, superset-mcp, one-shot superset-init (optional, not together with `orchestrate`) | ~1.8 GB running (1280M + 512M), plus 1024M while the one-shot runs |
+| `bi` | superset, superset-mcp, one-shot superset-init (optional; with `orchestrate` only under the conditions in OPERATIONS) | ~1.8 GB running (1280M + 512M), plus 1024M while the one-shot runs |
 | `tools` | kafka-ui | 0.4 GB |
 
 ## Explore the stack
@@ -151,8 +153,8 @@ Components:
 | Alerts: 16 rules | measured | 7 alerts shown firing live with time to fire, the rest by promtool (`make alerts-test`, `SUCCESS: 16 rules found`, 2026-11-06; `GoldStaleAtRest` is promtool only): [alerts](docs/evidence.md#alerts-and-time-to-fire) |
 | Business dashboard "Marketplace" on `lake_ro.gold` | measured | 96 163 orders equal `count(*)` of `fct_orders` (2026-10-29, panels then on `lake.gold`); after the switch to `lake_ro.gold` `check_dashboards.py` prints `queries ok: 39` (all dashboards, 19:16): [dashboard](docs/evidence.md#dashboard) |
 | Trino access control: `grafana` reads `lake_ro.gold` only | measured | 2026-10-29 19:15, after a Trino restart: `grafana` selects `lake_ro.gold.fct_orders`; `lake_ro.silver`, catalogs `lake` and `system`, `create table` and `optimize` get Access Denied; `dbt`, `trino`, `airflow` still read `lake.silver.orders`: [evidence](docs/evidence.md#trino-access-control). Residual risks (no authentication): [OPERATIONS](OPERATIONS.md#access-control) |
-| CI: six jobs | done | six jobs in `ci.yml`; the last green run, [run 40934002684](../../actions/runs/40934002684) on HEAD `6ca7224` (2026-10-29), had five: the `alerts-test` job came on 2026-10-30 |
-| Clean-clone path (`smoke.yml`) | measured | green, [run 40907438614](../../actions/runs/40907438614) (10 min 1 s) [run 40916528470](../../actions/runs/40916528470) (9 min 14 s) and [run 40934001854](../../actions/runs/40934001854) (10 min 52 s) on HEAD `6ca7224`, 2026-10-29 |
+| CI: six jobs | done | six jobs in `ci.yml` (twelve job runs with the seven-Dockerfile hadolint matrix); a green run, [run 42848376843](../../actions/runs/42848376843) on HEAD `63e5650` (2026-11-10) |
+| Clean-clone path (`smoke.yml`) | measured | green on 2026-10-29: [run 40907438614](../../actions/runs/40907438614) (10 min 1 s, HEAD `664a7e6`), [run 40916528470](../../actions/runs/40916528470) (9 min 14 s, HEAD `f71eab2`) and [run 40934001854](../../actions/runs/40934001854) (10 min 52 s, HEAD `6ca7224`) |
 | `iceberg_orphans` on its weekly schedule | planned | paused by decision: [not proven yet](docs/evidence.md#not-proven-yet) |
 | `rewrite-position-deletes` on `silver.orders` | planned | failed on 2026-10-23, not run live since: [not proven yet](docs/evidence.md#not-proven-yet) |
 | 24 hour unattended run | not run | cancelled by the owner on 2026-11-04: [not proven yet](docs/evidence.md#not-proven-yet) |

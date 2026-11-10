@@ -138,10 +138,11 @@ skill gap this project targets. See [DECISIONS.md](DECISIONS.md) (ADR-012, ADR-0
 ## Resource model
 
 Compose profiles let the platform run in pieces: `core` always (the REST catalog Lakekeeper
-included), `query` almost always, `orchestrate` only while batch work is being developed or
-demoed, `obs` for monitoring, `bi` (Superset and its MCP endpoint) only for a demo and not
-together with `orchestrate` (OPERATIONS "Profiles"). Every long-running service has a memory limit, log rotation, ports bound to
-`${BIND_IP}` (`127.0.0.1`; compose refuses to start without it), a real healthcheck and
-`restart: unless-stopped`, except `kafka-ui` (no healthcheck). One-shot jobs (`minio-init`,
-`lakekeeper-migrate`, `lakekeeper-bootstrap`, `spark-silver`) have `restart: "no"` and no
-healthcheck; `minio-init` also has no memory limit. WSL2 is capped at 12 GB. Limits per profile: [OPERATIONS.md](OPERATIONS.md).
+included), `query` almost always, `orchestrate` only while batch work is being developed or demoed,
+`obs` for monitoring, `bi` (Superset and its MCP endpoint) only for a demo; all but `tools` ran
+together on 2026-11-10 under conditions (OPERATIONS "Profiles"). Every long-running service has a
+memory limit, log rotation, ports bound to `${BIND_IP}` (`127.0.0.1`; compose refuses to start
+without it), a real healthcheck and `restart: unless-stopped`, except `kafka-ui` (no healthcheck).
+One-shot jobs (`minio-init`, `lakekeeper-migrate`, `lakekeeper-bootstrap`, `spark-silver`,
+`superset-init`) have `restart: "no"` and no healthcheck; `minio-init` also has no memory limit.
+WSL2 is capped at 12 GB. Limits per profile: [OPERATIONS.md](OPERATIONS.md).

@@ -3,17 +3,17 @@
 Spark image and jobs.
 
 - `Dockerfile`: `apache/spark:3.5.9-java17-python3` + `iceberg-spark-runtime-3.5_2.12:1.11.0` +
-  `spark-sql-kafka-0-10` + `hadoop-aws` / `aws-java-sdk-bundle` for S3A + PostgreSQL JDBC for
-  the catalog. Jars are downloaded at build time with pinned versions and checked against Maven
-  Central's sha1, never fetched at runtime. The image's Python is 3.10, so `spark_jobs` avoids
-  3.11+ syntax.
+  `spark-sql-kafka-0-10` + `hadoop-aws` / `aws-java-sdk-bundle` for S3A + PostgreSQL JDBC for the
+  `jdbc` catalog type (the rollback path of the catalog cutover runbook). Jars are downloaded at
+  build time with pinned versions and checked against Maven Central's sha1, never fetched at
+  runtime. The image's Python is 3.10, so `spark_jobs` avoids 3.11+ syntax.
 - `run-job.sh <job>`: the entrypoint, `spark-submit` of `spark_jobs/<job>.py` with
   `SPARK_MASTER` and `SPARK_DRIVER_MEMORY`.
 - `spark_jobs/bronze_cdc_ingest.py`: Kafka `oltp.shop.*` -> `lake.bronze.cdc_events`, append,
   20 s trigger, checkpoint `s3a://lakehouse/checkpoints/bronze_cdc_ingest`. Columns: ADR-008, ADR-022.
 - `spark_jobs/silver_upsert.py`: Iceberg streaming read from bronze, `Trigger.AvailableNow`,
   `foreachBatch` -> parse with `contracts/silver` -> newest event per key -> `MERGE INTO
-  lake.silver.<table>`. `make silver` runs it; Airflow schedules it from week 3.
+  lake.silver.<table>`. `make silver` runs it; the Airflow DAG `silver_upsert` schedules it.
 - `spark_jobs/iceberg_demo.py`: `make iceberg-demo`, run in a one-off `spark-silver` container
   from the `lakehouse/spark:dev` image, which `spark-bronze` builds. Rebuilds the sandbox
   `lake.demo.orders` from `silver.orders` (read only) and walks through snapshots, time travel,
@@ -23,12 +23,22 @@ Spark image and jobs.
   spark-bronze`.
 - `spark_jobs/contracts.py`: loads `contracts/silver/*.json` (baked into the image at
   `/opt/app/contracts/silver` through the named build context `contracts`).
-- `spark_jobs/orders_per_minute.py` (mandatory, week 5): 1-minute window, 5-minute watermark,
+- `spark_jobs/orders_per_minute.py`: 1-minute window, 5-minute watermark,
   `update` mode, upsert into `silver.orders_per_minute`; makes late-event handling observable.
 - `spark_jobs/metrics.py`: `StreamingQueryListener` exposing Prometheus metrics on
-  `METRICS_PORT`; last progress time, input rows, batch duration. Kafka lag comes with W4-T02.
-- `spark_jobs/catalog.py`: SparkSession with Iceberg catalog `lake` (JdbcCatalog in
-  postgres-meta) and S3A pointed at MinIO. `CATALOG_TYPE=rest` is refused until W2-T09.
+  `METRICS_PORT`; last progress time, input rows, batch duration, Kafka lag
+  (`spark_streaming_kafka_lag`).
+- `spark_jobs/catalog.py`: SparkSession with Iceberg catalog `lake` and S3A pointed at MinIO.
+  `CATALOG_TYPE` defaults to `rest` (Lakekeeper, `settings.py`). `jdbc` (JdbcCatalog in
+  postgres-meta) is kept only as the rollback path of `docs/runbooks/catalog-cutover.md`, not a
+  working mode: its rows point at pre-cutover snapshots.
+- `spark_jobs/maintenance.py`: Iceberg maintenance CLI (expire snapshots, remove orphan files,
+  rewrite position deletes, compact data files); the rules (bronze never loses a snapshot,
+  silver and gold keep a week) are checked before a Spark session starts.
+- `spark_jobs/offsets.py`: Kafka offsets and lag out of a streaming progress report, without
+  pyspark.
+- `spark_jobs/progress.py`: numbers out of a progress report (watermark seconds and the like),
+  without pyspark.
 
 Unit tests that build a SparkSession need a JVM and skip without one. The host has no Java;
 `make test-spark` runs the Spark test files (`SPARK_TESTS` in the Makefile) inside
@@ -36,7 +46,7 @@ Unit tests that build a SparkSession need a JVM and skip without one. The host h
 Spark test file has to be added to that list. Inside the image a skipped test fails the run
 (`-p no:skipping`).
 
-## orders_per_minute (W5-T01a)
+## orders_per_minute
 
 `spark_jobs/orders_per_minute.py`: distinct new orders (`op = 'c'`) per one-minute window of
 `order_purchase_timestamp`, read from Kafka `oltp.shop.orders`, watermark 5 minutes, `update`

@@ -8,6 +8,11 @@
   (`SPARK_TESTS` in the Makefile lists the files; `SPARK_IMAGE` picks the image, CI uses
   `lakehouse/spark:ci`). Inside the image a skip fails the run, so the MERGE, quarantine and
   epoch tests cannot be silently skipped.
-- Integration checks run through `make chaos-*` and `.github/workflows/smoke.yml`, not pytest.
-- `test_workflows.py` guards the workflows (every Dockerfile in the hadolint matrix, action tags,
-  no secrets but `GITHUB_TOKEN`, smoke triggers).
+- Postgres tests (`test_reconcile_postgres.py`) run in CI against a Postgres service
+  (`.github/workflows/ci.yml`); `test_chaos_silver_kill.py` runs scenario 10b
+  (`scripts/chaos/silver-kill.sh`) against a fake `docker`, no stack.
+- Commit-gate hook tests: `unit/test_agent_hooks.py`.
+- The live chaos scenarios (`make chaos-*`) and the clean-clone path (`.github/workflows/smoke.yml`)
+  need a stack and stay outside pytest.
+- `test_workflows.py` guards the workflows (every Dockerfile in the hadolint matrix, actions
+  pinned by commit SHA, no secrets but `GITHUB_TOKEN`, smoke triggers).

@@ -1,10 +1,15 @@
 # Catalog cutover: JDBC to Lakekeeper
 
+> Historical: the cutover was done on 2026-10-08. The rollback point described below was
+> released on 2026-10-29: the first maintenance run deleted files the pre-cutover snapshots read
+> (`OPERATIONS.md`, "After the cutover"; ADR-005, "Rollback"), so a rollback now starts from a
+> copy of `warehouse/`, not from the JDBC rows alone.
+
 Switches Spark and Trino from the JDBC catalog in `postgres-meta` to Lakekeeper (ADR-005). Run it
 only after the owner's ok on this runbook. Bronze is stopped from step 1 to step 3, a few minutes;
 Kafka keeps what bronze has not read for 24 h. The cutover moves no data file, checkpoint or Kafka
-offset: both catalogs point at the same metadata files, and the JDBC rows stay untouched as the
-rollback point until the end of week 3.
+offset: both catalogs point at the same metadata files, and the JDBC rows were left untouched as the
+rollback point until 2026-10-29, when it was released.
 
 One moment matters: bronze's first commit through Lakekeeper (step 4b). Before it, the rollback
 is free. After it, only Lakekeeper holds the current pointers, and going back to JDBC means DML on
@@ -184,8 +189,9 @@ writes `postgres-meta` too. Record both numbers in `OPERATIONS.md` and compare a
 
 ## After the cutover
 
-- Lakekeeper is the catalog. The JDBC rows in `iceberg_catalog` keep the pre-cutover pointers as
-  the rollback point until the end of week 3; nothing writes them.
+- Lakekeeper is the catalog. The JDBC rows in `iceberg_catalog` keep the pre-cutover pointers;
+  nothing writes them. They stopped being a usable rollback point on 2026-10-29 (first maintenance
+  run).
 - Never start a Spark job with `CATALOG_TYPE=jdbc`, whether in `.env`, as `-e CATALOG_TYPE=jdbc`
   or exported in a shell, except through the rollback below. The JDBC rows point at the
   pre-cutover snapshots while bronze's checkpoint is past every commit made through Lakekeeper: the

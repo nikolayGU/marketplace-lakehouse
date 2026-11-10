@@ -162,21 +162,23 @@ Kafka came back inside the 5 minutes of the `gone` rule. That gap is why `SparkR
 | [ci 40897412910](../../../actions/runs/40897412910) | push, `f206596`, 2026-10-29 | failure, job `spark-tests` only (below) |
 | [smoke 40290595866](../../../actions/runs/40290595866) | Monday schedule, 2026-10-26 | failure at `make start`: the MinIO images were gone from quay.io and Docker Hub |
 
-`smoke.yml` walks the clean-clone path on the committed sample: `make secrets`, `make bootstrap`,
-a 60 s `make replay-burst`, `make verify`, and a second `make bootstrap` that must say
-`replay state exists, load skipped` and end `verify ok`. It builds the Spark, Connect, MinIO and
-`mc` images from scratch, so it is cold every time. The weekly schedule (Monday 03:00 UTC) is back
-since the first green run; its first scheduled run (2026-11-02) is `planned`.
+`smoke.yml` walks the clean-clone path on the committed sample: `make secrets`, `make bootstrap`, a
+60 s `make replay-burst`, `make verify`, and a second `make bootstrap` that must say `replay state
+exists, load skipped` and end `verify ok`. It builds the Spark, Connect, MinIO and `mc` images from
+scratch, so it is cold every time. The weekly schedule (Monday 03:00 UTC) is back since the first
+green run; its scheduled runs are green: [smoke 41430931906](../../../actions/runs/41430931906) on
+2026-11-02 (HEAD `4b65cd7`) and [smoke 42606043447](../../../actions/runs/42606043447) on 2026-11-09
+(HEAD `4169df6`).
 
 The red `spark-tests` run is a defect that CI caught and local checks did not: a test held a fixed
 clock (`2026-10-23 03:30 UTC`) and failed on every run after 2026-10-24 03:30 UTC. The fix (the
 real clock) is in `eebb639`, green in [ci 40901323188](../../../actions/runs/40901323188).
 
-Local checks of record: `make check` 825 passed, 83 skipped (the 83 are Spark tests, which skip on
-a host without a JVM; in CI `spark-tests` runs them in the image and a skip is a failure), HEAD
-`ab37157`, 2026-10-29; `make test-spark` 235 passed in the image
-([W6-T01 result](planning/14-closeout-spec.md), [HANDOFF](HANDOFF.md)). Job list and what each
-runs: [OPERATIONS, CI](../OPERATIONS.md#ci).
+Checks of record: `make check` 1879 passed, commit `22a8748`, 2026-11-10, local
+([HANDOFF](HANDOFF.md); Spark tests skip on a host without a JVM); the Spark tests in the image,
+239 passed, job `spark-tests` of [ci 42848376843](../../../actions/runs/42848376843) on `63e5650`,
+2026-11-10 (a skip there is a failure). Job list and what each runs:
+[OPERATIONS, CI](../OPERATIONS.md#ci).
 
 ## Dashboard
 
@@ -290,12 +292,13 @@ written against an ADR, a new ADR comes first.
 
 **Owner approvals.** Actions with a blast radius (live deletes, replay spending, pushes, changes to
 the source or the connector) stop until the owner says yes; a hook enforces part of it
-(`.claude/hooks/guard.py`), including a refusal to commit without a full `make verify`,
-`make check` and a `reviewer` verdict on the same tree. The approvals are logged in
-[HANDOFF](HANDOFF.md), "Журнал «ок»": 29 entries dated 2026-10-27 to 2026-10-29 (`grep -c '^| 2[789]\.10' docs/HANDOFF.md`, working tree at HEAD `46f5282`). The same period
-holds 14 commits (`git log --oneline 8964292..HEAD | wc -l` at HEAD `46f5282`). The two numbers
-count different things: one approval can cover a live step, a decision or a push, not only a
-commit. No commit message carries an attribution line (`git log` has none).
+(`.claude/hooks/guard.py`), including a refusal to commit without a full `make verify`, `make check`
+and a `reviewer` verdict on the same tree. The approvals are logged in [HANDOFF](HANDOFF.md),
+"Журнал «ок»": 28 entries dated 2026-10-27 to 2026-10-29 (`git show 46f5282:docs/HANDOFF.md | grep
+-c '^| 2[789]\.10'` prints 28). The same period holds 14 commits (`git log --oneline 8964292..HEAD |
+wc -l` at HEAD `46f5282`). The two numbers count different things: one approval can cover a live
+step, a decision or a push, not only a commit. No commit message carries an attribution line (`git
+log` has none).
 
 **What review found.** Review by a separate agent in a fresh context returned work before it was
 accepted. Examples, each with its record in [the W6 spec](planning/14-closeout-spec.md):
