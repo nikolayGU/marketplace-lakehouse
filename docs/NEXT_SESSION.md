@@ -22,11 +22,15 @@ docs/planning/15-audit-2026-10-30.md, раздел 7 спеки 14; статус
   графа выключателя обслуживания; where not is_deleted у relationships fct_order_items; replayer
   status без DDL, HTTP реплеера на 127.0.0.1; очистка metadata у silver.orders_per_minute; PF-01
   (16 правил, GoldStaleAtRest загружен).
-- Живые шаги Д1 сделаны 10.11 по «ок»: airflow-api-server пересоздан (новый healthcheck),
-  lakehouse/spark:dev собран из 6ff434b, spark-orders-per-minute пересоздан, у
-  silver.orders_per_minute свойство очистки metadata true. Осталось (C): следующий make start
-  пересоздаст spark-bronze на новом образе; oltp-replayer пересоздастся при следующем replay-live;
-  старый образ Spark без тега, удаление образов только по «ок».
+- Живые шаги 10.11 по «ок»: airflow-api-server пересоздан (новый healthcheck),
+  lakehouse/spark:dev собран из 6ff434b, spark-orders-per-minute пересоздан (у
+  silver.orders_per_minute свойство очистки metadata true), TRINO_XMX=2g make start пересоздал
+  spark-bronze, postgres-oltp и trino; проверка связности всех сервисов зелёная (HANDOFF,
+  «Состояние на 10.11»). Осталось (C): make up PROFILE=obs пересоздаст grafana, prometheus и три
+  экспортера (конфиг ждёт с 30.10); minio и kafka-connect на прежних сборках образов (make start
+  пересобирает их, но контейнеры не пересоздаёт; сборка MinIO невоспроизводима, PF-26);
+  oltp-replayer пересоздастся при следующем replay-live; живой тест полного потока
+  make replay-burst SECONDS=30 только по «ок» на точный текст.
 - Решения владельца 10.11: лицензия кода MIT (LICENSE.md, держатель владелец, логин nikolayGU),
   выборка и seed Olist под CC BY-NC-SA 4.0 (README «Data»); дашборд Superset сначала макетом
   (Design-артефакт в Claude на реальных числах gold), потом код, вариант A (файл 19, раздел 6).

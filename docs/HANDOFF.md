@@ -18,6 +18,8 @@
 | Память | `docker stats`; Prometheus `max_over_time` 7d | 20 контейнеров 7.5 GiB, пик суммы 7.79 GiB; у потолка Connect 1433 из 1536 MiB, Grafana 384 из 384 (R-01) |
 | Push и CI | `git push origin main`; `gh run watch` | `4169df6..6ff434b`; ci 42843074259 на `6ff434b` success, 12 из 12 job |
 | Живые шаги Д1 | `--profile orchestrate up -d --no-deps airflow-api-server` 15:31:57; `--profile core build spark-bronze` (HEAD `6ff434b`); `--profile stateful up -d --no-deps --force-recreate spark-orders-per-minute` 15:33:56 | api-server healthy, healthcheck через `python3`, metadatabase healthy; образ `lakehouse/spark:dev` `72e423bd` -> `9b41b55b` (15:32:30); у `silver.orders_per_minute` `write.metadata.delete-after-commit.enabled` = `true` (до: свойства не было), opm healthy |
+| `make start` | `TRINO_XMX=2g make start` 15:44 (`dq_checks` на паузе 15:43-15:46) | пересозданы `spark-bronze` (новый образ), `postgres-oltp` и `trino` (их конфиг ждал пересоздания с 30.10, Б7), заново `lakekeeper-bootstrap`; 20 healthy, Trino `-Xmx2g`; образы `minio` и `connect` пересобраны (сборка MinIO из исходников невоспроизводима), а контейнеры остались на прежних сборках тех же исходников; старый образ Spark исчез сам, контейнеров на нём не было |
+| Связность | `make connector-status`; Prometheus targets и rules; health Airflow, Grafana, Lakekeeper, MinIO, Superset, MCP, Trino; `make verify-fast`; ручной `dq_checks`; `check_dashboards.py`; Trino gold; MCP `get_chart_data` | connector и task RUNNING, слот `shop_slot` active, heartbeat Debezium 57 за 10 мин; 16 топиков; 8 из 8 targets up, 16 правил ok; health 200 и healthy (triggerer нет по устройству); verify ok 7 из 7; `dq_checks` 6 задач success, расхождений 0, gold и GMV сверены; `queries ok: 34` и 5 idle-панелей Spark до первого батча, rc 0; `gold.fct_orders` 96358 = живые `silver.orders`; Superset -> Trino `lake_ro` -> gold за 206 мс; 5 `ContainerRestarting` от пересозданных; память 5.76 GiB |
 | Лицензия | `LICENSE.md`, `README.md` «Data» и «License» | MIT, держатель владелец (логин `nikolayGU`); данные Olist CC BY-NC-SA 4.0 со ссылками; `.md`, потому что текст лицензии не код для гейта |
 
 Ответы владельца (~14:27, вопрос с вариантами): рутина «да, всё»; в работу только Д1; лицензия
@@ -30,8 +32,9 @@ MIT (данные Olist под CC BY-NC-SA 4.0); дашборд: сначала 
 `__main__.py` в рабочем дереве для мутантов (восстановлены, ревью сверило diff) и на секунду положил
 бэкап в `/tmp`; агент ревью Д1 упёрся в лимит 100 ходов и отчитался после напоминания.
 
-Открыто: следующий `make start` пересоздаст `spark-bronze` на новом образе (C); старый образ
-`72e423bd` без тега, его использует живой `spark-bronze`, удаление образов только по «ок»; LICENSE и правда в документах (R-60..R-68); дашборд (макет); R-01 до длинного теста потока;
+Открыто: `make up PROFILE=obs` пересоздаст `grafana`, `prometheus` и три экспортера (их конфиг ждёт
+с 30.10, C); `minio` и `kafka-connect` работают на прежних сборках своих образов (пересоздание по
+«ок»); живой тест полного потока `make replay-burst SECONDS=30` по «ок» на точный текст; LICENSE и правда в документах (R-60..R-68); дашборд (макет); R-01 до длинного теста потока;
 чистка (R-40..R-46, R-62..R-66).
 
 ## Состояние на 06.11.2026, ночь: независимая post-fix проверка, бэклог на будущее (файл 18)
@@ -430,6 +433,7 @@ unit), smoke красный (образы MinIO), W5-T05b не начата, г�
 
 | Дата UTC | Действие | Кто дал | Где видно |
 |---|---|---|---|
+| 10.11 ~15:40 | «так сделай и проверь все и связанность всех сервисов»: `TRINO_XMX=2g make start` 15:44 (пересоздал и `postgres-oltp`, `trino` с ожидающим конфигом), пауза `dq_checks` на время старта, удаление старого образа Spark (не понадобилось), ручной запуск `dq_checks` 15:47, проверка связности; docs-коммит и push по рутине сессии | владелец в Claude Code | этот раздел, таблица выше |
 | 10.11 ~15:30 | «а вообще ок сделай сам, я держатель» на три точные команды: `docker compose --env-file .env -f docker/compose.yaml --profile orchestrate up -d --no-deps airflow-api-server`; `... --profile core build spark-bronze`; `... --profile stateful up -d --no-deps --force-recreate spark-orders-per-minute`; держатель прав MIT: владелец (записан логин `nikolayGU`); docs-коммит и push по рутине сессии | владелец в Claude Code | этот раздел, таблица выше |
 | 10.11 14:28 | PF-01: `docker exec lakehouse-prometheus-1 kill -HUP 1`; `/api/v1/rules` 16 с `GoldStaleAtRest` | вопрос с вариантами 10.11 ~14:27, текст команды в варианте «Defects and protection» | файл 18, «Обновление 10.11» |
 | 10.11 ~14:27 | Рутина сессии: циклы verify (пауза трёх DAG, stop и start scheduler, `make verify`), docs-коммиты (п. 11, файл 19, HANDOFF, NEXT_SESSION, индекс), `git push origin main` без force вместе с `fa29b74`; в работу только Д1; лицензия MIT; дашборд сначала макетом | владелец в Claude Code, вопрос с вариантами | `docs/planning/19-review-2026-11-10.md`, раздел 3 |
