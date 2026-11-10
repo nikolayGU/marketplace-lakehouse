@@ -22,15 +22,14 @@ docs/planning/15-audit-2026-10-30.md, раздел 7 спеки 14; статус
   графа выключателя обслуживания; where not is_deleted у relationships fct_order_items; replayer
   status без DDL, HTTP реплеера на 127.0.0.1; очистка metadata у silver.orders_per_minute; PF-01
   (16 правил, GoldStaleAtRest загружен).
-- Ждут «ок» (класс C): пересоздание airflow-api-server (новый healthcheck, новый config hash) при
-  make up PROFILE=orchestrate; свойство очистки у живой silver.orders_per_minute: образ
-  lakehouse/spark:dev запечён, поэтому сначала сборка из чистого HEAD после CI
-  ($COMPOSE --profile core build spark-bronze, 13-harness.md раздел 2; DAG-и берут его сразу),
-  затем make up PROFILE=stateful (C); следующий make start пересоздаст spark-bronze (C);
-  oltp-replayer пересоздастся при следующем replay-live.
-- Решения владельца 10.11: лицензия кода MIT (держателя прав спросить: логин или имя), выборка и
-  seed Olist остаются под CC BY-NC-SA 4.0; дашборд Superset сначала макетом (Design-артефакт в
-  Claude на реальных числах gold), потом код, вариант A (файл 19, раздел 6).
+- Живые шаги Д1 сделаны 10.11 по «ок»: airflow-api-server пересоздан (новый healthcheck),
+  lakehouse/spark:dev собран из 6ff434b, spark-orders-per-minute пересоздан, у
+  silver.orders_per_minute свойство очистки metadata true. Осталось (C): следующий make start
+  пересоздаст spark-bronze на новом образе; oltp-replayer пересоздастся при следующем replay-live;
+  старый образ Spark без тега, удаление образов только по «ок».
+- Решения владельца 10.11: лицензия кода MIT (LICENSE.md, держатель владелец, логин nikolayGU),
+  выборка и seed Olist под CC BY-NC-SA 4.0 (README «Data»); дашборд Superset сначала макетом
+  (Design-артефакт в Claude на реальных числах gold), потом код, вариант A (файл 19, раздел 6).
 - Память (файл 19, раздел 7): 20 контейнеров около 7.5 GiB из 11 GiB WSL, пик суммы за неделю
   7.79 GiB; у потолка Kafka Connect 1433 из 1536 MiB и Grafana 384 из 384 (R-01): закрыть до
   длинного теста полного потока.
@@ -48,9 +47,9 @@ docs/planning/15-audit-2026-10-30.md, раздел 7 спеки 14; статус
    без force); (б) что брать (список ниже) или ничего; (в) точный текст действий класса C, если
    выбранная карточка их требует.
 3. Кандидаты, каждый по циклу задачи и только по выбору владельца:
-   - LICENSE и правда в документах: R-68 первым (LICENSE MIT, строка о данных Olist в README),
-     R-60 ложные утверждения, R-61 ADR-027 Superset с MCP и ADR-028 lake_ro, PF-50, PF-51, PF-52;
-     About и topics на GitHub через gh repo edit (видно снаружи, C);
+   - правда в документах: R-60 ложные утверждения, R-61 ADR-027 Superset с MCP и ADR-028
+     lake_ro, PF-50, PF-51, PF-52; остаток R-68: атрибуция в dbt/seeds/_seeds.yml, About и topics
+     на GitHub через gh repo edit (видно снаружи, C);
    - дашборд Superset: superpowers brainstorming, макет варианта A в Claude (Artifact, intent
      design) на числах gold через MCP только чтением, карточка с «Готово, когда», YAML бандла и
      тесты, make up PROFILE=bi по «ок», скриншот владельца в README; свой skill после первого

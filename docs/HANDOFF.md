@@ -16,6 +16,9 @@
 | PF-01 | `docker exec lakehouse-prometheus-1 kill -HUP 1` 14:28:45 | `/api/v1/rules` 16, `GoldStaleAtRest` есть |
 | Д1 | три `implementer`, `reviewer` 2 круга, цикл verify | `22a8748`: `make check` 1879 passed; `reviewer` «принять с замечаниями» (круг 2: 1 низкое); verify ok 7 из 7 (full 15:19:14Z); паузы трёх DAG 14:31-15:19 сняты |
 | Память | `docker stats`; Prometheus `max_over_time` 7d | 20 контейнеров 7.5 GiB, пик суммы 7.79 GiB; у потолка Connect 1433 из 1536 MiB, Grafana 384 из 384 (R-01) |
+| Push и CI | `git push origin main`; `gh run watch` | `4169df6..6ff434b`; ci 42843074259 на `6ff434b` success, 12 из 12 job |
+| Живые шаги Д1 | `--profile orchestrate up -d --no-deps airflow-api-server` 15:31:57; `--profile core build spark-bronze` (HEAD `6ff434b`); `--profile stateful up -d --no-deps --force-recreate spark-orders-per-minute` 15:33:56 | api-server healthy, healthcheck через `python3`, metadatabase healthy; образ `lakehouse/spark:dev` `72e423bd` -> `9b41b55b` (15:32:30); у `silver.orders_per_minute` `write.metadata.delete-after-commit.enabled` = `true` (до: свойства не было), opm healthy |
+| Лицензия | `LICENSE.md`, `README.md` «Data» и «License» | MIT, держатель владелец (логин `nikolayGU`); данные Olist CC BY-NC-SA 4.0 со ссылками; `.md`, потому что текст лицензии не код для гейта |
 
 Ответы владельца (~14:27, вопрос с вариантами): рутина «да, всё»; в работу только Д1; лицензия
 MIT (данные Olist под CC BY-NC-SA 4.0); дашборд: сначала макет в Claude, потом код (вариант A).
@@ -27,10 +30,8 @@ MIT (данные Olist под CC BY-NC-SA 4.0); дашборд: сначала 
 `__main__.py` в рабочем дереве для мутантов (восстановлены, ревью сверило diff) и на секунду положил
 бэкап в `/tmp`; агент ревью Д1 упёрся в лимит 100 ходов и отчитался после напоминания.
 
-Открыто: пересоздание `airflow-api-server` (новый healthcheck) при следующем
-`make up PROFILE=orchestrate` (C); свойство очистки у живой `silver.orders_per_minute`: сборка
-`lakehouse/spark:dev` из HEAD после CI, затем `make up PROFILE=stateful` (C), следующий `make start`
-пересоздаст `spark-bronze` (файл 19, раздел 4); LICENSE и правда в документах (R-60..R-68); дашборд (макет); R-01 до длинного теста потока;
+Открыто: следующий `make start` пересоздаст `spark-bronze` на новом образе (C); старый образ
+`72e423bd` без тега, его использует живой `spark-bronze`, удаление образов только по «ок»; LICENSE и правда в документах (R-60..R-68); дашборд (макет); R-01 до длинного теста потока;
 чистка (R-40..R-46, R-62..R-66).
 
 ## Состояние на 06.11.2026, ночь: независимая post-fix проверка, бэклог на будущее (файл 18)
@@ -429,6 +430,7 @@ unit), smoke красный (образы MinIO), W5-T05b не начата, г�
 
 | Дата UTC | Действие | Кто дал | Где видно |
 |---|---|---|---|
+| 10.11 ~15:30 | «а вообще ок сделай сам, я держатель» на три точные команды: `docker compose --env-file .env -f docker/compose.yaml --profile orchestrate up -d --no-deps airflow-api-server`; `... --profile core build spark-bronze`; `... --profile stateful up -d --no-deps --force-recreate spark-orders-per-minute`; держатель прав MIT: владелец (записан логин `nikolayGU`); docs-коммит и push по рутине сессии | владелец в Claude Code | этот раздел, таблица выше |
 | 10.11 14:28 | PF-01: `docker exec lakehouse-prometheus-1 kill -HUP 1`; `/api/v1/rules` 16 с `GoldStaleAtRest` | вопрос с вариантами 10.11 ~14:27, текст команды в варианте «Defects and protection» | файл 18, «Обновление 10.11» |
 | 10.11 ~14:27 | Рутина сессии: циклы verify (пауза трёх DAG, stop и start scheduler, `make verify`), docs-коммиты (п. 11, файл 19, HANDOFF, NEXT_SESSION, индекс), `git push origin main` без force вместе с `fa29b74`; в работу только Д1; лицензия MIT; дашборд сначала макетом | владелец в Claude Code, вопрос с вариантами | `docs/planning/19-review-2026-11-10.md`, раздел 3 |
 | 06.11 ~18:34 | «ок и заканчиваем»: один docs-коммит файла 18 и записей в индексе, HANDOFF и NEXT_SESSION; push не входит | владелец в Claude Code | `git log` |

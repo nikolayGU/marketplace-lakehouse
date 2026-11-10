@@ -224,5 +224,13 @@ Filled in as the learning gates close (`planned`): [LEARNING.md](LEARNING.md).
 
 ## Data
 
-Olist Brazilian E-Commerce public dataset (Kaggle). Check the dataset license before
-redistributing; this repository ships only a small sample for tests.
+The Brazilian E-Commerce Public Dataset by Olist
+([Kaggle](https://www.kaggle.com/datasets/olistbr/brazilian-ecommerce)) is licensed
+[CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/). The 2 000-order sample in
+`data/sample` and the category translation seed in `dbt/seeds` come from it and carry the same
+license: attribution to Olist, non-commercial use, share-alike ([data/README.md](data/README.md)).
+The full dataset is not in the repository: `make data` downloads it.
+
+## License
+
+The code is under the [MIT License](LICENSE.md). The data keeps its own license (above).
