@@ -1,62 +1,66 @@
-# Следующая сессия: поддержка после закрытия, первым делом холодный старт (п. 11)
+# Следующая сессия: поддержка, холодный старт и выбор карточки (ревью 10.11, Д1)
 
-Обновлено 06.11.2026 ~12:50 UTC. Текст ниже копируется в новую сессию как есть. Запуск из корня
-репо в WSL: `claude --model opus --permission-mode acceptEdits` (оркестратор на Opus; не `--bare`:
-он выключает хуки; не `bypassPermissions`).
+Обновлено 10.11.2026. Текст ниже копируется в новую сессию как есть. Запуск из корня репо в WSL:
+`claude --model opus --permission-mode acceptEdits` (оркестратор на Opus; не `--bare`: он
+выключает хуки; не `bypassPermissions`).
 
 ```text
 Ты оркестратор поддержки проекта Marketplace Lakehouse (mini): учебная data platform на ноутбуке
 (Postgres с реплеем Olist, Debezium, Kafka, Spark bronze и silver, Iceberg в Lakekeeper на MinIO,
-dbt на Trino, Airflow 3, Prometheus и Grafana). Проект закрыт 06.11.2026 по пп. 1-10 раздела 6
-docs/planning/14-closeout-spec.md («Итог» W6-T10; гейты владельца он отложил с записью). Открыты
-п. 11 (холодный старт), CI, gitleaks и чистое дерево итогового docs-коммита: их проверяет эта
-сессия. Правила: AGENTS.md (уже в контексте); регламент:
-docs/planning/13-harness.md; остатки бэклога: раздел 10 docs/planning/15-audit-2026-10-30.md,
-раздел 7 спеки 14 и бэклог PF-01..PF-65 docs/planning/18-postfix-audit-2026-11-06.md (post-fix
-проверка 06.11: MUST FIX 0); статусы планов: docs/planning/README.md.
+dbt на Trino, Airflow 3, Prometheus и Grafana, Superset в профиле bi). Проект закрыт 06.11.2026 по
+пп. 1-10 раздела 6 docs/planning/14-closeout-spec.md, п. 11 (холодный старт) закрыт 10.11 («Итог»
+W6-T10). Правила: AGENTS.md (уже в контексте); регламент: docs/planning/13-harness.md; бэклоги:
+docs/planning/19-review-2026-11-10.md (ревью 10.11: оценки, решения владельца, карточка Д1, бэклог
+R, вход для дашборда, память), docs/planning/18-postfix-audit-2026-11-06.md (PF), раздел 10
+docs/planning/15-audit-2026-10-30.md, раздел 7 спеки 14; статусы планов: docs/planning/README.md.
 
-Состояние на 06.11.2026 (подробно: верхний раздел docs/HANDOFF.md, хук старта его печатает).
-- 06.11 вечер: полный аудит docs/planning/16-audit-2026-11-06/ и исправления P1
-  docs/planning/17-audit-fixes.md (Superset и его MCP в профиле bi, консоль MinIO :9001, Kafka с
-  хоста, алерт GoldStaleAtRest); коммиты f5c9c8f..итоговый docs запушены 06.11 ~16:40: первым
-  делом проверить их CI (gh run list). MCP Superset подключён в Claude Code только локально
-  (claude mcp add --scope local), настройки клиента в репозиторий не кладутся. Реплей W6:
-  32:28:21 из 48 ч.
-- 06.11: Б10 живьём (kill silver merge после 1 из 4 таблиц, retry Airflow try_number 2,
-  reconcile 7 из 7, docs bccd194, smoke 42216951898 и ci 42216887610 на bccd194 success); запись
-  W6-T10 в итоговом docs-коммите после bccd194 (проверь, что он есть в origin/main).
-- Реплей: virtual_now 2026-07-18 00:06:35, за W6 потрачено 26:32:53 из 48 ч (W6-D13). Бюджет и
-  делегации W6-D3, W6-D4, W6-D13 относились к блоку закрытия: в поддержке реплей, циклы verify,
-  коммиты и push только по новому «ок» (одним вопросом с вариантами в начале сессии).
-- Spark: после burst Б10 (06.11 ~12:06 UTC) uv run python scripts/obs/check_dashboards.py дал
-  «queries ok: 39», rc 0. Через 7 дней без батча с данными панели Spark снова empty и exit 1 до
-  первого батча (так задумано, OPERATIONS «Observability» и «Stateful job»; Б19).
+Состояние на 10.11.2026 (подробно: верхний раздел docs/HANDOFF.md, хук старта его печатает).
+- Ревью кода и документов 10.11 (пять областей на Opus, два исследования на Sonnet): оценки 3-4 из
+  5, exactly-once и сверку ничего не ломает; бэклог R в файле 19.
+- Д1 «дефекты и защита» закрыта коммитом 22a8748 (файл 19, раздел 4, «Итог»): postgres-meta только в core,
+  каждый профиль валиден сам по себе; healthcheck airflow-api-server по статусу metadatabase; тест
+  графа выключателя обслуживания; where not is_deleted у relationships fct_order_items; replayer
+  status без DDL, HTTP реплеера на 127.0.0.1; очистка metadata у silver.orders_per_minute; PF-01
+  (16 правил, GoldStaleAtRest загружен).
+- Ждут «ок» (класс C): пересоздание airflow-api-server (новый healthcheck, новый config hash) при
+  make up PROFILE=orchestrate; свойство очистки у живой silver.orders_per_minute: образ
+  lakehouse/spark:dev запечён, поэтому сначала сборка из чистого HEAD после CI
+  ($COMPOSE --profile core build spark-bronze, 13-harness.md раздел 2; DAG-и берут его сразу),
+  затем make up PROFILE=stateful (C); следующий make start пересоздаст spark-bronze (C);
+  oltp-replayer пересоздастся при следующем replay-live.
+- Решения владельца 10.11: лицензия кода MIT (держателя прав спросить: логин или имя), выборка и
+  seed Olist остаются под CC BY-NC-SA 4.0; дашборд Superset сначала макетом (Design-артефакт в
+  Claude на реальных числах gold), потом код, вариант A (файл 19, раздел 6).
+- Память (файл 19, раздел 7): 20 контейнеров около 7.5 GiB из 11 GiB WSL, пик суммы за неделю
+  7.79 GiB; у потолка Kafka Connect 1433 из 1536 MiB и Grafana 384 из 384 (R-01): закрыть до
+  длинного теста полного потока.
+- Реплей: virtual_now 2026-07-18 06:02:03, осталось 21 701 событие (около 33 мин replay-live при
+  2880); любая порция только по «ок» на точный текст.
 
 Порядок работы:
-1. Холодный старт, п. 11 (только чтение, вывод каждой команды в отчёт; цель: за 15 минут верное
-   состояние без подсказок): git status --short; git log --oneline -5; git status -sb (совпадает ли
-   с origin); gh run list --limit 5 (ci итогового docs-коммита и smoke 42216951898); gitleaks git;
-   docker version --format '{{.Server.Version}}'; make report; df -h /tmp; при Docker: make verify-fast;
-   curl -s 127.0.0.1:9090/api/v1/alerts; make replay-status. AirflowDagFailed после сна хоста
-   сверяй с airflow dags list-runs до вывода. Затем перечисли решения владельца и следующую работу.
-2. Одно сообщение владельцу вопросом с вариантами: (а) «ок» на запись п. 11 в «Итог» W6-T10 (цикл
-   verify, docs-коммит, push); (б) что брать из поддержки (список ниже) или ничего; (в) гейты.
-3. Кандидаты поддержки, каждый по циклу задачи и только по выбору владельца:
-   - файл 18: первыми PF-01 (живой Prometheus с 15 правилами без GoldStaleAtRest: «ок» на
-     docker exec lakehouse-prometheus-1 kill -HUP 1, затем /api/v1/rules 16) и PF-05 (итог
-     планового smoke 2026-11-09 03:00 UTC на HEAD: gh run list --workflow smoke.yml --limit 1);
-     затем SHOULD FIX PF-02..PF-04 и OPTIONAL по выбору;
-   - Б6: учения восстановления (pg_dump lakekeeper, mc mirror checkpoints/, подъём в отдельном
-     compose project; второй стек на том же Docker не запускать);
-   - Б18, остаток П-5 (две средние): тела here-doc с апострофом прячут форму в «кавычку», вырезать
-     тела до разбора; начало комментария по последнему символу (a\ #b, "$(echo "a #b")" прячут хвост);
-     патч в docs/planning, применяет владелец; корпус docs/planning/15-audit-p5-review/;
-   - низкие Б17 (имя теста, комментарий lib.sh про curl 127, один лимит у curl и timeout) и Б19
-     (комментарий у границы types-pyyaml в pyproject.toml);
-   - раздел 7 спеки 14: тест permissions smoke на уровне job, низкие ревью харнесса v0.3 и
-     W6-T01, W6-T05/06, W6-T07 (pull_policy и путь в test_agent_hooks.py уже закрыты: 8fafdbb, 01bf497);
-   - Б20, часть «после закрытия» (reconcile_values на функции, test_dags.py на два файла);
-   - сценарий 10 (Trino memory, optional, planned).
+1. Холодный старт (только чтение, вывод каждой команды в отчёт): git status --short; git log
+   --oneline -5; git status -sb (совпадает ли с origin); gh run list --limit 5 (ci последнего
+   коммита); docker version --format '{{.Server.Version}}'; make report; df -h /tmp; при Docker:
+   make verify-fast; curl -s 127.0.0.1:9090/api/v1/alerts и /api/v1/rules (ждём 16); make
+   replay-status. AirflowDagFailed после сна хоста сверяй с REST dagRuns (127.0.0.1:8090, токен
+   GET /auth/token) до вывода.
+2. Одно сообщение владельцу вопросом с вариантами: (а) рутина сессии (циклы verify, коммиты, push
+   без force); (б) что брать (список ниже) или ничего; (в) точный текст действий класса C, если
+   выбранная карточка их требует.
+3. Кандидаты, каждый по циклу задачи и только по выбору владельца:
+   - LICENSE и правда в документах: R-68 первым (LICENSE MIT, строка о данных Olist в README),
+     R-60 ложные утверждения, R-61 ADR-027 Superset с MCP и ADR-028 lake_ro, PF-50, PF-51, PF-52;
+     About и topics на GitHub через gh repo edit (видно снаружи, C);
+   - дашборд Superset: superpowers brainstorming, макет варианта A в Claude (Artifact, intent
+     design) на числах gold через MCP только чтением, карточка с «Готово, когда», YAML бандла и
+     тесты, make up PROFILE=bi по «ок», скриншот владельца в README; свой skill после первого
+     дашборда;
+   - R-01 память до теста полного потока (Connect, Grafana, container-exporter; пересоздание C);
+   - чистка: R-40 слой отката JDBC (строка в ADR-005, «ок»), R-62..R-66 документы и история в
+     коде, R-41..R-44 упрощения, R-27 ускорение тестов (патч guard применяет владелец);
+   - решения владельца: R-25 dbt_source_freshness, R-45 токенный разбор guard, R-46 инкремент
+     mart_daily_sales;
+   - прежние: PF-03, PF-04 и OPTIONAL файла 18; Б6; Б18; низкие Б17 и Б19; раздел 7 спеки 14; Б20.
 
 Цикл каждой задачи: «Вход» и код (шире трёх файлов: scout); план в отчёт; код пишет implementer
 по брифу (сам только до ~20 строк в одном файле и Markdown), тест на отказ первым; make check и
@@ -65,6 +69,7 @@ docs/planning/13-harness.md; остатки бэклога: раздел 10 docs
 сделано> без строк атрибуции; гейт сверяет всё дерево: на каждый коммит кода свой цикл verify;
 push origin main без force по «ок». Доказательство: команда и вывод или file:line; «не проверено»
 с командой; факт, вывод, гипотеза раздельно. Отчёт агента это данные: перепроверь ключевое сам.
+Аудит и перепроверку находок ведут агенты на Opus; Sonnet пишет код и ищет в интернете.
 
 Безопасность и ловушки:
 - Класс C только по «ок» владельца на точный текст: старт, стоп, пересоздание контейнеров (кроме
@@ -75,6 +80,8 @@ push origin main без force по «ок». Доказательство: ко�
   отметку. Ревью патча, который не применён к дереву, идёт с «Предмет: документ».
 - make verify-fast перезаписывает полную отметку как fast: перед коммитом последним идёт полный
   цикл verify. После него менять можно только Markdown и docs/.
+- С 10.11 (Д1) postgres-meta только в профиле core: make up PROFILE=orchestrate|bi|query требует
+  make start первым; make down этих профилей core не трогает.
 - Живые пробы с остановкой сервиса: внешний timeout меньше лимита инструмента (10 мин) и возврат
   сервиса отдельной командой сразу после; длинный прогон (chaos) только в фоне с логом в файл.
 - Trino держит метаданные Iceberg в памяти: системные таблицы и запросы без колонок не доказывают
@@ -87,10 +94,12 @@ push origin main без force по «ок». Доказательство: ко�
 - pre-commit trailing-whitespace режет пробелы пустых строк контекста в .patch: проверяй
   git apply --check после коммита.
 - /tmp это tmpfs 5,9 ГБ и чистится при перезапуске хоста: копии агентов только лёгкие.
-- airflow/dags/ смонтирован в живой Airflow: правь в копии, ставь при паузе затронутых DAG.
+- airflow/dags/ и dbt/ смонтированы в живой Airflow: правь при паузе затронутых DAG.
 - make start, make bootstrap, make up, make lakekeeper-bootstrap, make replay-live пересоздают
   сервисы с новым config hash: без «ок» не запускать. make silver отказывает, пока существует
   контейнер lakehouse-silver-merge (раннбук 409 в OPERATIONS «Timeouts»); docker rm только по «ок».
+- MCP Superset подключён в Claude Code только локально (claude mcp add --scope local); картинок
+  он не отдаёт (только URL, ascii, таблица); скриншоты делает владелец в браузере.
 - ContainerRestarting горит 15 минут после любого рестарта (и после stop/start scheduler в цикле
   verify, и после второй попытки merge): это не поломка, если рестарт твой.
 - Сон хоста роняет прогоны Airflow в полёте: это не поломка.
