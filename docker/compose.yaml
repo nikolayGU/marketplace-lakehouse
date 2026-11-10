@@ -145,7 +145,8 @@ services:
     deploy:
       resources:
         limits:
-          memory: 1536M
+          # Heap from CONNECT_HEAP plus about 0.4 GiB of native JVM memory; test_compose holds the gap.
+          memory: 1792M
     networks: [lake]
 
   minio:
@@ -701,8 +702,9 @@ services:
     deploy:
       resources:
         limits:
-          # 256M before the Trino plugin; it runs as its own Go process beside Grafana (W6-D11).
-          memory: 384M
+          # Grafana runs every datasource plugin as its own process, about 320M of anonymous memory;
+          # 512M keeps them out of swap.
+          memory: 512M
     networks: [lake]
 
   kafka-exporter:
@@ -797,7 +799,8 @@ services:
     deploy:
       resources:
         limits:
-          memory: 64M
+          # Every /metrics call walks the Docker API for all containers.
+          memory: 128M
     networks: [lake]
 
   # ---------------------------------------------------------------- bi
@@ -864,6 +867,8 @@ services:
       - ./superset/superset_config.py:/app/superset_config.py:ro
       - ./superset/init.sh:/init/init.sh:ro
       - ./superset/dashboards:/bundle:ro
+    healthcheck:
+      disable: true
     logging: *logging
     deploy:
       resources:

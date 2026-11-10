@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -138,7 +139,7 @@ def test_every_one_shot_job_of_the_header_exists_and_does_not_restart() -> None:
 def test_superset_init_has_no_healthcheck_and_a_memory_limit() -> None:
     init = _services()["superset-init"]
 
-    assert "healthcheck" not in init
+    assert init["healthcheck"] == {"disable": True}
     assert init["deploy"]["resources"]["limits"]["memory"]
 
 
@@ -246,3 +247,32 @@ def test_replayer_container_listens_on_all_interfaces() -> None:
     env = _load_services()["oltp-replayer"]["environment"]
 
     assert env["HTTP_HOST"] == "0.0.0.0"
+
+
+def _mib(value: str, unit: str) -> int:
+    return int(value) * (1024 if unit.lower() == "g" else 1)
+
+
+def test_connect_limit_leaves_native_room_over_its_heap() -> None:
+    # Native JVM memory is about 0.4 GiB over the heap once swap is counted; 768 MiB over -Xmx
+    # leaves room for load. The limit only follows CONNECT_HEAP if the service reads it.
+    environment = _services()["kafka-connect"]["environment"]
+    assert environment["KAFKA_HEAP_OPTS"] == "${CONNECT_HEAP}"
+    heap = re.search(r"^CONNECT_HEAP=.*-Xmx(\d+)([gGmM])", ENV_EXAMPLE.read_text(), re.M)
+    assert heap is not None
+    limit = re.fullmatch(
+        r"(\d+)([MG])",
+        str(_services()["kafka-connect"]["deploy"]["resources"]["limits"]["memory"]),
+    )
+    assert limit is not None
+
+    room = _mib(*limit.groups()) - _mib(*heap.groups())
+
+    assert room >= 768
+
+
+def test_container_exporter_limit_leaves_room_for_the_docker_api_walk() -> None:
+    # Every /metrics call walks the Docker API for all containers; 64M kept it in swap.
+    limits = _services()["container-exporter"]["deploy"]["resources"]["limits"]
+
+    assert limits["memory"] == "128M"

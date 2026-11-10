@@ -145,4 +145,4 @@ def test_grafana_pins_the_plugin_version_and_has_room_for_it() -> None:
     # Synchronous: provisioning must find the plugin when the datasource file is read.
     assert grafana["environment"]["GF_PLUGINS_PREINSTALL_SYNC"] == f"{PLUGIN}@1.4.1"
     assert "GF_PLUGINS_PREINSTALL" not in grafana["environment"]
-    assert grafana["deploy"]["resources"]["limits"]["memory"] == "384M"
+    assert grafana["deploy"]["resources"]["limits"]["memory"] == "512M"
