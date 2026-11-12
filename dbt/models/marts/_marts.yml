@@ -23,7 +23,20 @@ models:
         description: "{{ doc('purchase_date') }}"
         data_tests: [not_null]
       - name: seller_state
+        description: >
+          State of a seller among the items of the order; 'unknown' for an order without items or
+          an item without a seller.
         data_tests: [not_null]
+      - name: orders_count
+        description: >
+          Orders with any item of the seller state on the date, deleted items included. An order
+          without items, and an item without a seller, counts in the state 'unknown'.
+      - name: canceled_orders
+        description: Orders of the row whose order_status is canceled.
+      - name: items_count
+        description: Live items of orders that are neither canceled nor unavailable.
+      - name: freight_value
+        description: Freight of the live items counted in gmv.
       - name: gmv
         description: "{{ doc('gmv') }}"
       - name: canceled_gmv
@@ -38,9 +51,17 @@ models:
             columns: [purchase_month, customer_state]
     columns:
       - name: purchase_month
+        description: First day of the month of purchase_date.
         data_tests: [not_null]
       - name: customer_state
+        description: State of the customer of the orders in the row.
         data_tests: [not_null]
+      - name: delivered_orders
+        description: Orders with order_status delivered.
+      - name: on_time_orders
+        description: Delivered orders not later than the estimated date, by calendar date.
+      - name: avg_delivery_days
+        description: Average of delivery_days over delivered orders.
       - name: on_time_rate
         description: "{{ doc('on_time_rate') }}"
       - name: p90_delivery_days

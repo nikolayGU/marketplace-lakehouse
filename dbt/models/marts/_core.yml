@@ -5,6 +5,7 @@ models:
       lost all of them when the order was canceled.
     columns:
       - name: order_id
+        description: Order identifier, the grain of the model.
         data_tests: [unique, not_null]
       - name: customer_unique_id
         description: The person; customer_id is issued per order (D3).
@@ -16,6 +17,26 @@ models:
                 field: customer_unique_id
       - name: purchase_date
         description: "{{ doc('purchase_date') }}"
+      - name: customer_id
+        description: Customer id issued per order; the person is customer_unique_id.
+      - name: customer_city
+        description: City of the customer of the order.
+      - name: customer_state
+        description: State of the customer of the order.
+      - name: order_status
+        description: Status of the order as in silver.
+      - name: order_purchase_timestamp
+        description: Business time of the purchase; purchase_date is its calendar date.
+      - name: items_count
+        description: Number of live items of the order.
+      - name: freight_value
+        description: Sum of freight_value over live items.
+      - name: payment_value
+        description: Sum of payment_value over live payments.
+      - name: is_delivered
+        description: order_status is delivered.
+      - name: is_canceled
+        description: order_status is canceled.
       - name: is_late
         description: >
           Delivered after the estimated date, by calendar date. Null unless the order is
@@ -36,6 +57,7 @@ models:
             columns: [order_id, order_item_id]
     columns:
       - name: order_id
+        description: Order of the item; part of the grain.
         data_tests:
           - not_null
           - relationships:
@@ -45,8 +67,10 @@ models:
               config:
                 where: "not is_deleted"
       - name: order_item_id
+        description: Position of the item within the order; part of the grain.
         data_tests: [not_null]
       - name: product_id
+        description: Product of the item.
         data_tests:
           - relationships:
               arguments:
@@ -55,6 +79,7 @@ models:
               config:
                 where: "not is_deleted"
       - name: seller_id
+        description: Seller of the item.
         data_tests:
           - relationships:
               arguments:
@@ -62,6 +87,25 @@ models:
                 field: seller_id
               config:
                 where: "not is_deleted"
+      - name: price
+        description: Price of the item.
+      - name: freight_value
+        description: Freight of the item.
+      - name: is_deleted
+        description: Soft-deleted item, kept for canceled GMV (D8); live metrics filter it (D4).
+      - name: order_status
+        description: Status of the order of the item; null if the order is missing.
+      - name: purchase_date
+        description: Calendar date of the purchase of the order; null if the order is missing.
+      - name: customer_state
+        description: >
+          State of the customer of the order, for BI filters. Null if the order is missing.
+      - name: product_category
+        description: >
+          Category of the product (dim_products: English, else Portuguese, else unknown). Null if
+          the product is missing.
+      - name: seller_state
+        description: State of the seller of the item. Null if the seller is missing.
   - name: dim_customers
     description: >
       One row per person (customer_unique_id) with at least one order in silver (D3); the address

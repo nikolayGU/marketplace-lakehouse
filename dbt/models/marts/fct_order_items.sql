@@ -12,6 +12,7 @@ select
     i.is_deleted,
     o.order_status,
     o.purchase_date,
+    o.customer_state,
     p.product_category,
     s.seller_state,
     i.updated_at
