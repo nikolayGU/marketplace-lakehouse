@@ -14,12 +14,11 @@ import re
 from pathlib import Path
 
 import pytest
+from dbt_sql import without_comments
 
 MODELS = Path(__file__).resolve().parents[2] / "dbt" / "models"
 CONSUMERS = sorted([*(MODELS / "intermediate").glob("*.sql"), *(MODELS / "marts").glob("*.sql")])
 
-# SQL line and block comments and Jinja comments: none of them is a filter.
-COMMENT = re.compile(r"--[^\n]*|/\*.*?\*/|\{#.*?#\}", re.DOTALL)
 STAGING_REF = re.compile(r"ref\('(stg_\w+)'\)")
 NOT_DELETED = re.compile(r"\bnot\s+(?:\w+\.)?is_deleted\b")
 WHERE = re.compile(r"\bwhere\b(.*?)(?=\bgroup\s+by\b|\border\s+by\b|\Z)", re.DOTALL)
@@ -40,10 +39,6 @@ GUARDED = {
     ("dim_sellers", "stg_sellers"),
     ("mart_seller_performance", "stg_reviews"),
 }
-
-
-def without_comments(sql: str) -> str:
-    return COMMENT.sub("", sql)
 
 
 def readings() -> list[tuple[str, str, str]]:

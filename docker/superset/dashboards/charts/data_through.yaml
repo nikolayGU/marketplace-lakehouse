@@ -1,0 +1,53 @@
+slice_name: Data through
+description: Latest purchase date in the gold orders, the anchor of the relative periods.
+certified_by: null
+certification_details: null
+viz_type: handlebars
+params:
+  datasource: 0__table
+  viz_type: handlebars
+  query_mode: aggregate
+  groupby: []
+  metrics:
+    - expressionType: SQL
+      sqlExpression: MAX(purchase_date)
+      label: data_through
+      hasCustomLabel: true
+      optionName: metric_data_through
+  all_columns: []
+  adhoc_filters:
+    - expressionType: SIMPLE
+      subject: purchase_date
+      operator: TEMPORAL_RANGE
+      comparator: No filter
+      clause: WHERE
+      sqlExpression: null
+      isExtra: false
+      isNew: false
+      datasourceWarning: false
+      filterOptionName: filter_purchase_date_no_filter
+  order_desc: true
+  row_limit: 1
+  handlebarsTemplate: <div class="data-through">Data through {{dateFormat data.[0].data_through format="D
+    MMM YYYY"}}</div>
+  styleTemplate: '.data-through { color: #48505d; font-size: 14px; }'
+  extra_form_data: {}
+query_context: '{"datasource": {"id": 0, "type": "table"}, "force": false, "queries": [{"filters": [{"col":
+  "purchase_date", "op": "TEMPORAL_RANGE", "val": "No filter"}], "extras": {"having": "", "where": ""},
+  "applied_time_extras": {}, "annotation_layers": [], "series_limit": 0, "order_desc": true, "url_params":
+  {}, "custom_params": {}, "custom_form_data": {}, "columns": [], "metrics": [{"expressionType": "SQL",
+  "sqlExpression": "MAX(purchase_date)", "label": "data_through", "hasCustomLabel": true, "optionName":
+  "metric_data_through"}], "orderby": [], "row_limit": 1, "series_columns": [], "is_timeseries": false,
+  "post_processing": []}], "form_data": {"datasource": "0__table", "viz_type": "handlebars", "query_mode":
+  "aggregate", "groupby": [], "metrics": [{"expressionType": "SQL", "sqlExpression": "MAX(purchase_date)",
+  "label": "data_through", "hasCustomLabel": true, "optionName": "metric_data_through"}], "all_columns":
+  [], "adhoc_filters": [{"expressionType": "SIMPLE", "subject": "purchase_date", "operator": "TEMPORAL_RANGE",
+  "comparator": "No filter", "clause": "WHERE", "sqlExpression": null, "isExtra": false, "isNew": false,
+  "datasourceWarning": false, "filterOptionName": "filter_purchase_date_no_filter"}], "order_desc": true,
+  "row_limit": 1, "handlebarsTemplate": "<div class=\"data-through\">Data through {{dateFormat data.[0].data_through
+  format=\"D MMM YYYY\"}}</div>", "styleTemplate": ".data-through { color: #48505d; font-size: 14px; }",
+  "extra_form_data": {}}, "result_format": "json", "result_type": "full"}'
+cache_timeout: null
+uuid: 90a4dfdc-a647-5670-b598-1a77b5361f67
+version: 1.0.0
+dataset_uuid: ab73c7d5-dce3-5791-a95e-6fbb48d0a084

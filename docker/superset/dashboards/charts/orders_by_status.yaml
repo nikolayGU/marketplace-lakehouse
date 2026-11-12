@@ -1,0 +1,57 @@
+slice_name: Orders by current status
+description: Orders placed in the period by their current status.
+certified_by: null
+certification_details: null
+viz_type: echarts_timeseries_bar
+params:
+  datasource: 0__table
+  viz_type: echarts_timeseries_bar
+  x_axis: order_status
+  x_axis_sort: orders
+  x_axis_sort_asc: false
+  metrics:
+    - orders
+  groupby: []
+  adhoc_filters:
+    - expressionType: SIMPLE
+      subject: purchase_date
+      operator: TEMPORAL_RANGE
+      comparator: Last quarter
+      clause: WHERE
+      sqlExpression: null
+      isExtra: false
+      isNew: false
+      datasourceWarning: false
+      filterOptionName: filter_purchase_date_last_quarter
+  time_range: Last quarter
+  order_desc: true
+  row_limit: 10
+  truncate_metric: true
+  show_empty_columns: true
+  orientation: horizontal
+  show_legend: false
+  color_scheme: harbor
+  y_axis_format: ',d'
+  show_value: true
+  extra_form_data: {}
+  annotation_layers: []
+query_context: '{"datasource": {"id": 0, "type": "table"}, "force": false, "queries": [{"filters": [{"col":
+  "purchase_date", "op": "TEMPORAL_RANGE", "val": "Last quarter"}], "extras": {"having": "", "where":
+  ""}, "applied_time_extras": {}, "annotation_layers": [], "series_limit": 0, "order_desc": true, "url_params":
+  {}, "custom_params": {}, "custom_form_data": {}, "time_range": "Last quarter", "columns": ["order_status"],
+  "metrics": ["orders"], "orderby": [["orders", false]], "row_limit": 10, "series_columns": [], "is_timeseries":
+  false, "post_processing": [{"operation": "pivot", "options": {"index": ["order_status"], "columns":
+  [], "aggregates": {"orders": {"operator": "mean"}}, "drop_missing_columns": false}}, {"operation": "sort",
+  "options": {"by": "orders", "ascending": false}}, {"operation": "flatten"}]}], "form_data": {"datasource":
+  "0__table", "viz_type": "echarts_timeseries_bar", "x_axis": "order_status", "x_axis_sort": "orders",
+  "x_axis_sort_asc": false, "metrics": ["orders"], "groupby": [], "adhoc_filters": [{"expressionType":
+  "SIMPLE", "subject": "purchase_date", "operator": "TEMPORAL_RANGE", "comparator": "Last quarter", "clause":
+  "WHERE", "sqlExpression": null, "isExtra": false, "isNew": false, "datasourceWarning": false, "filterOptionName":
+  "filter_purchase_date_last_quarter"}], "time_range": "Last quarter", "order_desc": true, "row_limit":
+  10, "truncate_metric": true, "show_empty_columns": true, "orientation": "horizontal", "show_legend":
+  false, "color_scheme": "harbor", "y_axis_format": ",d", "show_value": true, "extra_form_data": {}, "annotation_layers":
+  []}, "result_format": "json", "result_type": "full"}'
+cache_timeout: null
+uuid: 96356677-50ce-5469-b548-f3fa205c2a1e
+version: 1.0.0
+dataset_uuid: ab73c7d5-dce3-5791-a95e-6fbb48d0a084

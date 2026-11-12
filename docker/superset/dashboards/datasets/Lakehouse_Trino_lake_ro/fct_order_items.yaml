@@ -23,6 +23,14 @@ metrics:
     d3format: null
     extra: {}
     warning_text: null
+  - metric_name: gmv
+    verbose_name: GMV
+    metric_type: null
+    expression: "SUM(CASE WHEN NOT is_deleted AND order_status NOT IN ('canceled', 'unavailable') THEN price END)"
+    description: Price of live items of orders that are neither canceled nor unavailable (D8).
+    d3format: null
+    extra: {}
+    warning_text: null
 columns:
   - column_name: order_id
     verbose_name: null
@@ -132,6 +140,26 @@ columns:
     groupby: true
     filterable: true
     expression: null
+    description: null
+    python_date_format: null
+  - column_name: customer_state
+    verbose_name: null
+    is_dttm: false
+    is_active: true
+    type: VARCHAR
+    groupby: true
+    filterable: true
+    expression: null
+    description: null
+    python_date_format: null
+  - column_name: category_label
+    verbose_name: Category
+    is_dttm: false
+    is_active: true
+    type: VARCHAR
+    groupby: true
+    filterable: true
+    expression: replace(product_category, '_', ' ')
     description: null
     python_date_format: null
 version: 1.0.0

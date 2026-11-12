@@ -1,0 +1,98 @@
+slice_name: On-time delivery by month
+description: Share of delivered orders that arrived by the promised date, with the 95% target.
+certified_by: null
+certification_details: null
+viz_type: echarts_timeseries_line
+params:
+  datasource: 0__table
+  viz_type: echarts_timeseries_line
+  x_axis: purchase_month
+  time_grain_sqla: P1M
+  x_axis_sort_asc: true
+  metrics:
+    - on_time_rate
+  groupby: []
+  adhoc_filters:
+    - expressionType: SIMPLE
+      subject: purchase_month
+      operator: TEMPORAL_RANGE
+      comparator: Last year
+      clause: WHERE
+      sqlExpression: null
+      isExtra: false
+      isNew: false
+      datasourceWarning: false
+      filterOptionName: filter_purchase_month_last_year
+  time_range: Last year
+  order_desc: true
+  row_limit: 10000
+  truncate_metric: true
+  show_empty_columns: true
+  rich_tooltip: true
+  show_legend: false
+  legendType: scroll
+  legendOrientation: top
+  color_scheme: harbor
+  seriesType: line
+  markerEnabled: false
+  zoomable: false
+  show_value: false
+  forecastEnabled: false
+  logAxis: false
+  contributionMode: null
+  stack: null
+  y_axis_format: .0%
+  extra_form_data: {}
+  annotation_layers:
+    - name: Target 95%
+      annotationType: FORMULA
+      sourceType: ''
+      value: '0.95'
+      color: '#48505d'
+      opacity: ''
+      style: dashed
+      width: 1.5
+      show: true
+      showLabel: false
+      showMarkers: false
+      hideLine: false
+      overrides: {}
+      titleColumn: ''
+      timeColumn: ''
+      intervalEndColumn: ''
+      descriptionColumns: []
+  show_extra_controls: false
+  truncateYAxis: true
+  y_axis_bounds:
+    - 0.75
+    - 1
+query_context: '{"datasource": {"id": 0, "type": "table"}, "force": false, "queries": [{"filters": [{"col":
+  "purchase_month", "op": "TEMPORAL_RANGE", "val": "Last year"}], "extras": {"having": "", "where": "",
+  "time_grain_sqla": "P1M"}, "applied_time_extras": {}, "annotation_layers": [{"name": "Target 95%", "annotationType":
+  "FORMULA", "sourceType": "", "value": "0.95", "color": "#48505d", "opacity": "", "style": "dashed",
+  "width": 1.5, "show": true, "showLabel": false, "showMarkers": false, "hideLine": false, "overrides":
+  {}, "titleColumn": "", "timeColumn": "", "intervalEndColumn": "", "descriptionColumns": []}], "series_limit":
+  0, "order_desc": true, "url_params": {}, "custom_params": {}, "custom_form_data": {}, "time_range":
+  "Last year", "columns": [{"timeGrain": "P1M", "columnType": "BASE_AXIS", "sqlExpression": "purchase_month",
+  "label": "purchase_month", "expressionType": "SQL"}], "metrics": ["on_time_rate"], "orderby": [["on_time_rate",
+  false]], "row_limit": 10000, "series_columns": [], "is_timeseries": false, "post_processing": [{"operation":
+  "pivot", "options": {"index": ["purchase_month"], "columns": [], "aggregates": {"on_time_rate": {"operator":
+  "mean"}}, "drop_missing_columns": false}}, {"operation": "flatten"}]}], "form_data": {"datasource":
+  "0__table", "viz_type": "echarts_timeseries_line", "x_axis": "purchase_month", "time_grain_sqla": "P1M",
+  "x_axis_sort_asc": true, "metrics": ["on_time_rate"], "groupby": [], "adhoc_filters": [{"expressionType":
+  "SIMPLE", "subject": "purchase_month", "operator": "TEMPORAL_RANGE", "comparator": "Last year", "clause":
+  "WHERE", "sqlExpression": null, "isExtra": false, "isNew": false, "datasourceWarning": false, "filterOptionName":
+  "filter_purchase_month_last_year"}], "time_range": "Last year", "order_desc": true, "row_limit": 10000,
+  "truncate_metric": true, "show_empty_columns": true, "rich_tooltip": true, "show_legend": false, "legendType":
+  "scroll", "legendOrientation": "top", "color_scheme": "harbor", "seriesType": "line", "markerEnabled":
+  false, "zoomable": false, "show_value": false, "forecastEnabled": false, "logAxis": false, "contributionMode":
+  null, "stack": null, "y_axis_format": ".0%", "extra_form_data": {}, "annotation_layers": [{"name": "Target
+  95%", "annotationType": "FORMULA", "sourceType": "", "value": "0.95", "color": "#48505d", "opacity":
+  "", "style": "dashed", "width": 1.5, "show": true, "showLabel": false, "showMarkers": false, "hideLine":
+  false, "overrides": {}, "titleColumn": "", "timeColumn": "", "intervalEndColumn": "", "descriptionColumns":
+  []}], "show_extra_controls": false, "truncateYAxis": true, "y_axis_bounds": [0.75, 1]}, "result_format":
+  "json", "result_type": "full"}'
+cache_timeout: null
+uuid: be8c5f00-fe30-5838-b9a6-18a037e93a16
+version: 1.0.0
+dataset_uuid: c0822663-9010-5fb9-aa39-8d903267a354

@@ -23,6 +23,14 @@ metrics:
     d3format: null
     extra: {}
     warning_text: null
+  - metric_name: on_time_rate
+    verbose_name: On-time delivery
+    metric_type: null
+    expression: "1.0 * SUM(on_time_orders) / NULLIF(SUM(delivered_orders), 0)"
+    description: Share of delivered orders that arrived by the estimated date.
+    d3format: null
+    extra: {}
+    warning_text: null
 columns:
   - column_name: purchase_month
     verbose_name: null

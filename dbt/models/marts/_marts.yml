@@ -24,8 +24,8 @@ models:
         data_tests: [not_null]
       - name: seller_state
         description: >
-          State of a seller among the items of the order; 'unknown' for an order without items or
-          an item without a seller.
+          State of a seller among the items of the orders of the row; 'unknown' for orders without
+          items or items without a live seller.
         data_tests: [not_null]
       - name: orders_count
         description: >

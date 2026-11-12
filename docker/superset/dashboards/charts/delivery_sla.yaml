@@ -1,5 +1,5 @@
-slice_name: Delivery SLA by state
-description: Share of delivered orders that arrived by the estimated date, worst state first.
+slice_name: States with the most late deliveries
+description: Customer states with at least 50 delivered orders, lowest on-time share first.
 certified_by: null
 certification_details: null
 viz_type: table
@@ -10,59 +10,69 @@ params:
   groupby:
     - customer_state
   metrics:
-    - &id001
-      expressionType: SQL
-      sqlExpression: 1.0 * SUM(on_time_orders) / NULLIF(SUM(delivered_orders), 0)
-      label: On-time rate
-      hasCustomLabel: true
-      optionName: metric_on-time_rate
-    - expressionType: SQL
-      sqlExpression: SUM(delivered_orders)
-      label: Delivered orders
-      hasCustomLabel: true
-      optionName: metric_delivered_orders
+    - delivered_orders
+    - late_orders
+    - on_time_rate
+    - avg_delivery_days
   all_columns: []
   percent_metrics: []
+  time_range: Last quarter
   adhoc_filters:
+    - expressionType: SIMPLE
+      subject: purchase_date
+      operator: TEMPORAL_RANGE
+      comparator: Last quarter
+      clause: WHERE
+      sqlExpression: null
+      isExtra: false
+      isNew: false
+      datasourceWarning: false
+      filterOptionName: filter_purchase_date_last_quarter
     - expressionType: SQL
-      sqlExpression: SUM(delivered_orders) > 0
+      sqlExpression: COUNT_IF(is_delivered) >= 50
       clause: HAVING
       isExtra: false
       isNew: false
       datasourceWarning: false
-      filterOptionName: filter_has_deliveries
+      filterOptionName: filter_min_delivered
   order_by_cols: []
   order_desc: false
-  timeseries_limit_metric: *id001
-  row_limit: 100
-  server_page_length: 25
+  timeseries_limit_metric: on_time_rate
+  row_limit: 8
+  server_page_length: 10
   table_timestamp_format: smart_date
   allow_render_html: true
-  show_cell_bars: true
-  color_pn: true
+  conditional_formatting:
+    - column: on_time_rate
+      operator: <
+      targetValue: 0.95
+      colorScheme: '#d03c3c'
+      useGradient: false
+  column_config:
+    on_time_rate:
+      d3NumberFormat: .1%
+    avg_delivery_days:
+      d3NumberFormat: .1f
   extra_form_data: {}
-query_context: '{"datasource": {"id": 0, "type": "table"}, "force": false, "queries": [{"filters": [],
-  "extras": {"having": "(SUM(delivered_orders) > 0)", "where": ""}, "applied_time_extras": {}, "annotation_layers":
-  [], "series_limit": 0, "order_desc": false, "url_params": {}, "custom_params": {}, "custom_form_data":
-  {}, "columns": ["customer_state"], "metrics": [{"expressionType": "SQL", "sqlExpression": "1.0 * SUM(on_time_orders)
-  / NULLIF(SUM(delivered_orders), 0)", "label": "On-time rate", "hasCustomLabel": true, "optionName":
-  "metric_on-time_rate"}, {"expressionType": "SQL", "sqlExpression": "SUM(delivered_orders)", "label":
-  "Delivered orders", "hasCustomLabel": true, "optionName": "metric_delivered_orders"}], "orderby": [[{"expressionType":
-  "SQL", "sqlExpression": "1.0 * SUM(on_time_orders) / NULLIF(SUM(delivered_orders), 0)", "label": "On-time
-  rate", "hasCustomLabel": true, "optionName": "metric_on-time_rate"}, true]], "row_limit": 100, "series_columns":
-  [], "is_timeseries": false, "post_processing": []}], "form_data": {"datasource": "0__table", "viz_type":
-  "table", "query_mode": "aggregate", "groupby": ["customer_state"], "metrics": [{"expressionType": "SQL",
-  "sqlExpression": "1.0 * SUM(on_time_orders) / NULLIF(SUM(delivered_orders), 0)", "label": "On-time rate",
-  "hasCustomLabel": true, "optionName": "metric_on-time_rate"}, {"expressionType": "SQL", "sqlExpression":
-  "SUM(delivered_orders)", "label": "Delivered orders", "hasCustomLabel": true, "optionName": "metric_delivered_orders"}],
-  "all_columns": [], "percent_metrics": [], "adhoc_filters": [{"expressionType": "SQL", "sqlExpression":
-  "SUM(delivered_orders) > 0", "clause": "HAVING", "isExtra": false, "isNew": false, "datasourceWarning":
-  false, "filterOptionName": "filter_has_deliveries"}], "order_by_cols": [], "order_desc": false, "timeseries_limit_metric":
-  {"expressionType": "SQL", "sqlExpression": "1.0 * SUM(on_time_orders) / NULLIF(SUM(delivered_orders),
-  0)", "label": "On-time rate", "hasCustomLabel": true, "optionName": "metric_on-time_rate"}, "row_limit":
-  100, "server_page_length": 25, "table_timestamp_format": "smart_date", "allow_render_html": true, "show_cell_bars":
-  true, "color_pn": true, "extra_form_data": {}}, "result_format": "json", "result_type": "full"}'
+query_context: '{"datasource": {"id": 0, "type": "table"}, "force": false, "queries": [{"filters": [{"col":
+  "purchase_date", "op": "TEMPORAL_RANGE", "val": "Last quarter"}], "extras": {"having": "(COUNT_IF(is_delivered)
+  >= 50)", "where": ""}, "applied_time_extras": {}, "annotation_layers": [], "series_limit": 0, "order_desc":
+  false, "url_params": {}, "custom_params": {}, "custom_form_data": {}, "time_range": "Last quarter",
+  "columns": ["customer_state"], "metrics": ["delivered_orders", "late_orders", "on_time_rate", "avg_delivery_days"],
+  "orderby": [["on_time_rate", true]], "row_limit": 8, "series_columns": [], "is_timeseries": false, "post_processing":
+  []}], "form_data": {"datasource": "0__table", "viz_type": "table", "query_mode": "aggregate", "groupby":
+  ["customer_state"], "metrics": ["delivered_orders", "late_orders", "on_time_rate", "avg_delivery_days"],
+  "all_columns": [], "percent_metrics": [], "time_range": "Last quarter", "adhoc_filters": [{"expressionType":
+  "SIMPLE", "subject": "purchase_date", "operator": "TEMPORAL_RANGE", "comparator": "Last quarter", "clause":
+  "WHERE", "sqlExpression": null, "isExtra": false, "isNew": false, "datasourceWarning": false, "filterOptionName":
+  "filter_purchase_date_last_quarter"}, {"expressionType": "SQL", "sqlExpression": "COUNT_IF(is_delivered)
+  >= 50", "clause": "HAVING", "isExtra": false, "isNew": false, "datasourceWarning": false, "filterOptionName":
+  "filter_min_delivered"}], "order_by_cols": [], "order_desc": false, "timeseries_limit_metric": "on_time_rate",
+  "row_limit": 8, "server_page_length": 10, "table_timestamp_format": "smart_date", "allow_render_html":
+  true, "conditional_formatting": [{"column": "on_time_rate", "operator": "<", "targetValue": 0.95, "colorScheme":
+  "#d03c3c", "useGradient": false}], "column_config": {"on_time_rate": {"d3NumberFormat": ".1%"}, "avg_delivery_days":
+  {"d3NumberFormat": ".1f"}}, "extra_form_data": {}}, "result_format": "json", "result_type": "full"}'
 cache_timeout: null
 uuid: 203f021c-39d0-5703-baa6-abd82d61b845
 version: 1.0.0
-dataset_uuid: c0822663-9010-5fb9-aa39-8d903267a354
+dataset_uuid: ab73c7d5-dce3-5791-a95e-6fbb48d0a084

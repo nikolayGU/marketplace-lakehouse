@@ -826,6 +826,7 @@ services:
       SUPERSET_DATABASE_URI: postgresql+psycopg2://${META_USER}:${META_PASSWORD}@postgres-meta:5432/${SUPERSET_DB}
       SUPERSET_ADMIN_PASSWORD: ${SUPERSET_ADMIN_PASSWORD:?run make secrets, it appends the missing key}   # read by superset/check.py
       SUPERSET_CONFIG_PATH: /app/superset_config.py
+      SUPERSET_DATA_ANCHOR: ${SUPERSET_DATA_ANCHOR:-2026-07-01}
     volumes:
       - ./superset/superset_config.py:/app/superset_config.py:ro
       - ./superset/check.py:/app/check.py:ro
@@ -866,6 +867,7 @@ services:
     volumes:
       - ./superset/superset_config.py:/app/superset_config.py:ro
       - ./superset/init.sh:/init/init.sh:ro
+      - ./superset/import_bundle.py:/init/import_bundle.py:ro
       - ./superset/dashboards:/bundle:ro
     healthcheck:
       disable: true
@@ -878,10 +880,12 @@ services:
 
   # MCP endpoint of Superset for agents (http://127.0.0.1:5008/mcp). Every tool runs as `admin`
   # (MCP_DEV_USERNAME). Through it an agent writes Superset metadata (charts, dashboards, saved
-  # queries). A rerun of `superset-init` keeps the database, datasets and charts as they are
-  # (imported with overwrite=False) but replaces the Marketplace dashboard and its chart list
-  # (the CLI imports dashboards with overwrite=True). The data boundary is the ACL of the Trino user
-  # `superset` (SELECT on lake_ro.gold marts, docker/trino/etc/rules.json) and allow_dml: false.
+  # queries). A rerun of `superset-init` overwrites the datasets with their columns and metrics,
+  # the charts and the Marketplace dashboard from the bundle: UI edits to them are lost on every
+  # rerun, and columns and metrics of the bundle's datasets that are not in the YAML are deleted;
+  # datasets, charts and dashboards outside the bundle stay. The data
+  # boundary is the ACL of the Trino user `superset` (SELECT on lake_ro.gold marts,
+  # docker/trino/etc/rules.json) and allow_dml: false.
   # FASTMCP_HTTP_* makes fastmcp check Host and Origin (421 and 403 otherwise); off by default,
   # without it a web page could reach the port by DNS rebinding.
   superset-mcp:
@@ -900,6 +904,7 @@ services:
       SUPERSET_SECRET_KEY: ${SUPERSET_SECRET_KEY}
       SUPERSET_DATABASE_URI: postgresql+psycopg2://${META_USER}:${META_PASSWORD}@postgres-meta:5432/${SUPERSET_DB}
       SUPERSET_CONFIG_PATH: /app/superset_config.py
+      SUPERSET_DATA_ANCHOR: ${SUPERSET_DATA_ANCHOR:-2026-07-01}
       FASTMCP_HTTP_HOST_ORIGIN_PROTECTION: "true"
       FASTMCP_HTTP_ALLOWED_HOSTS: '["127.0.0.1", "localhost", "::1"]'
     volumes:

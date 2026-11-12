@@ -23,6 +23,98 @@ metrics:
     d3format: null
     extra: {}
     warning_text: null
+  - metric_name: gmv
+    verbose_name: GMV
+    metric_type: null
+    expression: "SUM(CASE WHEN order_status NOT IN ('canceled', 'unavailable') THEN items_value END)"
+    description: Value of live items of orders that are neither canceled nor unavailable (D8).
+    d3format: null
+    extra: {}
+    warning_text: null
+  - metric_name: orders
+    verbose_name: Orders
+    metric_type: null
+    expression: "COUNT(*)"
+    description: All orders of the period.
+    d3format: null
+    extra: {}
+    warning_text: null
+  - metric_name: paid_orders
+    verbose_name: Paid orders
+    metric_type: null
+    expression: "COUNT_IF(order_status NOT IN ('canceled', 'unavailable'))"
+    description: Orders that are neither canceled nor unavailable.
+    d3format: null
+    extra: {}
+    warning_text: null
+  - metric_name: aov
+    verbose_name: Average order value
+    metric_type: null
+    expression: >-
+      SUM(CASE WHEN order_status NOT IN ('canceled', 'unavailable') THEN items_value END) /
+      NULLIF(COUNT_IF(order_status NOT IN ('canceled', 'unavailable')), 0)
+    description: GMV per paid order.
+    d3format: null
+    extra: {}
+    warning_text: null
+  - metric_name: freight_share
+    verbose_name: Freight share
+    metric_type: null
+    expression: >-
+      SUM(CASE WHEN order_status NOT IN ('canceled', 'unavailable') THEN freight_value END) /
+      NULLIF(SUM(CASE WHEN order_status NOT IN ('canceled', 'unavailable') THEN items_value END), 0)
+    description: Freight of paid orders as a share of GMV.
+    d3format: null
+    extra: {}
+    warning_text: null
+  - metric_name: on_time_rate
+    verbose_name: On-time delivery
+    metric_type: null
+    expression: "1.0 * COUNT_IF(is_delivered AND NOT is_late) / NULLIF(COUNT_IF(is_delivered), 0)"
+    description: Share of delivered orders that arrived by the estimated date.
+    d3format: null
+    extra: {}
+    warning_text: null
+  - metric_name: cancellation_rate
+    verbose_name: Cancellation rate
+    metric_type: null
+    expression: "1.0 * COUNT_IF(order_status = 'canceled') / NULLIF(COUNT(*), 0)"
+    description: Share of orders that were canceled.
+    d3format: null
+    extra: {}
+    warning_text: null
+  - metric_name: delivered_orders
+    verbose_name: Delivered orders
+    metric_type: null
+    expression: "COUNT_IF(is_delivered)"
+    description: Orders with status delivered.
+    d3format: null
+    extra: {}
+    warning_text: null
+  - metric_name: late_orders
+    verbose_name: Late orders
+    metric_type: null
+    expression: "COUNT_IF(is_late)"
+    description: Delivered orders that arrived after the estimated date.
+    d3format: null
+    extra: {}
+    warning_text: null
+  - metric_name: avg_delivery_days
+    verbose_name: Average delivery days
+    metric_type: null
+    expression: "AVG(CASE WHEN is_delivered THEN delivery_days END)"
+    description: Days from purchase to delivery over delivered orders.
+    d3format: null
+    extra: {}
+    warning_text: null
+  - metric_name: in_transit_orders
+    verbose_name: Orders on the way
+    metric_type: null
+    expression: "COUNT_IF(NOT is_delivered AND order_status NOT IN ('canceled', 'unavailable'))"
+    description: Orders not yet delivered that are neither canceled nor unavailable.
+    d3format: null
+    extra: {}
+    warning_text: null
 columns:
   - column_name: order_id
     verbose_name: null

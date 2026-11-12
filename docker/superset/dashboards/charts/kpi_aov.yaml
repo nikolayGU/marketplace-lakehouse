@@ -1,0 +1,58 @@
+slice_name: Average order value
+description: GMV per paid order against the previous period of the same length.
+certified_by: null
+certification_details: null
+viz_type: pop_kpi
+params:
+  datasource: 0__table
+  viz_type: pop_kpi
+  metric: aov
+  adhoc_filters:
+    - expressionType: SIMPLE
+      subject: purchase_date
+      operator: TEMPORAL_RANGE
+      comparator: Last quarter
+      clause: WHERE
+      sqlExpression: null
+      isExtra: false
+      isNew: false
+      datasourceWarning: false
+      filterOptionName: filter_purchase_date_last_quarter
+  row_limit: 10000
+  y_axis_format: SMART_NUMBER
+  percentDifferenceFormat: .1%
+  header_font_size: 0.3
+  subtitle: GMV per paid order
+  subtitle_font_size: 0.125
+  show_metric_name: true
+  metric_name_font_size: 0.15
+  subheader_font_size: 0.15
+  comparison_color_enabled: true
+  comparison_color_scheme: Green
+  column_config: {}
+  time_compare:
+    - inherit
+  time_range: Last quarter
+  extra_form_data: {}
+  currency_format:
+    symbol: BRL
+    symbolPosition: prefix
+query_context: '{"datasource": {"id": 0, "type": "table"}, "force": false, "queries": [{"filters": [{"col":
+  "purchase_date", "op": "TEMPORAL_RANGE", "val": "Last quarter"}], "extras": {"having": "", "where":
+  ""}, "applied_time_extras": {}, "annotation_layers": [], "series_limit": 0, "order_desc": true, "url_params":
+  {}, "custom_params": {}, "custom_form_data": {}, "time_range": "Last quarter", "columns": [], "metrics":
+  ["aov"], "orderby": [], "row_limit": 10000, "series_columns": [], "is_timeseries": false, "time_offsets":
+  ["inherit"], "post_processing": []}], "form_data": {"datasource": "0__table", "viz_type": "pop_kpi",
+  "metric": "aov", "adhoc_filters": [{"expressionType": "SIMPLE", "subject": "purchase_date", "operator":
+  "TEMPORAL_RANGE", "comparator": "Last quarter", "clause": "WHERE", "sqlExpression": null, "isExtra":
+  false, "isNew": false, "datasourceWarning": false, "filterOptionName": "filter_purchase_date_last_quarter"}],
+  "row_limit": 10000, "y_axis_format": "SMART_NUMBER", "percentDifferenceFormat": ".1%", "header_font_size":
+  0.3, "subtitle": "GMV per paid order", "subtitle_font_size": 0.125, "show_metric_name": true, "metric_name_font_size":
+  0.15, "subheader_font_size": 0.15, "comparison_color_enabled": true, "comparison_color_scheme": "Green",
+  "column_config": {}, "time_compare": ["inherit"], "time_range": "Last quarter", "extra_form_data": {},
+  "currency_format": {"symbol": "BRL", "symbolPosition": "prefix"}}, "result_format": "json", "result_type":
+  "full"}'
+cache_timeout: null
+uuid: 4e4a9ab7-0377-5227-9294-796acc4c4a7e
+version: 1.0.0
+dataset_uuid: ab73c7d5-dce3-5791-a95e-6fbb48d0a084

@@ -14,8 +14,16 @@ position:
     type: GRID
     id: GRID_ID
     children:
-      - ROW-1
-      - ROW-2
+      - ROW-title
+      - HEADER-key
+      - ROW-kpi
+      - HEADER-sales
+      - ROW-sales
+      - HEADER-delivery
+      - ROW-delivery
+      - HEADER-orders
+      - ROW-orders
+      - ROW-footer
     parents:
       - ROOT_ID
   HEADER_ID:
@@ -23,9 +31,163 @@ position:
     type: HEADER
     meta:
       text: Marketplace
-  ROW-1:
+  ROW-title:
     type: ROW
-    id: ROW-1
+    id: ROW-title
+    children:
+      - MARKDOWN-title
+      - CHART-data_through
+    parents:
+      - ROOT_ID
+      - GRID_ID
+    meta:
+      background: BACKGROUND_TRANSPARENT
+  MARKDOWN-title:
+    type: MARKDOWN
+    id: MARKDOWN-title
+    children: []
+    parents:
+      - ROOT_ID
+      - GRID_ID
+      - ROW-title
+    meta:
+      width: 9
+      height: 14
+      code: '# Marketplace overview
+
+
+        Olist orders replayed from Postgres through CDC into the lakehouse. Amounts in Brazilian reais
+        (R$).
+
+
+        Figures by complete months; the month in progress is left out.'
+  CHART-data_through:
+    type: CHART
+    id: CHART-data_through
+    children: []
+    parents:
+      - ROOT_ID
+      - GRID_ID
+      - ROW-title
+    meta:
+      width: 3
+      height: 14
+      chartId: 1
+      uuid: 90a4dfdc-a647-5670-b598-1a77b5361f67
+      sliceName: Data through
+  ROW-kpi:
+    type: ROW
+    id: ROW-kpi
+    children:
+      - CHART-kpi_gmv
+      - CHART-kpi_orders
+      - CHART-kpi_aov
+      - CHART-kpi_freight_share
+      - CHART-kpi_on_time
+      - CHART-kpi_cancellation_rate
+    parents:
+      - ROOT_ID
+      - GRID_ID
+    meta:
+      background: BACKGROUND_TRANSPARENT
+  CHART-kpi_gmv:
+    type: CHART
+    id: CHART-kpi_gmv
+    children: []
+    parents:
+      - ROOT_ID
+      - GRID_ID
+      - ROW-kpi
+    meta:
+      width: 2
+      height: 24
+      chartId: 2
+      uuid: 21407878-8ba3-5e08-bc5c-74e5314500b1
+      sliceName: GMV
+  CHART-kpi_orders:
+    type: CHART
+    id: CHART-kpi_orders
+    children: []
+    parents:
+      - ROOT_ID
+      - GRID_ID
+      - ROW-kpi
+    meta:
+      width: 2
+      height: 24
+      chartId: 3
+      uuid: c679c147-2f5f-579a-8ab6-f8c0095d2db0
+      sliceName: Orders
+  CHART-kpi_aov:
+    type: CHART
+    id: CHART-kpi_aov
+    children: []
+    parents:
+      - ROOT_ID
+      - GRID_ID
+      - ROW-kpi
+    meta:
+      width: 2
+      height: 24
+      chartId: 4
+      uuid: 4e4a9ab7-0377-5227-9294-796acc4c4a7e
+      sliceName: Average order value
+  CHART-kpi_freight_share:
+    type: CHART
+    id: CHART-kpi_freight_share
+    children: []
+    parents:
+      - ROOT_ID
+      - GRID_ID
+      - ROW-kpi
+    meta:
+      width: 2
+      height: 24
+      chartId: 5
+      uuid: e5c445a0-1392-5245-b73c-7a52089a5c73
+      sliceName: Freight share
+  CHART-kpi_on_time:
+    type: CHART
+    id: CHART-kpi_on_time
+    children: []
+    parents:
+      - ROOT_ID
+      - GRID_ID
+      - ROW-kpi
+    meta:
+      width: 2
+      height: 24
+      chartId: 6
+      uuid: 7459157d-c24e-56ff-a1a4-90ed8fe8aa1c
+      sliceName: On-time delivery
+  CHART-kpi_cancellation_rate:
+    type: CHART
+    id: CHART-kpi_cancellation_rate
+    children: []
+    parents:
+      - ROOT_ID
+      - GRID_ID
+      - ROW-kpi
+    meta:
+      width: 2
+      height: 24
+      chartId: 7
+      uuid: f72e061f-3e1e-5130-9251-c93d4e6710ab
+      sliceName: Cancellation rate
+  HEADER-sales:
+    type: HEADER
+    id: HEADER-sales
+    children: []
+    parents:
+      - ROOT_ID
+      - GRID_ID
+    meta:
+      text: Sales
+      headerSize: MEDIUM_HEADER
+      background: BACKGROUND_TRANSPARENT
+  ROW-sales:
+    type: ROW
+    id: ROW-sales
     children:
       - CHART-daily_sales
       - CHART-gmv_by_category
@@ -41,13 +203,13 @@ position:
     parents:
       - ROOT_ID
       - GRID_ID
-      - ROW-1
+      - ROW-sales
     meta:
-      width: 6
+      width: 8
       height: 50
-      chartId: 1
+      chartId: 8
       uuid: fedd884c-a753-54d2-8d42-7f11d9bc5540
-      sliceName: Daily sales
+      sliceName: GMV by month, R$
   CHART-gmv_by_category:
     type: CHART
     id: CHART-gmv_by_category
@@ -55,24 +217,49 @@ position:
     parents:
       - ROOT_ID
       - GRID_ID
-      - ROW-1
+      - ROW-sales
     meta:
-      width: 6
+      width: 4
       height: 50
-      chartId: 2
+      chartId: 9
       uuid: 38fb522a-dbb6-534c-9c83-5345c61a1240
-      sliceName: GMV by category, top 10
-  ROW-2:
+      sliceName: Top 10 categories by GMV
+  HEADER-delivery:
+    type: HEADER
+    id: HEADER-delivery
+    children: []
+    parents:
+      - ROOT_ID
+      - GRID_ID
+    meta:
+      text: Delivery
+      headerSize: MEDIUM_HEADER
+      background: BACKGROUND_TRANSPARENT
+  ROW-delivery:
     type: ROW
-    id: ROW-2
+    id: ROW-delivery
     children:
+      - CHART-on_time_by_month
       - CHART-delivery_sla
-      - CHART-cancellations
     parents:
       - ROOT_ID
       - GRID_ID
     meta:
       background: BACKGROUND_TRANSPARENT
+  CHART-on_time_by_month:
+    type: CHART
+    id: CHART-on_time_by_month
+    children: []
+    parents:
+      - ROOT_ID
+      - GRID_ID
+      - ROW-delivery
+    meta:
+      width: 6
+      height: 50
+      chartId: 10
+      uuid: be8c5f00-fe30-5838-b9a6-18a037e93a16
+      sliceName: On-time delivery by month
   CHART-delivery_sla:
     type: CHART
     id: CHART-delivery_sla
@@ -80,13 +267,35 @@ position:
     parents:
       - ROOT_ID
       - GRID_ID
-      - ROW-2
+      - ROW-delivery
     meta:
       width: 6
       height: 50
-      chartId: 3
+      chartId: 11
       uuid: 203f021c-39d0-5703-baa6-abd82d61b845
-      sliceName: Delivery SLA by state
+      sliceName: States with the most late deliveries
+  HEADER-orders:
+    type: HEADER
+    id: HEADER-orders
+    children: []
+    parents:
+      - ROOT_ID
+      - GRID_ID
+    meta:
+      text: Orders
+      headerSize: MEDIUM_HEADER
+      background: BACKGROUND_TRANSPARENT
+  ROW-orders:
+    type: ROW
+    id: ROW-orders
+    children:
+      - CHART-cancellations
+      - CHART-orders_by_status
+    parents:
+      - ROOT_ID
+      - GRID_ID
+    meta:
+      background: BACKGROUND_TRANSPARENT
   CHART-cancellations:
     type: CHART
     id: CHART-cancellations
@@ -94,23 +303,130 @@ position:
     parents:
       - ROOT_ID
       - GRID_ID
-      - ROW-2
+      - ROW-orders
     meta:
       width: 6
       height: 50
-      chartId: 4
+      chartId: 12
       uuid: 664e832f-1b2d-578a-b059-ac81f90ac19c
-      sliceName: Cancellations
+      sliceName: Cancellation rate by month
+  CHART-orders_by_status:
+    type: CHART
+    id: CHART-orders_by_status
+    children: []
+    parents:
+      - ROOT_ID
+      - GRID_ID
+      - ROW-orders
+    meta:
+      width: 6
+      height: 50
+      chartId: 13
+      uuid: 96356677-50ce-5469-b548-f3fa205c2a1e
+      sliceName: Orders by current status
+  HEADER-key:
+    type: HEADER
+    id: HEADER-key
+    children: []
+    parents:
+      - ROOT_ID
+      - GRID_ID
+    meta:
+      text: Key figures
+      headerSize: MEDIUM_HEADER
+      background: BACKGROUND_TRANSPARENT
+  ROW-footer:
+    type: ROW
+    id: ROW-footer
+    children:
+      - MARKDOWN-source
+    parents:
+      - ROOT_ID
+      - GRID_ID
+    meta:
+      background: BACKGROUND_TRANSPARENT
+  MARKDOWN-source:
+    type: MARKDOWN
+    id: MARKDOWN-source
+    children: []
+    parents:
+      - ROOT_ID
+      - GRID_ID
+      - ROW-footer
+    meta:
+      width: 12
+      height: 10
+      code: 'Source: Trino catalog lake_ro (read-only) over gold.fct_orders, gold.fct_order_items and
+        gold.mart_delivery_sla, built by dbt from Iceberg silver. Olist data, CC BY-NC-SA 4.0.'
 metadata:
-  color_scheme: supersetColors
+  color_scheme: harbor
   refresh_frequency: 0
   timed_refresh_immune_slices: []
   expanded_slices: {}
-  label_colors: {}
+  label_colors:
+    GMV: '#2c71b7'
+    GMV__1 year ago: '#8c959f'
+    gmv: '#2c71b7'
+    gmv__1 year ago: '#8c959f'
   shared_label_colors: []
-  color_scheme_domain: []
-  cross_filters_enabled: true
-  native_filter_configuration: []
+  color_scheme_domain:
+    - '#2c71b7'
+    - '#d6781c'
+    - '#0f9b89'
+    - '#795dba'
+    - '#9e6128'
+    - '#3498bf'
+    - '#bb8d1c'
+    - '#c55b96'
+  cross_filters_enabled: false
+  native_filter_configuration:
+    - id: NATIVE_FILTER-period001
+      name: Period
+      description: ''
+      filterType: filter_time
+      type: NATIVE_FILTER
+      targets:
+        - {}
+      controlValues: {}
+      defaultDataMask:
+        extraFormData:
+          time_range: Last quarter
+        filterState:
+          value: Last quarter
+      cascadeParentIds: []
+      scope:
+        rootPath:
+          - ROOT_ID
+        excluded:
+          - 1
+          - 8
+          - 10
+          - 12
+    - id: NATIVE_FILTER-cstate001
+      name: Customer state
+      description: ''
+      filterType: filter_select
+      type: NATIVE_FILTER
+      targets:
+        - column:
+            name: customer_state
+          datasetUuid: ab73c7d5-dce3-5791-a95e-6fbb48d0a084
+      controlValues:
+        multiSelect: true
+        enableEmptyFilter: false
+        defaultToFirstItem: false
+        inverseSelection: false
+        searchAllOptions: false
+      defaultDataMask:
+        extraFormData: {}
+        filterState:
+          value: null
+      cascadeParentIds: []
+      scope:
+        rootPath:
+          - ROOT_ID
+        excluded:
+          - 1
   chart_configuration: {}
   global_chart_configuration: {}
 published: true

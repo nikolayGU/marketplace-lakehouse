@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # One-shot setup of Superset, safe to repeat: metadata migration, admin user, roles and the
-# Marketplace dashboard bundle (database, datasets, charts, dashboard, matched by uuid).
+# Marketplace dashboard bundle: the database, and the datasets (columns, metrics), charts and
+# dashboard, which the bundle overwrites by uuid on every run (UI edits to them are lost).
 set -euo pipefail
 
 BUNDLE_DIR="${BUNDLE_DIR:-/bundle}"
@@ -30,18 +31,4 @@ sys.exit(1 if info.get("starting", True) else 0)' \
   exit 0
 fi
 
-archive="$(mktemp --suffix .zip)"
-trap 'rm -f "$archive"' EXIT
-python - "$BUNDLE_DIR" "$archive" <<'PY'
-import sys
-from pathlib import Path
-from zipfile import ZIP_DEFLATED, ZipFile
-
-source, target = Path(sys.argv[1]), Path(sys.argv[2])
-# The importer drops the first path component of every entry, so the files go under one root.
-with ZipFile(target, "w", ZIP_DEFLATED) as bundle:
-    for path in sorted(source.rglob("*")):
-        if path.is_file():
-            bundle.write(path, Path("marketplace") / path.relative_to(source))
-PY
-superset import-dashboards -p "$archive" -u admin
+python /init/import_bundle.py "$BUNDLE_DIR"

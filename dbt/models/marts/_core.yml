@@ -99,7 +99,8 @@ models:
         description: Calendar date of the purchase of the order; null if the order is missing.
       - name: customer_state
         description: >
-          State of the customer of the order, for BI filters. Null if the order is missing.
+          State of the customer of the order, for BI filters. Null if the order or its customer is
+          missing.
       - name: product_category
         description: >
           Category of the product (dim_products: English, else Portuguese, else unknown). Null if

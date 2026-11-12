@@ -4,7 +4,7 @@ import re
 from pathlib import Path
 
 import yaml
-from test_dbt_soft_delete import without_comments
+from dbt_sql import without_comments
 
 MARTS = Path(__file__).parents[2] / "dbt" / "models" / "marts"
 

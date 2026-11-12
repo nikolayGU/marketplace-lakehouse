@@ -1,58 +1,56 @@
-slice_name: GMV by category, top 10
-description: Live items of orders that are neither canceled nor unavailable.
+slice_name: Top 10 categories by GMV
+description: GMV of live items of paid orders, the ten largest categories.
 certified_by: null
 certification_details: null
 viz_type: echarts_timeseries_bar
 params:
   datasource: 0__table
   viz_type: echarts_timeseries_bar
-  x_axis: product_category
-  x_axis_sort: GMV
+  x_axis: category_label
+  x_axis_sort: gmv
   x_axis_sort_asc: false
   metrics:
-    - expressionType: SQL
-      sqlExpression: SUM(price)
-      label: GMV
-      hasCustomLabel: true
-      optionName: metric_gmv
+    - gmv
   groupby: []
   adhoc_filters:
-    - expressionType: SQL
-      sqlExpression: NOT is_deleted AND order_status NOT IN ('canceled', 'unavailable')
+    - expressionType: SIMPLE
+      subject: purchase_date
+      operator: TEMPORAL_RANGE
+      comparator: Last quarter
       clause: WHERE
+      sqlExpression: null
       isExtra: false
       isNew: false
       datasourceWarning: false
-      filterOptionName: filter_live_items
+      filterOptionName: filter_purchase_date_last_quarter
+  time_range: Last quarter
   order_desc: true
   row_limit: 10
   truncate_metric: true
   show_empty_columns: true
   orientation: horizontal
   show_legend: false
-  color_scheme: supersetColors
+  color_scheme: harbor
   y_axis_format: SMART_NUMBER
   show_value: true
   extra_form_data: {}
   annotation_layers: []
-query_context: '{"datasource": {"id": 0, "type": "table"}, "force": false, "queries": [{"filters": [],
-  "extras": {"having": "", "where": "(NOT is_deleted AND order_status NOT IN (''canceled'', ''unavailable''))"},
-  "applied_time_extras": {}, "annotation_layers": [], "series_limit": 0, "order_desc": true, "url_params":
-  {}, "custom_params": {}, "custom_form_data": {}, "columns": ["product_category"], "metrics": [{"expressionType":
-  "SQL", "sqlExpression": "SUM(price)", "label": "GMV", "hasCustomLabel": true, "optionName": "metric_gmv"}],
-  "orderby": [[{"expressionType": "SQL", "sqlExpression": "SUM(price)", "label": "GMV", "hasCustomLabel":
-  true, "optionName": "metric_gmv"}, false]], "row_limit": 10, "series_columns": [], "is_timeseries":
-  false, "post_processing": [{"operation": "pivot", "options": {"index": ["product_category"], "columns":
-  [], "aggregates": {"GMV": {"operator": "mean"}}, "drop_missing_columns": false}}, {"operation": "flatten"}]}],
-  "form_data": {"datasource": "0__table", "viz_type": "echarts_timeseries_bar", "x_axis": "product_category",
-  "x_axis_sort": "GMV", "x_axis_sort_asc": false, "metrics": [{"expressionType": "SQL", "sqlExpression":
-  "SUM(price)", "label": "GMV", "hasCustomLabel": true, "optionName": "metric_gmv"}], "groupby": [], "adhoc_filters":
-  [{"expressionType": "SQL", "sqlExpression": "NOT is_deleted AND order_status NOT IN (''canceled'', ''unavailable'')",
-  "clause": "WHERE", "isExtra": false, "isNew": false, "datasourceWarning": false, "filterOptionName":
-  "filter_live_items"}], "order_desc": true, "row_limit": 10, "truncate_metric": true, "show_empty_columns":
-  true, "orientation": "horizontal", "show_legend": false, "color_scheme": "supersetColors", "y_axis_format":
-  "SMART_NUMBER", "show_value": true, "extra_form_data": {}, "annotation_layers": []}, "result_format":
-  "json", "result_type": "full"}'
+query_context: '{"datasource": {"id": 0, "type": "table"}, "force": false, "queries": [{"filters": [{"col":
+  "purchase_date", "op": "TEMPORAL_RANGE", "val": "Last quarter"}], "extras": {"having": "", "where":
+  ""}, "applied_time_extras": {}, "annotation_layers": [], "series_limit": 0, "order_desc": true, "url_params":
+  {}, "custom_params": {}, "custom_form_data": {}, "time_range": "Last quarter", "columns": ["category_label"],
+  "metrics": ["gmv"], "orderby": [["gmv", false]], "row_limit": 10, "series_columns": [], "is_timeseries":
+  false, "post_processing": [{"operation": "pivot", "options": {"index": ["category_label"], "columns":
+  [], "aggregates": {"gmv": {"operator": "mean"}}, "drop_missing_columns": false}}, {"operation": "sort",
+  "options": {"by": "gmv", "ascending": false}}, {"operation": "flatten"}]}], "form_data": {"datasource":
+  "0__table", "viz_type": "echarts_timeseries_bar", "x_axis": "category_label", "x_axis_sort": "gmv",
+  "x_axis_sort_asc": false, "metrics": ["gmv"], "groupby": [], "adhoc_filters": [{"expressionType": "SIMPLE",
+  "subject": "purchase_date", "operator": "TEMPORAL_RANGE", "comparator": "Last quarter", "clause": "WHERE",
+  "sqlExpression": null, "isExtra": false, "isNew": false, "datasourceWarning": false, "filterOptionName":
+  "filter_purchase_date_last_quarter"}], "time_range": "Last quarter", "order_desc": true, "row_limit":
+  10, "truncate_metric": true, "show_empty_columns": true, "orientation": "horizontal", "show_legend":
+  false, "color_scheme": "harbor", "y_axis_format": "SMART_NUMBER", "show_value": true, "extra_form_data":
+  {}, "annotation_layers": []}, "result_format": "json", "result_type": "full"}'
 cache_timeout: null
 uuid: 38fb522a-dbb6-534c-9c83-5345c61a1240
 version: 1.0.0
