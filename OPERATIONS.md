@@ -487,11 +487,41 @@ once: it appends the keys of `.env.example` that `.env` lacks and never changes 
 message.
 
 The bundle holds the database `Lakehouse (Trino lake_ro)` (`trino://superset@trino:8080/lake_ro`),
-4 datasets, 4 charts and the dashboard `Marketplace`, the same four questions as the Grafana
-dashboard. A rerun of `superset-init` is safe: the database, datasets and charts are kept as they
-are (imported with `overwrite=False`, so a chart edited in the UI stays edited), but the dashboard
-`Marketplace` and its chart list are replaced (`superset import-dashboards` imports dashboards with
-`overwrite=True`).
+4 datasets (`fct_order_items`, `fct_orders`, `mart_daily_sales`, `mart_delivery_sla`), 13 charts and
+the dashboard `Marketplace` (v2, Harbor palette).
+
+Import order. `superset-init` runs `docker/superset/import_bundle.py`, which imports datasets, then
+charts, then the dashboard, each with `overwrite=True`, so a metric, column or chart changed in the
+bundle reaches an instance that already has the object (the stock `superset import-dashboards`
+overwrites only the dashboard). A UI edit of a bundled object is replaced by the next import. Any
+import error makes the script exit 1 and `superset-init` fail. To import again after a bundle
+change, recreate the one-shot (it needs Trino up, otherwise the import is skipped with a warning):
+
+```
+docker compose --env-file .env -f docker/compose.yaml --profile bi up -d --force-recreate --no-deps superset-init
+```
+
+Relative time and `SUPERSET_DATA_ANCHOR`. The Olist data ends in 2026, so "today" would point past
+it. `superset_config.py` sets `DEFAULT_RELATIVE_START_TIME` and `DEFAULT_RELATIVE_END_TIME` from
+`SUPERSET_DATA_ANCHOR`, and "Last quarter" or "Last year" count from that date. The default is
+`2026-07-01` (`.env.example`, `docker/compose.yaml`): the first day of the month of the latest
+order. The variable is passed to `superset` and `superset-mcp`, not to `superset-init`. After a
+replay that moves the data end into a later month, set the variable in `.env` and recreate
+`superset` and `superset-mcp`; this changes the stand, so ask first.
+
+Config changes need a restart. `superset_config.py` is mounted as a single file, and
+`make up PROFILE=bi` does not recreate `superset` when it changes, so `superset` keeps the old
+settings. Restart `superset` after editing the file (that is how `FEATURE_FLAGS` was switched on on
+2026-11-13).
+
+Dashboard notes:
+- The KPI tiles are `pop_kpi` charts, which the 6.1.0 frontend registers only with
+  `CHART_PLUGINS_EXPERIMENTAL` in `FEATURE_FLAGS` (`superset_config.py`). Without it every tile shows
+  "Item with key pop_kpi is not registered".
+- With "No filter" in the Period filter the KPI tiles show an error: period comparison needs a
+  closed time range. Pick a period such as "Last quarter".
+- The Harbor palette (categorical `harbor`, sequential `harbor_blue`, diverging `harbor_diverging`)
+  and the theme tokens are in `docker/superset/superset_config.py`.
 
 Check that the charts answer, from the host (reads only; the password comes from the container
 environment):
@@ -500,9 +530,10 @@ environment):
 docker exec lakehouse-superset-1 python /app/check.py
 ```
 
-It logs in through the REST API and runs every chart of the dashboard. Measured on 2026-11-06 15:52
-UTC: `Cancellations: 601 rows`, `Daily sales: 601 rows`, `Delivery SLA by state: 27 rows`,
-`GMV by category, top 10: 10 rows`, exit code 0 (it exits 1 for a failing or empty chart).
+It logs in through the REST API and runs every chart of the dashboard. Measured with the v1 bundle
+(4 charts) on 2026-11-06 15:52 UTC: `Cancellations: 601 rows`, `Daily sales: 601 rows`,
+`Delivery SLA by state: 27 rows`, `GMV by category, top 10: 10 rows`, exit code 0 (it exits 1
+for a failing or empty chart).
 
 Data boundary. Superset queries Trino as the user `superset`, which has the rights of `grafana`:
 `select` on the `fct_*`, `dim_*` and `mart_*` tables of `lake_ro.gold` and nothing else

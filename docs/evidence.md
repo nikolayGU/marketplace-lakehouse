@@ -251,6 +251,23 @@ advertises `localhost:9092` (`docker/compose.yaml:76`); before the fix it advert
 the 16 GB limit (on 2026-11-06 it ran beside core, query, orchestrate, obs and stateful, but the
 peak was not measured).
 
+### Superset dashboard v2
+
+The dashboard `Marketplace` in Superset has 13 charts in the Harbor palette (bundle in
+[`docker/superset/dashboards`](../docker/superset/dashboards), notes in
+[OPERATIONS, Superset](../OPERATIONS.md#superset-profile-bi)). KPI tiles of 2026-11-12, read through
+`/api/v1/chart/data` with `SUPERSET_DATA_ANCHOR=2026-07-01`, "Last quarter" against the previous
+quarter:
+
+| KPI | Last quarter | Previous quarter |
+|---|---|---|
+| GMV | 2 687 103.87 | 2 863 849.49 |
+| Orders | 18 991 | 21 355 |
+| On-time delivery | 96.6% | 87.5% |
+
+`docker exec lakehouse-superset-1 python /app/check.py` on 2026-11-13: all 13 charts return rows.
+The tile "Data through" shows 18 Jul 2026. Screenshot: `planned`.
+
 ## Not proven yet
 
 - `rewrite-position-deletes silver.orders` did not run live; the scheduled run skipped it.
