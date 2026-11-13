@@ -100,7 +100,7 @@ position:
       - ROW-kpi
     meta:
       width: 2
-      height: 24
+      height: 32
       chartId: 2
       uuid: 21407878-8ba3-5e08-bc5c-74e5314500b1
       sliceName: GMV
@@ -114,7 +114,7 @@ position:
       - ROW-kpi
     meta:
       width: 2
-      height: 24
+      height: 32
       chartId: 3
       uuid: c679c147-2f5f-579a-8ab6-f8c0095d2db0
       sliceName: Orders
@@ -128,7 +128,7 @@ position:
       - ROW-kpi
     meta:
       width: 2
-      height: 24
+      height: 32
       chartId: 4
       uuid: 4e4a9ab7-0377-5227-9294-796acc4c4a7e
       sliceName: Average order value
@@ -142,7 +142,7 @@ position:
       - ROW-kpi
     meta:
       width: 2
-      height: 24
+      height: 32
       chartId: 5
       uuid: e5c445a0-1392-5245-b73c-7a52089a5c73
       sliceName: Freight share
@@ -156,7 +156,7 @@ position:
       - ROW-kpi
     meta:
       width: 2
-      height: 24
+      height: 32
       chartId: 6
       uuid: 7459157d-c24e-56ff-a1a4-90ed8fe8aa1c
       sliceName: On-time delivery
@@ -170,7 +170,7 @@ position:
       - ROW-kpi
     meta:
       width: 2
-      height: 24
+      height: 32
       chartId: 7
       uuid: f72e061f-3e1e-5130-9251-c93d4e6710ab
       sliceName: Cancellation rate

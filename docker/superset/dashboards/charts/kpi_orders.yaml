@@ -21,15 +21,19 @@ params:
   row_limit: 10000
   y_axis_format: ',d'
   percentDifferenceFormat: .1%
-  header_font_size: 0.3
+  header_font_size: 0.4
   subtitle: Placed, every status
-  subtitle_font_size: 0.125
-  show_metric_name: true
+  subtitle_font_size: 0.15
+  show_metric_name: false
   metric_name_font_size: 0.15
-  subheader_font_size: 0.15
+  subheader_font_size: 0.125
   comparison_color_enabled: true
   comparison_color_scheme: Green
-  column_config: {}
+  column_config:
+    Previous value:
+      displayTypeIcon: false
+    Delta:
+      visible: false
   time_compare:
     - inherit
   time_range: Last quarter
@@ -43,11 +47,12 @@ query_context: '{"datasource": {"id": 0, "type": "table"}, "force": false, "quer
   "metric": "orders", "adhoc_filters": [{"expressionType": "SIMPLE", "subject": "purchase_date", "operator":
   "TEMPORAL_RANGE", "comparator": "Last quarter", "clause": "WHERE", "sqlExpression": null, "isExtra":
   false, "isNew": false, "datasourceWarning": false, "filterOptionName": "filter_purchase_date_last_quarter"}],
-  "row_limit": 10000, "y_axis_format": ",d", "percentDifferenceFormat": ".1%", "header_font_size": 0.3,
-  "subtitle": "Placed, every status", "subtitle_font_size": 0.125, "show_metric_name": true, "metric_name_font_size":
-  0.15, "subheader_font_size": 0.15, "comparison_color_enabled": true, "comparison_color_scheme": "Green",
-  "column_config": {}, "time_compare": ["inherit"], "time_range": "Last quarter", "extra_form_data": {}},
-  "result_format": "json", "result_type": "full"}'
+  "row_limit": 10000, "y_axis_format": ",d", "percentDifferenceFormat": ".1%", "header_font_size": 0.4,
+  "subtitle": "Placed, every status", "subtitle_font_size": 0.15, "show_metric_name": false, "metric_name_font_size":
+  0.15, "subheader_font_size": 0.125, "comparison_color_enabled": true, "comparison_color_scheme": "Green",
+  "column_config": {"Previous value": {"displayTypeIcon": false}, "Delta": {"visible": false}}, "time_compare":
+  ["inherit"], "time_range": "Last quarter", "extra_form_data": {}}, "result_format": "json", "result_type":
+  "full"}'
 cache_timeout: null
 uuid: c679c147-2f5f-579a-8ab6-f8c0095d2db0
 version: 1.0.0

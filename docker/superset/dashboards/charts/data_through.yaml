@@ -27,7 +27,7 @@ params:
   force_timestamp_formatting: true
   time_format: '%d %b %Y'
   subheader: ''
-  header_font_size: 0.3
+  header_font_size: 0.5
   y_axis_format: SMART_NUMBER
   extra_form_data: {}
 query_context: '{"datasource": {"id": 0, "type": "table"}, "force": false, "queries": [{"filters": [{"col":
@@ -43,7 +43,7 @@ query_context: '{"datasource": {"id": 0, "type": "table"}, "force": false, "quer
   "comparator": "No filter", "clause": "WHERE", "sqlExpression": null, "isExtra": false, "isNew": false,
   "datasourceWarning": false, "filterOptionName": "filter_purchase_date_no_filter"}], "row_limit": 1,
   "force_timestamp_formatting": true, "time_format": "%d %b %Y", "subheader": "", "header_font_size":
-  0.3, "y_axis_format": "SMART_NUMBER", "extra_form_data": {}}, "result_format": "json", "result_type":
+  0.5, "y_axis_format": "SMART_NUMBER", "extra_form_data": {}}, "result_format": "json", "result_type":
   "full"}'
 cache_timeout: null
 uuid: 90a4dfdc-a647-5670-b598-1a77b5361f67

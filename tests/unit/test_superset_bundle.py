@@ -294,6 +294,30 @@ def test_kpis_treat_growth_of_freight_and_cancellations_as_bad() -> None:
         assert params["time_compare"] == ["inherit"], stem
 
 
+KPI_TILE = {
+    "show_metric_name": False,
+    "header_font_size": 0.4,
+    "subheader_font_size": 0.125,
+    "subtitle_font_size": 0.15,
+    "column_config": {"Previous value": {"displayTypeIcon": False}, "Delta": {"visible": False}},
+}
+
+
+def test_kpi_tiles_fit_the_row_with_one_big_number_and_a_short_comparison() -> None:
+    layout = _dashboard()["position"]
+    kpis = {s: c for s, c in _charts().items() if c["viz_type"] == "pop_kpi"}
+
+    assert len(kpis) == 6
+    for stem, chart in kpis.items():
+        context = json.loads(chart["query_context"])
+        for params in (chart["params"], context["form_data"]):
+            for key, value in KPI_TILE.items():
+                assert params[key] == value, (stem, key)
+            assert "currency_format" not in params, stem
+        assert layout[f"CHART-{stem}"]["meta"]["height"] == 32, stem
+    assert kpis["kpi_gmv"]["params"]["subtitle"] == "Excl. canceled and unavailable"
+
+
 def test_on_time_chart_draws_the_95_percent_target() -> None:
     params = _charts()["on_time_by_month"]["params"]
     (layer,) = params["annotation_layers"]
@@ -462,7 +486,7 @@ def test_data_through_is_a_big_number_of_the_formatted_latest_date() -> None:
     assert params["force_timestamp_formatting"] is True
     assert params["time_format"] == "%d %b %Y"
     assert params["subheader"] == ""
-    assert params["header_font_size"] == 0.3
+    assert params["header_font_size"] == 0.5
     assert params["y_axis_format"] == "SMART_NUMBER"
     assert _stems_by_chart_id()[1] == "data_through"
 
