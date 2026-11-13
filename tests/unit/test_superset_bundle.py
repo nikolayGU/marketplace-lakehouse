@@ -319,13 +319,14 @@ def test_kpi_tiles_fit_the_row_with_one_big_number_and_a_short_comparison() -> N
 
 
 def test_on_time_chart_draws_the_95_percent_target() -> None:
+    """The theme line override merges into every series, annotations too, so the bundle says 3."""
     params = _charts()["on_time_by_month"]["params"]
     (layer,) = params["annotation_layers"]
 
     assert layer["annotationType"] == "FORMULA"
     assert layer["value"] == "0.95"
     assert layer["style"] == "dashed"
-    assert layer["width"] == 1.5
+    assert layer["width"] == 3
     assert layer["color"] == "#48505d"
     assert params["y_axis_bounds"] == [0.75, 1]
     assert params["y_axis_format"] == ".0%"

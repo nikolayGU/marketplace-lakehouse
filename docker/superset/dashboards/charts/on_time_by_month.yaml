@@ -51,7 +51,7 @@ params:
       color: '#48505d'
       opacity: ''
       style: dashed
-      width: 1.5
+      width: 3
       show: true
       showLabel: false
       showMarkers: false
@@ -70,7 +70,7 @@ query_context: '{"datasource": {"id": 0, "type": "table"}, "force": false, "quer
   "purchase_month", "op": "TEMPORAL_RANGE", "val": "Last year"}], "extras": {"having": "", "where": "",
   "time_grain_sqla": "P1M"}, "applied_time_extras": {}, "annotation_layers": [{"name": "Target 95%", "annotationType":
   "FORMULA", "sourceType": "", "value": "0.95", "color": "#48505d", "opacity": "", "style": "dashed",
-  "width": 1.5, "show": true, "showLabel": false, "showMarkers": false, "hideLine": false, "overrides":
+  "width": 3, "show": true, "showLabel": false, "showMarkers": false, "hideLine": false, "overrides":
   {}, "titleColumn": "", "timeColumn": "", "intervalEndColumn": "", "descriptionColumns": []}], "series_limit":
   0, "order_desc": true, "url_params": {}, "custom_params": {}, "custom_form_data": {}, "time_range":
   "Last year", "columns": [{"timeGrain": "P1M", "columnType": "BASE_AXIS", "sqlExpression": "purchase_month",
@@ -88,7 +88,7 @@ query_context: '{"datasource": {"id": 0, "type": "table"}, "force": false, "quer
   false, "zoomable": false, "show_value": false, "forecastEnabled": false, "logAxis": false, "contributionMode":
   null, "stack": null, "y_axis_format": ".0%", "extra_form_data": {}, "annotation_layers": [{"name": "Target
   95%", "annotationType": "FORMULA", "sourceType": "", "value": "0.95", "color": "#48505d", "opacity":
-  "", "style": "dashed", "width": 1.5, "show": true, "showLabel": false, "showMarkers": false, "hideLine":
+  "", "style": "dashed", "width": 3, "show": true, "showLabel": false, "showMarkers": false, "hideLine":
   false, "overrides": {}, "titleColumn": "", "timeColumn": "", "intervalEndColumn": "", "descriptionColumns":
   []}], "show_extra_controls": false, "truncateYAxis": true, "y_axis_bounds": [0.75, 1]}, "result_format":
   "json", "result_type": "full"}'
