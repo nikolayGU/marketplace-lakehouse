@@ -1,6 +1,6 @@
 # Следующая сессия: поддержка, холодный старт и выбор карточки (ревью 10.11, Д1)
 
-Обновлено 10.11.2026, вечер. Текст ниже копируется в новую сессию как есть. Запуск из корня репо в WSL:
+Обновлено 13.11.2026 (Д2.5: дашборд Superset v2 принят вживую; CI красный от ubuntu-26.04). Текст ниже копируется в новую сессию как есть. Запуск из корня репо в WSL:
 `claude --model opus --permission-mode acceptEdits` (оркестратор на Opus; не `--bare`: он
 выключает хуки; не `bypassPermissions`).
 
@@ -61,10 +61,11 @@ docs/planning/15-audit-2026-10-30.md, раздел 7 спеки 14; статус
      ARCHITECTURE без postgres-meta и пути MCP;
    - Grafana: проверка через сутки на 512M; при росте swap отключить ненужные встроенные плагины
      (файл 19, раздел 8);
-   - дашборд Superset: superpowers brainstorming, макет варианта A в Claude (Artifact, intent
-     design) на числах gold через MCP только чтением, карточка с «Готово, когда», YAML бандла и
-     тесты, make up PROFILE=bi по «ок», скриншот владельца в README; свой skill после первого
-     дашборда;
+   - первым: CI красный с 13.11 (ubuntu-latest = ubuntu-26.04, новый JDK, 49 Spark-тестов
+     getSubject is not supported): actions/setup-java с Java 17 (как образ Spark) или
+     runs-on: ubuntu-24.04 в .github/workflows/ci.yml, по циклу и «ок»;
+   - Д2.5 хвост: скриншот docs/img/superset-marketplace.png от владельца и строка README (README
+     пишет «4 charts», в бандле 13); низкие ревью в разделе 7 спеки 20; свой skill дашборда;
    - чистка: R-40 слой отката JDBC (строка в ADR-005, «ок»), R-62..R-66 документы и история в
      коде, R-41..R-44 упрощения, R-27 ускорение тестов (патч guard применяет владелец);
    - решения владельца: R-25 dbt_source_freshness, R-45 токенный разбор guard, R-46 инкремент

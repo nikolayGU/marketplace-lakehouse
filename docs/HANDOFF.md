@@ -2,6 +2,28 @@
 
 Обновляется в конце каждой недели или смыслового блока. Читать первым в каждой сессии.
 
+## Состояние на 13.11.2026: Д2.5 дашборд Superset v2 принят вживую, CI красный от ubuntu-26.04
+
+Продолжение прерванной сессии 12.11 (исправления `implementer` лежали в дереве без проверки).
+Цикл по харнессу: `implementer` код, `reviewer` каждый круг, `docs-writer` документы.
+
+| Что | Команда | Результат |
+|---|---|---|
+| Четыре дефекта первого скриншота | `reviewer` 2 круга по исходникам 6.1.0 в контейнере | `da7ad2f`: флаг `CHART_PLUGINS_EXPERIMENTAL` для `pop_kpi`; «Data through» `big_number_total` вместо `handlebars` (CSP без `unsafe-eval`), UTC явно; бары крупные сверху; шаг `rename` `gmv__1 year ago` -> `1 year ago` в `query_context` `daily_sales`, `label_colors` `GMV` и `1 year ago`; тест порядка `post_processing` |
+| Живой шаг | `make up PROFILE=bi` (не пересоздал `superset`: конфиг смонтирован файлом), `docker compose restart superset superset-mcp` | флаг включён, `check.py` 13 из 13, API: `1 year ago` 806 489 против 466 889 за июнь, «Data through» 1784332800000 |
+| Плитки KPI, 2 итерации по скриншотам | импорт `--force-recreate --no-deps superset-init` по «ок» на итерации Д2.5 | `d51bdc1`: шрифты `pop_kpi` в px (0.4 -> 30, 0.125 -> 16), без дубля имени, Delta скрыт, высота 32, без префикса R$ у GMV и AOV, подпись GMV короче, «Data through» 0.5; владелец принял вживую |
+| Линия цели | решение владельца «оставить 3px» | `a235e92`: бандл и тест на 3 (тема всё равно даёт 3px) |
+| Документы | `docs-writer`, правки оркестратора по ревью | `4adbab9`: OPERATIONS (импорт и повторный импорт, `SUPERSET_DATA_ANCHOR` с `superset-mcp`, рестарт после правки конфига, флаг, «No filter»), evidence (KPI 12.11) |
+| Проверки | `make check`; полный цикл verify перед каждым коммитом кода | 1926 passed, 146 skipped; `verify ok` 7 из 7 трижды; DAG сняты с паузы |
+| CI | `gh run view 43420783131 --log-failed` | красный на `4adbab9`: `ubuntu-latest` стал `ubuntu-26.04`, JDK новее, 49 Spark-тестов `UnsupportedOperationException: getSubject is not supported`; на `da7ad2f` (ubuntu-24.04) зелёный. Код ни при чём |
+
+Открыто: CI (предложение: `actions/setup-java` с Java 17, как в образе Spark `17.0.19`, или
+`runs-on: ubuntu-24.04`; правка workflow по «ок»); скриншот `docs/img/superset-marketplace.png`
+и строка README (картинку даёт владелец; README ещё пишет «4 charts»); низкое ревью: тест не
+сверяет `annotation_layers` в `queries[0]` с `params`, `rename` в тесте только для одной метрики
+без groupby; проба ревьюера `lakehouse-superset-1:/tmp/review_probe.py` (только чтение,
+удаление по «ок»); прежнее из раздела 10.11 ниже.
+
 ## Состояние на 10.11.2026, вечер: R-01 память, правда в документах, smoke
 
 Запрос владельца ~17:18 UTC «сделай все что действительно необходимо» в ответ на три открытых
@@ -467,6 +489,10 @@ unit), smoke красный (образы MinIO), W5-T05b не начата, г�
 
 | Дата UTC | Действие | Кто дал | Где видно |
 |---|---|---|---|
+| 13.11 ~12:00 | Цикл verify, коммит `a235e92` (линия цели 3px), импорт бандла, docs-коммит, `git push origin main` без force; «оставить 3px» | владелец в Claude Code, вопрос с вариантами | этот раздел |
+| 13.11 ~11:50 | Цикл verify, коммиты `d51bdc1` и `4adbab9`, снятие пауз, push | владелец в Claude Code, вопрос с вариантами (после отказа классификатора auto mode) | этот раздел |
+| 13.11 ~10:30 | Повторный импорт бандла `--profile bi up -d --force-recreate --no-deps superset-init` на все итерации визуальной приёмки Д2.5; «Data through» крупнее | владелец в Claude Code, вопрос с вариантами | этот раздел |
+| 13.11 ~09:20 | Цикл verify, коммит `da7ad2f`, снятие пауз, push; `make up PROFILE=bi` и `check.py` (выполнено как `docker compose restart superset superset-mcp`, `make up` их не пересоздал) | владелец в Claude Code, вопрос с вариантами | этот раздел |
 | 10.11 ~17:18 | «сделай все что действительно необходимо» в ответ на три пункта C (`make up PROFILE=obs`, пересоздание `minio` и `kafka-connect`, `make replay-burst SECONDS=30`): оркестратор отобрал по данным; сделано пересоздание `kafka-connect`, `grafana` и `container-exporter` на лимитах R-01 (18:09), цикл verify, коммиты `9ea802d` и `3e00084`, push, `gh repo edit` (About и topics), smoke `workflow_dispatch`; не сделано как ненужное: obs целиком, `minio`, реплей | владелец в Claude Code | этот раздел, таблица выше |
 | 10.11 ~15:40 | «так сделай и проверь все и связанность всех сервисов»: `TRINO_XMX=2g make start` 15:44 (пересоздал и `postgres-oltp`, `trino` с ожидающим конфигом), пауза `dq_checks` на время старта, удаление старого образа Spark (не понадобилось), ручной запуск `dq_checks` 15:47, проверка связности; docs-коммит и push по рутине сессии | владелец в Claude Code | этот раздел, таблица выше |
 | 10.11 ~15:30 | «а вообще ок сделай сам, я держатель» на три точные команды: `docker compose --env-file .env -f docker/compose.yaml --profile orchestrate up -d --no-deps airflow-api-server`; `... --profile core build spark-bronze`; `... --profile stateful up -d --no-deps --force-recreate spark-orders-per-minute`; держатель прав MIT: владелец (записан логин `nikolayGU`); docs-коммит и push по рутине сессии | владелец в Claude Code | этот раздел, таблица выше |
