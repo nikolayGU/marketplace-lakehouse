@@ -10,6 +10,11 @@ SECRET_KEY = os.environ["SUPERSET_SECRET_KEY"]
 SCARF_ANALYTICS = False
 LOAD_EXAMPLES = False
 
+# pop_kpi (the period-over-period tile of the dashboard) is registered by the 6.1.0 frontend only
+# when this flag is on; without it every KPI tile fails with "Item with key pop_kpi is not
+# registered".
+FEATURE_FLAGS = {"CHART_PLUGINS_EXPERIMENTAL": True}
+
 # One process cache is enough for a single gunicorn worker on a laptop.
 CACHE_CONFIG = {"CACHE_TYPE": "SimpleCache", "CACHE_DEFAULT_TIMEOUT": 300}
 DATA_CACHE_CONFIG = {"CACHE_TYPE": "SimpleCache", "CACHE_DEFAULT_TIMEOUT": 300}

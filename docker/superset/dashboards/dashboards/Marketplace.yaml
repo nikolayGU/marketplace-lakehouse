@@ -365,9 +365,7 @@ metadata:
   expanded_slices: {}
   label_colors:
     GMV: '#2c71b7'
-    GMV__1 year ago: '#8c959f'
-    gmv: '#2c71b7'
-    gmv__1 year ago: '#8c959f'
+    1 year ago: '#8c959f'
   shared_label_colors: []
   color_scheme_domain:
     - '#2c71b7'

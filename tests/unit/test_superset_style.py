@@ -161,6 +161,11 @@ def load_config(monkeypatch: pytest.MonkeyPatch) -> Callable[[], ModuleType]:
     return load
 
 
+def test_pop_kpi_plugin_is_enabled(load_config: Callable[[], ModuleType]) -> None:
+    """Superset 6.1.0 registers the pop_kpi chart only under CHART_PLUGINS_EXPERIMENTAL."""
+    assert load_config().FEATURE_FLAGS["CHART_PLUGINS_EXPERIMENTAL"] is True
+
+
 def test_harbor_is_the_only_default_categorical_scheme(
     load_config: Callable[[], ModuleType],
 ) -> None:

@@ -277,12 +277,10 @@ def test_harbor_is_the_scheme_everywhere() -> None:
             assert chart["params"]["color_scheme"] == "harbor", stem
 
 
-def test_dashboard_metadata_pins_the_harbor_colours_and_the_comparison_series() -> None:
+def test_dashboard_metadata_pins_the_harbor_domain() -> None:
     metadata = _dashboard()["metadata"]
 
     assert metadata["color_scheme_domain"] == HARBOR
-    assert metadata["label_colors"]["GMV"] == "#2c71b7"
-    assert metadata["label_colors"]["GMV__1 year ago"] == "#8c959f"
 
 
 def test_kpis_treat_growth_of_freight_and_cancellations_as_bad() -> None:
@@ -433,17 +431,105 @@ def test_states_table_formats_misses_with_a_flat_fill() -> None:
     assert rule["useGradient"] is False
 
 
-def test_bar_charts_sort_by_the_metric_descending_in_the_query() -> None:
+def test_bar_charts_pick_top_rows_by_the_metric_and_draw_the_largest_on_top() -> None:
+    """A horizontal ECharts bar draws the first row at the bottom, so the display sort ascends."""
     for stem in ("gmv_by_category", "orders_by_status"):
         chart = _charts()[stem]
         (query,) = json.loads(chart["query_context"])["queries"]
         metric = chart["params"]["metrics"][0]
 
+        assert query["orderby"] == [[metric, False]], stem
+        assert query["order_desc"] is True, stem
         assert chart["params"]["x_axis_sort"] == metric, stem
-        assert chart["params"]["x_axis_sort_asc"] is False, stem
-        assert {"operation": "sort", "options": {"by": metric, "ascending": False}} in query[
+        assert chart["params"]["x_axis_sort_asc"] is True, stem
+        assert {"operation": "sort", "options": {"by": metric, "ascending": True}} in query[
             "post_processing"
         ], stem
+
+
+def test_data_through_is_a_big_number_of_the_formatted_latest_date() -> None:
+    """Handlebars compiles templates with eval, which the Superset CSP blocks."""
+    chart = _charts()["data_through"]
+    params = chart["params"]
+    (metric,) = _metric_names(params)
+
+    assert chart["viz_type"] == "big_number_total"
+    assert "handlebars" not in chart["query_context"]
+    assert metric["label"] == "data_through"
+    assert "MAX(purchase_date)" in metric["sqlExpression"]
+    assert "* 1000" in metric["sqlExpression"]
+    assert "'UTC'" in metric["sqlExpression"]
+    assert params["force_timestamp_formatting"] is True
+    assert params["time_format"] == "%d %b %Y"
+    assert params["subheader"] == ""
+    assert params["header_font_size"] == 0.3
+    assert params["y_axis_format"] == "SMART_NUMBER"
+    assert _stems_by_chart_id()[1] == "data_through"
+
+
+def test_the_comparison_series_is_named_by_its_offset_and_coloured_grey() -> None:
+    assert _dashboard()["metadata"]["label_colors"] == {"GMV": "#2c71b7", "1 year ago": "#8c959f"}
+
+
+def _label(metric: Any) -> str:
+    return metric if isinstance(metric, str) else metric["label"]
+
+
+def test_query_columns_and_pivot_follow_from_params() -> None:
+    for stem, chart in _charts().items():
+        params = chart["params"]
+        (query,) = json.loads(chart["query_context"])["queries"]
+        x_axis = params.get("x_axis")
+        if chart["viz_type"] == "echarts_timeseries_line":
+            expected: list[Any] = [
+                {
+                    "timeGrain": params["time_grain_sqla"],
+                    "columnType": "BASE_AXIS",
+                    "sqlExpression": x_axis,
+                    "label": x_axis,
+                    "expressionType": "SQL",
+                }
+            ]
+        else:
+            expected = ([x_axis] if x_axis else []) + list(params.get("groupby", []))
+        assert query["columns"] == expected, stem
+
+        pivots = [p for p in query["post_processing"] if p["operation"] == "pivot"]
+        if not x_axis:
+            assert not pivots, stem
+            continue
+        (pivot,) = pivots
+        labels = [_label(m) for m in _metric_names(params)]
+        labels += [f"{m}__{o}" for m in labels for o in params.get("time_compare", [])]
+        assert pivot["options"]["index"] == [x_axis], stem
+        assert list(pivot["options"]["aggregates"]) == labels, stem
+
+        offsets = params.get("time_compare", [])
+        expected_ops = ["pivot"]
+        if (
+            len(_metric_names(params)) == 1
+            and params.get("comparison_type") == "values"
+            and offsets
+            and not params.get("groupby")
+        ):
+            expected_ops.append("rename")
+        if chart["viz_type"] == "echarts_timeseries_bar":
+            expected_ops.append("sort")
+        expected_ops.append("flatten")
+        operations = query["post_processing"]
+        assert [p["operation"] for p in operations] == expected_ops, stem
+        if "rename" in expected_ops:
+            (metric_label,) = labels[:1]
+            (offset,) = offsets
+            rename = operations[1]
+            assert rename == {
+                "operation": "rename",
+                "options": {
+                    "columns": {f"{metric_label}__{offset}": offset},
+                    "level": 0,
+                    "inplace": True,
+                },
+            }, stem
 
 
 def test_query_follows_from_params() -> None:

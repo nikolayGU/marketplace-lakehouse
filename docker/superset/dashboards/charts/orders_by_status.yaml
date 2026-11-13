@@ -8,7 +8,7 @@ params:
   viz_type: echarts_timeseries_bar
   x_axis: order_status
   x_axis_sort: orders
-  x_axis_sort_asc: false
+  x_axis_sort_asc: true
   metrics:
     - orders
   groupby: []
@@ -42,9 +42,9 @@ query_context: '{"datasource": {"id": 0, "type": "table"}, "force": false, "quer
   "metrics": ["orders"], "orderby": [["orders", false]], "row_limit": 10, "series_columns": [], "is_timeseries":
   false, "post_processing": [{"operation": "pivot", "options": {"index": ["order_status"], "columns":
   [], "aggregates": {"orders": {"operator": "mean"}}, "drop_missing_columns": false}}, {"operation": "sort",
-  "options": {"by": "orders", "ascending": false}}, {"operation": "flatten"}]}], "form_data": {"datasource":
+  "options": {"by": "orders", "ascending": true}}, {"operation": "flatten"}]}], "form_data": {"datasource":
   "0__table", "viz_type": "echarts_timeseries_bar", "x_axis": "order_status", "x_axis_sort": "orders",
-  "x_axis_sort_asc": false, "metrics": ["orders"], "groupby": [], "adhoc_filters": [{"expressionType":
+  "x_axis_sort_asc": true, "metrics": ["orders"], "groupby": [], "adhoc_filters": [{"expressionType":
   "SIMPLE", "subject": "purchase_date", "operator": "TEMPORAL_RANGE", "comparator": "Last quarter", "clause":
   "WHERE", "sqlExpression": null, "isExtra": false, "isNew": false, "datasourceWarning": false, "filterOptionName":
   "filter_purchase_date_last_quarter"}], "time_range": "Last quarter", "order_desc": true, "row_limit":

@@ -57,7 +57,8 @@ query_context: '{"datasource": {"id": 0, "type": "table"}, "force": false, "quer
   "expressionType": "SQL"}], "metrics": ["gmv"], "orderby": [["gmv", false]], "row_limit": 10000, "series_columns":
   [], "is_timeseries": false, "post_processing": [{"operation": "pivot", "options": {"index": ["purchase_date"],
   "columns": [], "aggregates": {"gmv": {"operator": "mean"}, "gmv__1 year ago": {"operator": "mean"}},
-  "drop_missing_columns": false}}, {"operation": "flatten"}], "time_offsets": ["1 year ago"]}], "form_data":
+  "drop_missing_columns": false}}, {"operation": "rename", "options": {"columns": {"gmv__1 year ago":
+  "1 year ago"}, "level": 0, "inplace": true}}, {"operation": "flatten"}], "time_offsets": ["1 year ago"]}], "form_data":
   {"datasource": "0__table", "viz_type": "echarts_timeseries_line", "x_axis": "purchase_date", "time_grain_sqla":
   "P1M", "x_axis_sort_asc": true, "metrics": ["gmv"], "groupby": [], "adhoc_filters": [{"expressionType":
   "SIMPLE", "subject": "purchase_date", "operator": "TEMPORAL_RANGE", "comparator": "Last year", "clause":
