@@ -1,0 +1,35 @@
+"""Group the softer (deny or ask -> allow) lines of a probe output by what the command holds."""
+
+import json
+import re
+import sys
+from collections import Counter
+
+lines = open(sys.argv[1]).read().splitlines()
+groups: Counter[str] = Counter()
+examples: dict[str, list[str]] = {}
+for command_line, answer in zip(lines[::2], lines[1::2]):
+    if "<<DIFF" not in answer:
+        continue
+    first, second = (part.strip().split(":")[0] for part in answer.split("|")[:2])
+    second = second.split(" (")[0]
+    if second != "allow":
+        continue
+    command = json.loads(command_line).get("command", "")
+    if re.search(r"\.(verify|check|review)-stamp", command):
+        key = "names a stamp file"
+    elif re.search(r"write_stamp|record_review|_store|run_check", command):
+        key = "names a stamp writer"
+    elif "agent_state" in command:
+        key = "agent_state without a writer"
+    elif re.search(r"\.env\b", command):
+        key = ".env"
+    else:
+        key = "other"
+    key = f"{first} -> allow: {key}"
+    groups[key] += 1
+    examples.setdefault(key, []).append(command[:140])
+for key, count in groups.most_common():
+    print(count, key)
+    for example in examples[key][:4]:
+        print("     ", repr(example))

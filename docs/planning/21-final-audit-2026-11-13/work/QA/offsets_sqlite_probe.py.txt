@@ -1,0 +1,26 @@
+"""Probe for PF-32: can the offsets check of scripts/chaos/lib.sh run on sqlite3 (stdlib)?"""
+
+import re
+import sqlite3
+import sys
+from pathlib import Path
+
+lib = Path(sys.argv[1]).read_text()
+body = re.search(r"bronze_offsets_ok\(\) \{.*?trino_value \"(.*?)\"\)", lib, re.S)
+assert body, "query not found"
+query = body.group(1)
+
+
+def bad(rows: list[tuple[str, int, int]]) -> int:
+    db = sqlite3.connect(":memory:")
+    db.execute("attach ':memory:' as bronze")
+    db.execute("create table bronze.cdc_events (topic text, kafka_partition int, kafka_offset int)")
+    db.executemany("insert into bronze.cdc_events values (?, ?, ?)", rows)
+    return db.execute(query).fetchone()[0]
+
+
+clean = [("t", 0, 0), ("t", 0, 1), ("t", 0, 2), ("u", 0, 5)]
+print("clean", bad(clean))
+print("duplicate", bad([*clean, ("t", 0, 1)]))
+print("hole", bad([("t", 0, 0), ("t", 0, 2)]))
+print("hole in other partition", bad([*clean, ("t", 1, 0), ("t", 1, 3)]))

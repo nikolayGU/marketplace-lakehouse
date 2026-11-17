@@ -1,0 +1,15 @@
+[
+  "git commit -m \"docs: run make check before the commit\"",
+  "git commit -m \"harness: .verify-stamp is written by make verify\"",
+  "git commit -m \"docs: make silver needs the owner's ok\"",
+  "git commit -m \"docs: note that git push needs an ok\"",
+  "git commit -m \"docs: delete from the table the stale row\"",
+  "git commit -m \"docs: truncate long lines in the report\"",
+  "git commit -m \"docs: docker compose down and make down are class C\"",
+  "git add -A && git commit -m \"$(cat <<'EOF'\ndocs: the dbt drop table step and make check\n\ngit push and make silver need an ok; .verify-stamp\nEOF\n)\"",
+  "git -C /repo commit -am 'infra: drop table guard words'",
+  "git commit -m \"x\" && git push origin main",
+  "git commit -m \"x\" --amend",
+  "make verify && git add -A && git commit -m \"docs: x\"",
+  "git commit -F /tmp/s/msg.txt"
+]

@@ -1,0 +1,1 @@
+\b(W[0-9](-[TD][0-9]+[ab]?)?|D[0-9]{1,2}|(QA|SEC|REL|DATA|DOC|MODEL|ARCH|AI|PF|F|R)-[0-9]{2}|RT-S[0-9]|[BbБК][0-9]{1,2})\b|[Aa]udit|[Ww]eek[ -][0-9]|verified 202|[(, ]202[0-9]-[01][0-9]-[0-3][0-9]\b

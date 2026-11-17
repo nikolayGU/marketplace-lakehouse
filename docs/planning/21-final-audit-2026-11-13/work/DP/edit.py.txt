@@ -1,0 +1,46 @@
+"""Apply the R-40 compose and airflow.env removals to a scratch copy (argv[1] is the copy root)."""
+
+import re
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+compose = root / "docker" / "compose.yaml"
+text = compose.read_text()
+drop = re.compile(
+    r"^\s+(CATALOG_TYPE|CATALOG_JDBC_URL|CATALOG_JDBC_USER|CATALOG_JDBC_PASSWORD|CATALOG_WAREHOUSE|"
+    r"CATALOG_DB|META_USER|META_PASSWORD|S3_BUCKET): .*\n|^\s+# (CATALOG_JDBC_\*|CATALOG_DB, META_\*).*\n",
+    re.M,
+)
+lines = text.splitlines(keepends=True)
+out = []
+service = None
+skip = 0
+for i, line in enumerate(lines):
+    m = re.match(r"^  ([a-z0-9-]+):\s*$", line)
+    if m:
+        service = m.group(1)
+    if skip:
+        skip -= 1
+        continue
+    if service in {"spark-bronze", "spark-orders-per-minute", "spark-silver", "trino"}:
+        if drop.match(line) and not (service != "trino" and "S3_BUCKET" in line):
+            continue
+        if re.match(r"^      postgres-meta:\s*$", line):
+            # drop the dependency block: condition (+ required)
+            j = i + 1
+            while j < len(lines) and re.match(r"^        ", lines[j]):
+                j += 1
+            skip = j - i - 1
+            continue
+    out.append(line)
+compose.write_text("".join(out))
+
+env = root / "docker" / "airflow" / "airflow.env"
+env.write_text(
+    "".join(
+        l
+        for l in env.read_text().splitlines(keepends=True)
+        if not re.match(r"(CATALOG_TYPE|CATALOG_JDBC_\w+|CATALOG_WAREHOUSE)=", l)
+    )
+)

@@ -1,0 +1,34 @@
+select (select cast(max(updated_at) as varchar) from gold.fct_orders) as gold, (
+select cast(max(u) as varchar) from (
+    select max(_updated_at) as u from silver.orders
+    union all select max(_updated_at) from silver.order_items
+    union all select max(_updated_at) from silver.payments)
+) as silver, (select cast(max(source_updated_at) as varchar) from gold.mart_daily_sales) as mart, (select to_unixtime(max(committed_at)) from (
+select committed_at from lake.silver."customers$snapshots" where operation <> 'replace'
+union all
+select committed_at from lake.silver."order_items$snapshots" where operation <> 'replace'
+union all
+select committed_at from lake.silver."orders$snapshots" where operation <> 'replace'
+union all
+select committed_at from lake.silver."payments$snapshots" where operation <> 'replace'
+union all
+select committed_at from lake.silver."products$snapshots" where operation <> 'replace'
+union all
+select committed_at from lake.silver."reviews$snapshots" where operation <> 'replace'
+union all
+select committed_at from lake.silver."sellers$snapshots" where operation <> 'replace'
+)) as silver_changed, (select to_unixtime(if(count_if(rebuilt is null) > 0, null, min(rebuilt))) from (
+select max(committed_at) as rebuilt from lake.gold."dim_customers$snapshots"
+union all
+select max(committed_at) as rebuilt from lake.gold."dim_products$snapshots"
+union all
+select max(committed_at) as rebuilt from lake.gold."dim_sellers$snapshots"
+union all
+select max(committed_at) as rebuilt from lake.gold."fct_order_items$snapshots"
+union all
+select max(committed_at) as rebuilt from lake.gold."fct_orders$snapshots"
+union all
+select max(committed_at) as rebuilt from lake.gold."mart_delivery_sla$snapshots"
+union all
+select max(committed_at) as rebuilt from lake.gold."mart_seller_performance$snapshots"
+)) as gold_rebuilt

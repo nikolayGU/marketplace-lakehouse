@@ -1,0 +1,7 @@
+select count_if(items_count = 0) no_live_item,
+       count_if(items_count = 0 and not exists (select 1 from lake.gold.fct_order_items i where i.order_id = o.order_id)) never_had,
+       count_if(order_delivered_customer_date < order_delivered_carrier_date) delivered_before_carrier
+from lake.gold.fct_orders o;
+select count(*) products_without_category from lake.gold.dim_products where product_category_name is null;
+select min(price) min_price from lake.silver.order_items;
+select count(*) not_defined_payments from lake.silver.payments where payment_type = 'not_defined';

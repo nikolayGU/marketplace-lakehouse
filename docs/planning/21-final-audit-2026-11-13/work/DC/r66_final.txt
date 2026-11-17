@@ -1,0 +1,156 @@
+.github/workflows/ci.yml:96:  # Prometheus image (QA-01: neither `make check` nor another job runs it).
+.github/workflows/ci.yml:173:# smoke: smoke.yml (W5-T03).
+.github/workflows/smoke.yml:6:# schedule came back (W6-D2) after the first green run on 2026-10-29 (run 40907438614, ADR-026).
+Makefile:131:	  "gold writers: dbt_build and the gold maintenance (W5-D11)"
+Makefile:133:# ---------------------------------------------------------------- chaos (week 2+)
+airflow/dags/dbt_build.py:1:"""dbt_build: dbt build of lake.gold after every silver merge (Asset lake.silver, D10).
+airflow/dags/dq_checks.py:5:the source and silver, or silver and gold, at rest (reconcile_values, W5-T04), or a day whose GMV
+airflow/dags/dq_checks.py:6:differs between the source and gold.mart_daily_sales (audit MODEL-02: the mart's own test compares
+airflow/dags/dq_checks.py:10:`lakehouse.dq.cdc_stalled` (W6-D9). The runs in a
+airflow/dags/dq_checks.py:17:Not exported: new quarantine rows, a Modify gate of the owner (W4-D8).
+airflow/dags/dq_checks.py:214:        """Source against silver, and silver against gold, by value (W5-T04), and the GMV of each
+airflow/dags/iceberg_maintenance.py:1:"""iceberg_maintenance: daily upkeep of the lake's Iceberg tables (D11 W3, W5-D11, W5-D12).
+airflow/dags/iceberg_maintenance.py:12:is not the owner's ok for the W5-D13 ladder.
+airflow/dags/iceberg_orphans.py:1:"""iceberg_orphans: weekly search for orphan files, a dry run unless told otherwise (W5-D13).
+airflow/dags/lakehouse/maintenance_commands.py:25:    for a real `true`: unpausing the DAG is not the owner's ok for the W5-D13 ladder."""
+airflow/dags/lakehouse/metrics.py:1:"""Gauges from dq_checks to statsd-exporter, as DogStatsD lines over UDP (W4-D2).
+airflow/dags/lakehouse/reconcile.py:1:"""Reconciliation by value: source against silver, silver against gold (W5-T04, W5-D9), and the
+airflow/dags/lakehouse/reconcile.py:2:GMV of every day, source against gold, independent of the dbt model (audit MODEL-02).
+airflow/dags/lakehouse/settings.py:25:# of one table never commit at once (W5-D11).
+airflow/dags/lakehouse/settings.py:43:# aggregate (W5-D12). Snapshots are kept this many days (Trino refuses fewer than 7, ADR-025).
+airflow/dags/lakehouse/settings.py:86:    # statsd-exporter of profile obs; dq_checks sends its gauges there (W4-D2).
+airflow/dags/silver_upsert.py:1:"""silver_upsert: every 5 minutes, merge what bronze committed into silver (D10, ADR-021).
+dbt/dbt_project.yml:19:    # soft delete that keeps the files for 7 days. `replace` is CREATE OR REPLACE TABLE (D6).
+dbt/macros/trino__reset_csv_table.sql:4:    (D14). -#}
+dbt/models/intermediate/int_daily_sales.sql:51:-- of a canceled order, deleted ones included (D8).
+dbt/models/marts/_core.yml:4:      One row per live order. 765 orders have no live item (2026-10-09): 735 never had one, 30
+dbt/models/marts/_core.yml:11:        description: The person; customer_id is issued per order (D3).
+dbt/models/marts/_core.yml:95:        description: Soft-deleted item, kept for canceled GMV (D8); live metrics filter it (D4).
+dbt/models/marts/_core.yml:112:      One row per person (customer_unique_id) with at least one order in silver (D3); the address
+dbt/models/marts/_marts.yml:5:      with an order changed since the last run (D7). An order counts in the state of each of its
+dbt/models/marts/_marts.yml:7:      orders_count summed over states can exceed the orders of the day. Known limit (D18): a
+dbt/models/marts/_marts.yml:16:      (12 894 209.50 on 2026-10-18).
+dbt/models/marts/dim_customers.sql:1:-- Grain: customer_unique_id, the person (D3). Only customers with an order in silver: the loader
+dbt/models/marts/dim_products.sql:1:-- 610 products have no category, and two categories have no English name (data/raw, 2026-10-09).
+dbt/models/marts/fct_order_items.sql:2:-- (D4, D8). The left join keeps an item whose order is missing; a live one fails the relationships
+dbt/models/marts/fct_orders.sql:28:    -- Null unless delivered: lateness is defined only for a delivered order (D8).
+dbt/models/marts/mart_daily_sales.sql:26:    -- (D7). A change arrives days after the purchase, so filtering by purchase_date would miss it.
+dbt/models/marts/mart_delivery_sla.sql:2:-- by calendar date (D8). A delivered order without a delivery date is delivered, not on time.
+dbt/models/staging/_staging.yml:5:# orphan, and the count was 0 on 2026-10-30, so a warning is a signal to look at, and a stopped
+dbt/models/staging/_staging.yml:9:    description: One row per order in silver, deleted ones included (`is_deleted`, D4).
+dbt/models/staging/_staging.yml:40:      canceled before shipping, and canceled GMV is counted from them (D4, D8).
+dbt/models/staging/_staging.yml:76:          the dataset is 0.85 (2026-10-30).
+dbt/models/staging/_staging.yml:108:          2026-10-30 (the replay may not have reached them).
+dbt/models/staging/_staging.yml:149:      customer_unique_id (D3).
+dbt/seeds/_seeds.yml:5:      data/sample/product_category_name_translation.csv (D5).
+dbt/tests/_tests.yml:4:      The incremental mart_daily_sales equals int_daily_sales, its full recompute (D7). Error on
+dbt/tests/_tests.yml:9:      that are neither canceled nor unavailable (2026-10-09). warn above 0, error above
+dbt/tests/_tests.yml:13:      Source anomaly. 23 orders reached the customer before the carrier got them (2026-10-09).
+dbt/tests/_tests.yml:17:      Source anomaly. 610 products without a category (2026-10-09); products never change during
+dbt/tests/_tests.yml:21:      Source anomaly. 2 categories without an English name (2026-10-09). warn above 0, error
+dbt/tests/_tests.yml:25:      D4: fct_orders and the dim_* models hold live entities only; a row is a consumer that lost
+dbt/tests/_tests.yml:27:      purpose (D8) and is left out. On today's data silver holds no deleted order, customer,
+dbt/tests/assert_categories_have_translation.sql:2:-- name in the translation file (2026-10-09); dim_products keeps the Portuguese one.
+dbt/tests/assert_delivered_not_before_carrier.sql:1:-- Known in the source: 23 orders reached the customer before the carrier got them (2026-10-09).
+dbt/tests/assert_gold_has_no_deleted_entities.sql:1:-- D4: staging keeps deleted rows and every consumer drops them. These models hold live entities
+dbt/tests/assert_gold_has_no_deleted_entities.sql:2:-- only; fct_order_items keeps deleted items on purpose (D8) and is not checked. The replayer
+dbt/tests/assert_mart_daily_sales_matches_full_recompute.sql:3:-- idempotency (D7). Expected: no rows.
+dbt/tests/assert_payments_match_order_value.sql:2:-- that are neither canceled nor unavailable (2026-10-09). Canceled and unavailable orders are
+dbt/tests/assert_products_have_category.sql:1:-- Known in the source: 610 products have no category (2026-10-09). Products are loaded once and
+dbt/tests/generic/relationships_live.sql:3:{# Staging keeps deleted rows (D4). A live row has to point at a live row: the built-in
+docker/airflow/airflow.env:4:# Tasks run as processes inside the scheduler container (900 MB limit, D19): dbt build alone
+docker/airflow/airflow.env:11:# No login, everyone is admin (D12): single-user laptop, port on 127.0.0.1 only.
+docker/airflow/airflow.env:20:# StatsD to statsd-exporter of profile obs (W4-T01b); without obs the UDP packets are lost.
+docker/compose.yaml:108:      context: ./connect   # quay.io/debezium/connect:3.5 + JMX exporter agent (W4-D1)
+docker/compose.yaml:348:  # Stateful job (W5-T01b, ADR-024): distinct new orders per minute with a 5 minute watermark, from
+docker/compose.yaml:407:  # `make silver` runs it by hand; Airflow schedules it from week 3. The exit code is the health
+docker/compose.yaml:507:      # that grew RSS about 0.55 GiB past what the JVM tracks (NMT, 2026-10-18, D20).
+docker/compose.yaml:684:      # Installed from the Grafana catalog on start into the grafana volume (W6-D11), synchronously:
+docker/compose.yaml:712:    # verified 2026-10-19
+docker/compose.yaml:715:    # Pinned to the newest protocol sarama knows; 2.0.0 (default) also reads broker 4.3.1 (2026-10-19).
+docker/compose.yaml:736:    # verified 2026-10-19
+docker/compose.yaml:762:    # verified 2026-10-19; Airflow and dq_checks metrics
+docker/compose.yaml:779:  # cAdvisor cannot name containers on Docker Desktop with the containerd image store (2026-10-19,
+docker/connect/Dockerfile:4:# ENABLE_JMX_EXPORTER=true, but the image ships no jar (W4-D1). 1.6.0 from the GitHub release:
+docker/connect/metrics.yaml:1:# JMX exporter rules for Kafka Connect and the Debezium PostgreSQL connector (W4-T01b).
+docker/superset/dashboards/datasets/Lakehouse_Trino_lake_ro/fct_order_items.yaml:30:    description: Price of live items of orders that are neither canceled nor unavailable (D8).
+docker/superset/dashboards/datasets/Lakehouse_Trino_lake_ro/fct_orders.yaml:30:    description: Value of live items of orders that are neither canceled nor unavailable (D8).
+docker/superset/superset_config.py:34:# single-user mode, like Airflow without a login (D12): the ports are bound to BIND_IP=127.0.0.1.
+docker/trino/etc/access-control.properties:1:# File-based access control (W6-D17): the BI users `grafana` (datasource) and `superset` only read the marts
+docker/trino/etc/catalog/lake_ro.properties:1:# W6-D17: the read-only twin of the catalog `lake` (same Lakekeeper, warehouse and S3 keys), the only
+observability/grafana/dashboards/pipeline-health.json:676:      "description": "Source against silver and silver against gold, by row fingerprint, at rest only (W5-T04). 0 everywhere.",
+observability/grafana/provisioning/datasources/trino.yml:5:  # lake_ro.gold.<table> (the read-only catalog, W6-T11). A basic auth user without a password
+observability/postgres-exporter/queries.yaml:2:# retained WAL of a stopped consumer is computed here (W4-D3).
+observability/prometheus/alerts.yml:1:# The six alerts of week 4 (W4-T05), plus the alerts on a source that went silent (review of W4
+observability/prometheus/alerts.yml:2:# and W5): a gauge that stops coming must not read as "all quiet". Week 6 adds SlotWalHeldIdle
+observability/prometheus/alerts.yml:3:# (W6-T05) and SparkRestartLoop (W6-T06); the audit of 30.10 adds SilverGoldNotCompared (B3).
+observability/prometheus/alerts.yml:4:# No Alertmanager (W4-D6): state is read from the Prometheus UI, /api/v1/alerts and the Pipeline
+observability/prometheus/alerts.yml:18:      # disk even with one (W4-D3). A live slot holds ~25 MB of WAL on an idle laptop.
+observability/prometheus/alerts.yml:62:      # The age of the oldest bronze snapshot silver has not merged (W4-D4); 0 at rest. Table
+observability/prometheus/alerts.yml:97:      # confirmed nothing, and keeps sending 1 until the slot moves (W6-D9). The task stays green
+observability/prometheus/alerts.yml:111:      # it (audit 30.10, DATA-02): a deleted order or payment leaves gold behind until the next
+observability/prometheus/alerts.yml:116:      # continuous 24 hour run (B6) raises it. No `for`: the count already is the wait.
+observability/prometheus/alerts.yml:124:      # Gold was not rebuilt after the last data commit of silver while the stand is at rest (audit
+observability/prometheus/alerts.yml:125:      # F-01, F-03): dbt_build paused or red. By Iceberg snapshots, not by data, so a deleted order
+observability/statsd/mapping.yml:3:# leave as seconds (summaries with _count and _sum). lakehouse.* is dq_checks (W4-T03).
+observability/statsd/mapping.yml:24:  # dq_checks gauges (W4-T03). A gauge that stops arriving disappears after the TTL, three
+oltp/migrations/evolution/003_orders_sales_channel.sql:1:-- Schema evolution scenario (W2-T07). `make migrate` does not see this directory: the replayer
+oltp/replayer/settings.py:32:    # event time for the windowed job (W5-T01). The update still commits later, so it reaches
+scripts/chaos/connect-pause.sh:5:# stays active and SlotWalRetainedHigh (inactive slot over 64 MiB) cannot fire (W4-D11).
+scripts/chaos/connect-pause.sh:33:  fail "the slot stays active after a STOP: W4-D11 needs a rethink"
+scripts/chaos/connect-pause.sh:38:# ~1.1 MB of WAL per virtual hour (13.6 MB for 60 s, W4-T02), so reaching 64 MiB by replay alone
+scripts/chaos/late.sh:80:  # Airflow is the silver writer (W4-D12): the merge task's log carries the same lines.
+scripts/chaos/lib.sh:48:# (2026-11-04). What it shows: MinIO answers from the host of Trino by the endpoint of its
+scripts/chaos/lib.sh:136:# runs that is silver_upsert, triggered here (W4-D12; the DAG must not be paused: run_dag waits
+scripts/chaos/lib.sh:334:# api-server, as the UI shows them. No login (D12): /auth/token hands out a token.
+scripts/chaos/lib.sh:346:# `alert <name> firing after <n> s`, 1 on a timeout (W4-D7). A pending alert does not count.
+scripts/chaos/silver-kill.sh:24:# (D12), /auth/token hands out a token, the task instance carries state and try_number.
+scripts/demo/watermark.sh:2:# Watermark demo (W5-T01a, ADR-024): the same job code as the live service, on a lab topic, one
+scripts/demo/watermark.sh:17:# `live`: the same two cases on the running service (W5-T01b). Two real inserts are sent again to
+scripts/obs/check_dashboards.py:1:"""Runs every panel query of the Grafana dashboards against Prometheus and Trino (W4-T04, W6-T01).
+scripts/replay-burst.sh:4:# budget (D2 in docs/planning/07-w3-spec.md).
+scripts/report.sh:19:# REL-01: docker ps does not show a container that is down. After `docker kill` or `docker stop`
+streaming/spark_jobs/catalog.py:10:# fell out of its metadata log (W5-T05a). Metadata only: no rewrite, no checkpoint involved.
+streaming/spark_jobs/maintenance.py:1:"""Iceberg maintenance of the lake (W5-T05a, ADR-025): expire snapshots, remove orphan files,
+streaming/spark_jobs/metrics.py:2:stateful queries the state size, the watermark and the rows it dropped (W5-T01b)."""
+streaming/spark_jobs/offsets.py:1:"""Kafka offsets from a Structured Streaming progress, without pyspark (W4-T02)."""
+streaming/spark_jobs/orders_per_minute.py:1:"""Orders per minute, a stateful streaming job (W5-T01a, ADR-024).
+streaming/spark_jobs/progress.py:1:"""Numbers out of a streaming progress report, without pyspark (W5-T01b)."""
+streaming/spark_jobs/settings.py:45:    # orders_per_minute (W5-T01a). An empty checkpoint means <checkpoint_root>/orders_per_minute.
+streaming/spark_jobs/silver_upsert.py:126:    """Payload fields the contract does not declare: the source gained a column (W2-T07)."""
+tests/unit/test_agent_hooks.py:227:        # The W5-D13 ladder by any route, not only through make.
+tests/unit/test_agent_hooks.py:484:# B11 was rolled back: the guard pairs inline code with .env over the whole command, so a
+tests/unit/test_agent_hooks.py:606:# B14: the interpreter gets its code without `-c` and `-`, or the line is cut between the
+tests/unit/test_agent_hooks.py:983:    # B14: git quoted such a path in `status --porcelain` and the quoted name counted as code.
+tests/unit/test_agent_hooks.py:1045:    # B12 (RT-S3, AI-05): code is verified, then only the notes change. The turn must end without
+tests/unit/test_agent_hooks.py:1094:    # B12 review: git lists a rename by its new name only, a Markdown or docs/ path.
+tests/unit/test_agent_hooks.py:1288:    # B11: the project name may come from .env, which the hook does not read and the hook's own
+tests/unit/test_agent_hooks.py:1321:    # B11 review: a stack started from another directory, or a path that docker wrote another way,
+tests/unit/test_agent_hooks.py:1743:# B18: the stdin-as-code forms the first round of the pipe and heredoc checks left open. A shell
+tests/unit/test_agent_state.py:151:    # B12 review: a rename shows only its new name, a Markdown or docs/ path, so the code that
+tests/unit/test_agent_state.py:173:# B14: git quotes a path with a space, a quote or a non-ASCII letter in the line-based output, and
+tests/unit/test_agent_state.py:485:    # B11: the parser is not loosened, a closed refusal is safe. The reviewer role says where a
+tests/unit/test_compose.py:1:"""SEC-02: a published port is bound to BIND_IP, and compose refuses to start without one."""
+tests/unit/test_container_exporter.py:89:    # docker stats shows usage minus inactive_file: 1.389GiB for trino on 2026-10-19.
+tests/unit/test_dags.py:764:# Maintenance (W5-T05a).
+tests/unit/test_dags.py:843:    # Unpausing the existing DAG must not start the W5-D13 ladder: expire and compaction wait
+tests/unit/test_dags.py:999:# Timeouts and one writer of the silver checkpoint (REL-03, DATA-09). Airflow is not on the host,
+tests/unit/test_dags.py:1199:    # The silver-gold verdicts and the B3 count are done when the GMV step breaks: they are
+tests/unit/test_dbt_soft_delete.py:1:"""Every model that reads a staging model drops its deleted rows (D4).
+tests/unit/test_dbt_soft_delete.py:9:`fct_order_items` are not scanned: it keeps deleted items on purpose, and `canceled_gmv` (D8) in
+tests/unit/test_dbt_soft_delete.py:127:    # Canceled GMV is counted from them (D8): a filter here would zero it.
+tests/unit/test_maintenance.py:1:"""The maintenance job (W5-T05a): the rules run on the host without a JVM, the procedures against
+tests/unit/test_maintenance.py:454:    # the surviving snapshot still reads them (QA-06: the key alone was also there for a no-op).
+tests/unit/test_marketplace_dashboard.py:1:"""The Marketplace dashboard reads lake_ro.gold through the Trino datasource plugin (W6-D11, D17).
+tests/unit/test_marketplace_dashboard.py:3:`lake_ro` is the read-only twin of the catalog `lake` that the Grafana user may read (W6-D17).
+tests/unit/test_minio_image.py:37:    # Putting a registry image back would bring the red smoke of 2026-10-26 back.
+tests/unit/test_pinning.py:1:"""SEC-09: an image or an action is named by its content, not by a tag its publisher can move."""
+tests/unit/test_reconcile_postgres.py:1:"""The Postgres side of `reconcile` runs against a real Postgres, not only as text (audit b8, b16).
+tests/unit/test_report.py:1:"""REL-01, REL-02: `make report` shows a long-lived container that is down.
+tests/unit/test_report.py:144:    # B11: .env may name the project (.env.example sets COMPOSE_PROJECT_NAME) and this shell never
+tests/unit/test_silver_upsert.py:559:# Metadata files (W5-T05a): a table drops the metadata.json files that fell out of its log.
+tests/unit/test_spark_settings.py:97:        # The only additions of W2-T09: JdbcCatalog already defaults to HadoopFileIO, and s3://
+tests/unit/test_superset_bundle.py:174:    """PF-42: GMV of items is the saved metric and excludes deleted items and unpaid orders."""
+tests/unit/test_workflows.py:26:    # SEC-09: a tag moves, a commit does not. Every action counts, the old check saw only
+tests/unit/test_workflows.py:46:    # W6-D2: the schedule came back after the first green run (2026-10-29, ADR-026).
+tests/unit/test_workflows.py:70:    # QA-01: promtool is in no other gate; a broken alert rule would reach main unnoticed.

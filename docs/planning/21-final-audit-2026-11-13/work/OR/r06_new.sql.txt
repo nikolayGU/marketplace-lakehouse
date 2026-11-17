@@ -1,0 +1,1 @@
+select id from unnest(array['da2b5ed33ae5068005e9d2c43e7a3de1:9', 'da2b5ed33ae5068005e9d2c43e7a3de1:1']) as t(id) where exists (select 1 from lake.bronze.cdc_events x where x.source_table = 'order_items' and concat_ws(':', json_extract_scalar(x.key, '$.order_id'), json_extract_scalar(x.key, '$.order_item_id')) = t.id)

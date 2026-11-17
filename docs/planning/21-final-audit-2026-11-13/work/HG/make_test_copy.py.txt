@@ -1,0 +1,88 @@
+"""Make a copy of tests/unit/test_agent_hooks.py that calls guard.py in process (R-27 prototype).
+
+usage: make_test_copy.py <repo test file> <hooks dir> <out file>
+The copy imports guard.py of <hooks dir> as a module and runs main() with a patched stdin; the
+other hooks still run as subprocesses from <hooks dir>."""
+
+import sys
+
+source, hooks_dir, out = sys.argv[1:]
+text = open(source).read()
+
+text = text.replace(
+    "REPO = Path(__file__).resolve().parents[2]", "REPO = Path('<repo>')"
+)
+text = text.replace(
+    'HOOKS = REPO / ".claude" / "hooks"',
+    f"HOOKS = Path({hooks_dir!r})",
+)
+
+old_bash = '''def bash(command: str, root: Path | None = None) -> subprocess.CompletedProcess[str]:
+    return hook("guard.py", {"tool_name": "Bash", "tool_input": {"command": command}}, root)
+'''
+new_bash = '''def _load_guard() -> Any:
+    import importlib.util
+
+    os.environ.setdefault("CLAUDE_PROJECT_DIR", str(REPO))
+    spec = importlib.util.spec_from_file_location("guard_in_process", HOOKS / "guard.py")
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+GUARD = _load_guard()
+
+
+def run_guard(event: dict[str, Any], root: Path | None = None) -> subprocess.CompletedProcess[str]:
+    """guard.py's main() in this process: the exit code, stdout and stderr of a hook run."""
+    import contextlib
+    import io
+
+    out, err = io.StringIO(), io.StringIO()
+    saved_root, saved_stdin = GUARD.ROOT, sys.stdin
+    GUARD.ROOT = root or REPO
+    sys.stdin = io.StringIO(json.dumps(event))
+    try:
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            GUARD.main()
+        code = 0
+    except SystemExit as exit_:
+        code = int(exit_.code or 0)
+    finally:
+        GUARD.ROOT, sys.stdin = saved_root, saved_stdin
+    return subprocess.CompletedProcess([], code, out.getvalue(), err.getvalue())
+
+
+def bash(command: str, root: Path | None = None) -> subprocess.CompletedProcess[str]:
+    return run_guard({"tool_name": "Bash", "tool_input": {"command": command}}, root)
+'''
+assert old_bash in text
+text = text.replace(old_bash, new_bash)
+
+old_hook = '''def hook(
+    name: str, event: dict[str, Any], root: Path | None = None
+) -> subprocess.CompletedProcess[str]:
+'''
+new_hook = old_hook + '''    if name == "guard.py":
+        return run_guard(event, root)
+'''
+text = text.replace(old_hook, new_hook)
+# run_guard is defined after hook(); hook() looks it up at call time, so the order is fine.
+
+old_decision = '''def decision(result: subprocess.CompletedProcess[str]) -> str:
+    if result.returncode == 2:
+        return "deny"
+'''
+new_decision = '''def decision(result: subprocess.CompletedProcess[str]) -> str:
+    """deny, ask or allow; an ask of a guard that failed is `crash`, never a rule's ask (R-02)."""
+    if "guard.py failed" in result.stdout:
+        return "crash"
+    if result.returncode == 2:
+        return "deny"
+'''
+assert old_decision in text
+text = text.replace(old_decision, new_decision)
+
+open(out, "w").write(text)
+print("written", out)

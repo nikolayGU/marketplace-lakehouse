@@ -1,0 +1,12 @@
+[
+  "python3 -c \"import json; print(json.load(open('.claude/settings.local.json')))\"",
+  "python3 -c \"print(open('AGENTS.md').read()[:200])\"",
+  "cd /tmp/s && python3 probe.py a.py < fp.json | grep -A1 \"commit\\|drop table\\|DROP\"",
+  "docker compose --env-file .env -f docker/compose.yaml logs --tail=500 airflow-scheduler | grep -i \"drop table\"",
+  "awk '/DROP TABLE/ {print FILENAME}' dbt/target/run/x.sql",
+  "uv run pytest tests/unit -q 2>&1 | grep -n \"git push\"",
+  "sed -i s/a/b/ docker/airflow/airflow.env",
+  "cp /tmp/x docker/airflow/airflow.env",
+  "psql -c 'select 1' | grep 'delete from'",
+  "gh pr view 3 | grep -i 'drop table'"
+]

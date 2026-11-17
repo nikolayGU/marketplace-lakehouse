@@ -1,0 +1,1 @@
+{"tool_name": "Bash", "tool_input": {"command": "uv run pytest tests/unit -q && make lint"}}

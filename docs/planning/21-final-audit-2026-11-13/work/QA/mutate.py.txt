@@ -1,0 +1,48 @@
+"""Mutation runner for the QA audit: applies one text mutation in the copy, runs the named test
+files from the copy with the repo's venv, restores the file. Never touches the repository."""
+
+import json
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+REPO = Path("<repo>")
+WORK = Path(__file__).resolve().parent
+COPY = WORK / "copy"
+PY = str(REPO / ".venv" / "bin" / "python")
+
+
+def run(tests: list[str], extra: list[str] | None = None) -> tuple[int, str]:
+    cmd = [PY, "-m", "pytest", *tests, "-q", "-p", "no:cacheprovider", "-x", *(extra or [])]
+    r = subprocess.run(cmd, cwd=COPY, capture_output=True, text=True, timeout=600)
+    last = [line for line in r.stdout.splitlines() if line.strip()][-1:]
+    failed = [line for line in r.stdout.splitlines() if line.startswith("FAILED")]
+    return r.returncode, (last[0] if last else "") + (" | " + failed[0][:200] if failed else "")
+
+
+def main() -> None:
+    mutations = json.loads(Path(sys.argv[1]).read_text())
+    only = set(sys.argv[2:])
+    for m in mutations:
+        if only and m["id"] not in only:
+            continue
+        path = COPY / m["file"]
+        original = (REPO / m["file"]).read_text()
+        path.write_text(original)
+        count = original.count(m["old"])
+        if count != 1:
+            print(f"{m['id']}\tSETUP-ERROR old occurs {count} times")
+            continue
+        path.write_text(original.replace(m["old"], m["new"]))
+        try:
+            code, summary = run(m["tests"])
+        finally:
+            path.write_text(original)
+        verdict = "RED (caught)" if code != 0 else "GREEN (missed)"
+        print(f"{m['id']}\t{verdict}\t{summary}\t# {m['what']}")
+
+
+if __name__ == "__main__":
+    shutil.copy(REPO / "tests/unit/test_chaos_silver_kill.py", COPY / "tests/unit/test_chaos_silver_kill.py")
+    main()

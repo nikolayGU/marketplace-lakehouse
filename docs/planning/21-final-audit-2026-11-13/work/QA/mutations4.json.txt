@@ -1,0 +1,10 @@
+[
+ {"id": "P1", "what": "replayer: emitted events are not marked (replayed again on the next step)",
+  "file": "oltp/replayer/replay.py",
+  "old": "            if done:\n                cur.execute(", "new": "            if False:\n                cur.execute(",
+  "tests": ["tests/unit/test_replay_evolution.py", "tests/unit/test_replay_selection.py", "tests/unit/test_replayer_cli.py", "tests/unit/test_load.py", "tests/unit/test_progress.py", "tests/unit/test_settings.py", "tests/unit/test_reconcile_postgres.py"]},
+ {"id": "P2", "what": "replayer: a late delivered event is executed instead of postponed",
+  "file": "oltp/replayer/replay.py",
+  "old": "                if late:\n", "new": "                if False:\n",
+  "tests": ["tests/unit/test_replay_evolution.py", "tests/unit/test_replay_selection.py", "tests/unit/test_replayer_cli.py", "tests/unit/test_load.py", "tests/unit/test_progress.py", "tests/unit/test_settings.py"]}
+]

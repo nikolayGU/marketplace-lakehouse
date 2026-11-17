@@ -1,0 +1,49 @@
+"""Old items of 14-closeout-spec section 7 (harness v0.3 review round 1) on the current code."""
+
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, "<repo>")
+from scripts.agent_state import read_stamp, record_review, tree_hash  # noqa: E402
+
+
+def git(root: Path, *args: str) -> None:
+    subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True)
+
+
+@pytest.fixture
+def repo(tmp_path: Path) -> Path:
+    git(tmp_path, "init", "-q")
+    git(tmp_path, "config", "user.email", "t@example.invalid")
+    git(tmp_path, "config", "user.name", "t")
+    (tmp_path / ".gitignore").write_text(".verify-stamp\n.check-stamp\n.review-stamp\n")
+    (tmp_path / "job.py").write_text("x = 1\n")
+    git(tmp_path, "add", ".")
+    git(tmp_path, "commit", "-q", "-m", "init")
+    (tmp_path / "job.py").write_text("x = 2\n")
+    return tmp_path
+
+
+def accept_first(repo: Path) -> str:
+    tree = tree_hash(repo)
+    record_review(repo, f"Вердикт: принять\nПредмет: код\nДерево: {tree}\n")
+    return tree
+
+
+@pytest.mark.parametrize(
+    "late",
+    [
+        "Итог. Вердикт: вернуть\nПредмет: код\nДерево: {tree}\n",
+        "Вердикт - вернуть\nПредмет: код\nДерево: {tree}\n",
+        "Вердикт: вернуть\nПредмет: план и код\nДерево: {tree}\n",
+        "Вердикт: принять\n",  # closing text after a hand-back that repeats the verdict
+    ],
+)
+def test_late_report_forms(repo: Path, late: str) -> None:
+    tree = accept_first(repo)
+    message = record_review(repo, late.format(tree=tree))
+    stamp = read_stamp(repo, "review")
+    print(f"\n{late.splitlines()[0]!r} / {late.splitlines()[1:2]}: {message} -> {stamp and stamp.mode}")
