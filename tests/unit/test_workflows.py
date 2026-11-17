@@ -1,5 +1,6 @@
 import re
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -96,3 +97,117 @@ def test_ci_reads_the_repo_and_nothing_more() -> None:
     ci = yaml.safe_load((WORKFLOWS / "ci.yml").read_text())
 
     assert ci["permissions"] == {"contents": "read", "pull-requests": "read"}
+
+
+def test_ci_pins_java_17_before_the_first_pytest_step() -> None:
+    # ubuntu-latest moved to a newer default JDK (ubuntu-26.04) on which Spark 3.5.9 fails with
+    # "getSubject is not supported"; the Spark image runs OpenJDK 17.
+    ci = yaml.safe_load((WORKFLOWS / "ci.yml").read_text())
+    steps = ci["jobs"]["lint-and-test"]["steps"]
+    java = [
+        i for i, s in enumerate(steps) if str(s.get("uses", "")).startswith("actions/setup-java@")
+    ]
+    pytest = [i for i, s in enumerate(steps) if "pytest" in s.get("run", "")]
+
+    assert len(java) == 1
+    assert steps[java[0]]["with"] == {"java-version": "17", "distribution": "temurin"}
+    assert pytest and java[0] < pytest[0]
+
+
+def _workflow_jobs() -> list[tuple[str, str, dict[str, Any]]]:
+    return [
+        (path.name, name, spec)
+        for path in sorted(WORKFLOWS.glob("*.yml"))
+        for name, spec in yaml.safe_load(path.read_text())["jobs"].items()
+    ]
+
+
+def _steps_using(prefix: str) -> list[dict[str, Any]]:
+    return [
+        step
+        for _, _, spec in _workflow_jobs()
+        for step in spec["steps"]
+        if str(step.get("uses", "")).startswith(prefix)
+    ]
+
+
+def test_every_job_runs_on_the_pinned_runner_image() -> None:
+    # ubuntu-latest moves to a new image with a new default JDK and tool set without a commit.
+    jobs = _workflow_jobs()
+
+    assert jobs
+    for workflow, name, spec in jobs:
+        assert spec["runs-on"] == "ubuntu-24.04", f"{workflow}: {name}"
+
+
+def test_setup_uv_installs_the_pinned_uv() -> None:
+    # Without a version setup-uv takes the latest uv; this is the one that writes uv.lock.
+    steps = _steps_using("astral-sh/setup-uv@")
+
+    assert len(steps) == 2
+    for step in steps:
+        assert step.get("with", {}).get("version") == "0.12.17", step["uses"]
+
+
+def test_checkout_leaves_no_git_credentials_behind() -> None:
+    steps = _steps_using("actions/checkout@")
+
+    assert len(steps) >= 7
+    for step in steps:
+        assert step.get("with", {}).get("persist-credentials") is False
+
+
+def test_no_job_widens_the_read_only_permissions() -> None:
+    # The workflow level grants read only; a job key could raise it for one job unnoticed.
+    for workflow, name, spec in _workflow_jobs():
+        assert "permissions" not in spec, f"{workflow}: {name}"
+
+
+def test_lint_and_test_runs_every_check_it_claims() -> None:
+    # Dropping a step must turn a test red, not leave CI green with less checked.
+    ci = yaml.safe_load((WORKFLOWS / "ci.yml").read_text())
+    steps = ci["jobs"]["lint-and-test"]["steps"]
+    runs = [str(step["run"]).strip() for step in steps if "run" in step]
+
+    # A step switched off or allowed to fail still passes the command checks below, so none may
+    # carry these keys.
+    for step in steps:
+        for key in ("if", "continue-on-error"):
+            assert key not in step, f"{key} on a lint-and-test step: {step}"
+
+    for command in (
+        "uv sync --locked --group dev",
+        "uv run ruff check . && uv run ruff format --check .",
+        "uv run mypy",
+        "uv run sqlfluff lint oltp/migrations",
+        "uv run sqlfluff lint models macros tests",
+        "make dbt-parse",
+        "uv run pytest tests/unit -q",
+    ):
+        assert command in runs, command
+    for command in (
+        "for script in $(git ls-files '*.sh'); do bash -n \"$script\" || exit 1; done",
+        "uv run yamllint -c .yamllint docker observability airflow .github",
+    ):
+        assert command in runs, command
+    compose = [step for step in steps if step.get("name") == "compose config"]
+    assert len(compose) == 1
+    assert str(compose[0].get("run", "")).strip() == (
+        "cp .env.example .env && docker compose --env-file .env -f docker/compose.yaml"
+        " --profile '*' config -q"
+    )
+    assert any(str(step.get("uses", "")).startswith("gitleaks/gitleaks-action@") for step in steps)
+
+    # A test file that needs the throwaway Postgres runs in a step that fails on a skip.
+    dsn = "RECONCILE_TEST" + "_DSN"
+    needing = [
+        path.name
+        for path in sorted((REPO / "tests" / "unit").glob("test_*.py"))
+        if path != Path(__file__).resolve() and dsn in path.read_text()
+    ]
+    assert needing
+    for name in needing:
+        covering = [s for s in steps if name in s.get("run", "")]
+        assert covering, f"{name} is not run by lint-and-test"
+        for step in covering:
+            assert step.get("env", {}).get("FAIL_ON_SKIP") == "1", name

@@ -1140,12 +1140,21 @@ branch cancels the older pull request run.
 
 | Job | What it does |
 |---|---|
-| `lint-and-test` | `uv sync --locked`, ruff, `bash -n` on every tracked shell script, mypy, yamllint, sqlfluff, `dbt parse`, `pytest tests/unit`, compose config, gitleaks |
+| `lint-and-test` | Temurin 17 (as the Spark image) for the local SparkSession tests, `uv sync --locked`, ruff, `bash -n` on every tracked shell script, mypy, yamllint, sqlfluff, `dbt parse`, `pytest tests/unit`, compose config, gitleaks |
 | `hadolint` | one run per Dockerfile (matrix, a test compares it with `find`), fails on warning and above; accepted findings sit in the Dockerfile as `# hadolint ignore=` with the reason |
 | `alerts-test` | `make alerts-test`: promtool `check rules` of `alerts.yml` and `test rules` of `alerts_test.yml` in the pinned Prometheus image (QA-01) |
 | `spark-tests` | builds `lakehouse/spark:ci` (layer cache `type=gha`, scope `spark`) and runs `make test-spark SPARK_IMAGE=lakehouse/spark:ci`; `FAIL_ON_SKIP=1` (`tests/unit/conftest.py`) turns any skip, `pytest.skip()` and `importorskip` included, into a failure |
 | `airflow-image` | builds `lakehouse/airflow:ci` (scope `airflow`), imports Airflow, trino, psycopg and pydantic-settings, runs `dbt --version` in its venv, and `make dags-check`: every DAG file imports in the image, offline, with `docker/airflow/airflow.env`; every task has an `execution_timeout` whose attempts fit in the DAG's `dagrun_timeout`, every DockerOperator removes its container with force, and the merge has its fixed name |
 | `minio-images` | builds `lakehouse/minio:ci` and `lakehouse/mc:ci` from `docker/minio/Dockerfile` (scopes `minio`, `mc`) and runs `bash scripts/check-minio-images.sh`: the release and commit each binary prints, `sh` and `wget` in both images, a throwaway MinIO healthy on the compose healthcheck, `create-bucket.sh` (minio-init) twice |
+
+Every job here and the smoke job run on `ubuntu-24.04`, so a new Ubuntu release, and with it the
+default Java, reaches CI only with a commit; GitHub still updates the image under the label without
+one (`Version:` in the job log; one run can see several). `ubuntu-latest` became `ubuntu-26.04`
+with Java 25 as the default, on which the local SparkSession tests of `lint-and-test` fail
+(`getSubject is not supported`). `setup-uv` installs uv 0.12.17 (without a version it takes the
+latest), the uv on the host when this was written; nothing ties the two, so a uv upgrade on the
+host needs the same `version` change in both workflows.
+`actions/checkout` leaves no git credentials behind (`persist-credentials: false`).
 
 `.github/workflows/smoke.yml` (on demand and weekly, Monday 03:00 UTC, W6-D2; 45 minutes at most) walks the path
 from a clean clone on the committed sample: `make secrets` with `REPLAY_DATA=sample`, `make
@@ -1220,7 +1229,7 @@ The rebuild that `--build` runs after this commit:
 Not covered:
 - the jars of `streaming/Dockerfile` are checked against a `.sha1` from the same origin;
 - pip installs have no `--require-hashes`, and the transitive dependencies of the dbt venv float;
-- `rev:` in `.pre-commit-config.yaml` is a tag, and no uv version is pinned for `setup-uv`;
+- `rev:` in `.pre-commit-config.yaml` is a tag;
 - the DockerOperator of `silver_upsert` pulls `lakehouse/spark:dev` from a registry when the image
   is missing locally (`pull_policy` is compose's, not the operator's).
 

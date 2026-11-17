@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   lint-and-test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     # The same image, by the same digest, as postgres-oltp in docker/compose.yaml: the reconcile
     # queries of the source side run on it (tests/unit/test_reconcile_postgres.py). A throwaway
@@ -35,13 +35,21 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           # gitleaks-action scans the commit range, which a shallow clone cannot resolve.
           fetch-depth: 0
-      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
         with:
           python-version: "3.12"
+          # The uv that writes uv.lock; without a version setup-uv takes the latest.
+          version: "0.12.17"
+      # Spark 3.5.9 fails on the newer default JDK of ubuntu-26.04 (getSubject is not supported).
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          java-version: "17"
+          distribution: temurin
       - run: uv sync --locked --group dev
       - run: uv run ruff check . && uv run ruff format --check .
       - run: for script in $(git ls-files '*.sh'); do bash -n "$script" || exit 1; done
@@ -62,12 +70,12 @@ jobs:
           RECONCILE_TEST_DSN: postgresql://postgres:reconcile-test@localhost:5432/postgres
       - name: compose config
         run: cp .env.example .env && docker compose --env-file .env -f docker/compose.yaml --profile '*' config -q
-      - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2.3.9
+      - uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   hadolint:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     strategy:
       fail-fast: false
@@ -81,7 +89,9 @@ jobs:
           - oltp/Dockerfile
           - streaming/Dockerfile
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
       - uses: hadolint/hadolint-action@06be81baf89a55ffd0e24b8f04a4185738dd3387 # v3.5.0
         with:
           dockerfile: ${{ matrix.dockerfile }}
@@ -90,20 +100,24 @@ jobs:
   # promtool checks observability/prometheus/alerts.yml and runs alerts_test.yml in the pinned
   # Prometheus image (QA-01: neither `make check` nor another job runs it).
   alerts-test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
       - run: make alerts-test
 
   # The Spark tests of MERGE, quarantine and epoch skipping need the Iceberg jar, which only the
   # image has: pytest on the runner skips them. `make test-spark` sets FAIL_ON_SKIP=1
   # (tests/unit/conftest.py), which turns any skip into a failure, so green here means they ran.
   spark-tests:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
@@ -116,10 +130,12 @@ jobs:
       - run: make test-spark SPARK_IMAGE=lakehouse/spark:ci
 
   airflow-image:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
@@ -141,10 +157,12 @@ jobs:
   # The check runs the built images: the release and the commit they print, sh and wget, MinIO
   # healthy on the compose healthcheck, create-bucket.sh (minio-init) twice.
   minio-images:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:

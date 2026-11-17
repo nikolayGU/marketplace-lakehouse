@@ -1,3 +1,4 @@
+import ast
 import os
 import re
 import shutil
@@ -247,3 +248,28 @@ def test_spark_test_pins_follow_the_lock_file() -> None:
 
     assert f"pytest=={_locked('pytest')}" in result.stdout
     assert f"jsonschema=={_locked('jsonschema')}" in result.stdout
+
+
+def _imports_pyspark(path: Path) -> bool:
+    for node in ast.walk(ast.parse(path.read_text())):
+        if isinstance(node, ast.Import) and any(
+            a.name == "pyspark" or a.name.startswith("pyspark.") for a in node.names
+        ):
+            return True
+        if isinstance(node, ast.ImportFrom) and (node.module or "").split(".")[0] == "pyspark":
+            return True
+    return False
+
+
+def test_every_test_file_that_needs_spark_runs_in_test_spark() -> None:
+    # Tests that need only Java also run in CI lint-and-test, but those that need the Iceberg jar
+    # are skipped outside the image. A test left out of SPARK_TESTS loses the one run that has
+    # the jar and FAIL_ON_SKIP=1.
+    # Not an equality: a listed file need not import pyspark itself.
+    tests = REPO / "tests" / "unit"
+    listed = set(re.findall(r"\btest_\w+\.py\b", make("-n", "test-spark").stdout))
+    needing = {p.name for p in tests.glob("test_*.py") if _imports_pyspark(p)}
+
+    assert listed
+    assert all((tests / name).is_file() for name in listed)
+    assert needing <= listed

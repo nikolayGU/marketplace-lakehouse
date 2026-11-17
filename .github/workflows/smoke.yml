@@ -14,12 +14,14 @@ permissions:
 
 jobs:
   smoke:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
       COMPOSE: docker compose --env-file .env -f docker/compose.yaml
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
       - name: the runner
         run: |
           nproc
@@ -31,9 +33,11 @@ jobs:
         run: |
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
           df -h /
-      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
         with:
           python-version: "3.12"
+          # The uv that writes uv.lock; without a version setup-uv takes the latest.
+          version: "0.12.17"
       - run: uv sync --locked --group dev
       # make secrets writes REPLAY_DATA=raw, which would go to Kaggle.
       - name: configuration on the sample
