@@ -10,10 +10,13 @@ import re
 import shutil
 import signal
 import subprocess
+import sys
 import time
 from pathlib import Path
 
 import pytest
+
+from scripts.agent_state import STAMP, tree_hash
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -48,6 +51,17 @@ case "$*" in
         exit $?
       fi ;;
     esac
+    # STACK=healthy: the answers of a stack with one topic partition and bronze up to date.
+    if [ "${STACK:-}" = healthy ] && [ "$state" = up ]; then
+      case "$*" in
+        *"having count(*)"*) echo 0; exit 0 ;;
+        *"max(kafka_offset) + 1"*) echo oltp.shop.orders:0:5; exit 0 ;;
+        *"count(distinct source_table)"*)
+          [ -n "${EDIT_FILE:-}" ] && echo edited >>"$EDIT_FILE"
+          echo 7; exit 0 ;;
+        *"--output-format TSV"*) echo "1 x"; exit 0 ;;
+      esac
+    fi
     case "$state" in
       storedown) echo "curl: (6) Could not resolve host: minio" >&2; exit 6 ;;
       lakedown) echo "Query failed: lakekeeper refused the connection" >&2; exit 1 ;;
@@ -57,7 +71,12 @@ case "$*" in
       stubborn) trap '' TERM; sleep 30 & echo $! >>"$PIDS"; wait; exit 0 ;;
       *) echo 1; exit 0 ;;
     esac ;;
-  *" exec -T kafka "*) echo "kafka is not running" >&2; exit 1 ;;
+  *" exec -T kafka "*)
+    [ "${STACK:-}" = healthy ] && { echo oltp.shop.orders:0:5; exit 0; }
+    echo "kafka is not running" >&2; exit 1 ;;
+  *" exec -T postgres-oltp "*)
+    [ "${STACK:-}" = healthy ] && { echo "1 x"; exit 0; }
+    exit 0 ;;
   *) exit 0 ;;
 esac
 """
@@ -93,11 +112,18 @@ def run_verify(
     lake: str = "up",
     store: str = "up",
     wait_for: str = PROBE,
+    project_root: str = "",
+    tree_before: list[str] | None = None,
+    block_stamp: bool = False,
     **env: str,
 ) -> tuple[subprocess.CompletedProcess[str], list[str], float, list[int]]:
     # interrupt: sent to the bash process alone once the probe has started, as a terminal sends it
     # to the foreground group, where timeout is not: it runs the probe in a group of its own.
     # wait_for: the logged call the signal waits for, the first probe by default.
+    # project_root: "git" or "plain": the root also gets what verify needs to reconcile and stamp
+    # (agent_state.py, reconcile_sql.py, contracts, a .venv python); "git" is a committed repo.
+    # tree_before: receives the tree id of the root just before verify starts.
+    # block_stamp: a directory where the verify stamp file goes, so writing the stamp fails.
     root = tmp_path / "root"
     (root / "scripts" / "chaos").mkdir(parents=True)
     shutil.copy(REPO / "scripts" / "verify.sh", root / "scripts" / "verify.sh")
@@ -105,6 +131,18 @@ def run_verify(
     (root / ".env").write_text(
         "OLTP_USER=user\nOLTP_DB=db\nS3_ENDPOINT=http://host-side-minio:9000\n"
     )
+    if project_root:
+        shutil.copy(REPO / "scripts" / "agent_state.py", root / "scripts" / "agent_state.py")
+        (root / "scripts" / "reconcile_sql.py").symlink_to(REPO / "scripts" / "reconcile_sql.py")
+        (root / "contracts").symlink_to(REPO / "contracts")
+        (root / ".venv" / "bin").mkdir(parents=True)
+        (root / ".venv" / "bin" / "python").symlink_to(sys.executable)
+    if project_root == "git":
+        (root / ".gitignore").write_text(".verify-stamp\n.check-stamp\n.review-stamp\n.venv/\n")
+        git = ["git", "-C", str(root), "-c", "user.name=t", "-c", "user.email=t@t"]
+        subprocess.run([*git, "init", "-q"], check=True)
+        subprocess.run([*git, "add", "-A"], check=True)
+        subprocess.run([*git, "commit", "-qm", "init"], check=True)
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     for name, body in (("docker", FAKE_DOCKER), ("curl", FAKE_CURL)):
@@ -119,6 +157,10 @@ def run_verify(
     scratch = tmp_path / "tmp"
     scratch.mkdir()
     argv = ["bash", str(root / "scripts" / "verify.sh")] + ([mode] if mode else [])
+    if block_stamp:
+        (root / STAMP).mkdir()
+    if tree_before is not None:
+        tree_before.append(tree_hash(root))
     started = time.monotonic()
     proc = subprocess.Popen(
         argv,
@@ -455,3 +497,53 @@ def test_storage_probe_is_a_health_check_in_the_trino_container_not_a_table_quer
     # Expanded by the shell in the container, from the endpoint of its catalog, not on the host.
     assert "$S3_ENDPOINT" in probes[2]
     assert "host-side-minio" not in probes[2]
+
+
+def test_verify_stamps_the_tree_it_started_on(tmp_path: Path) -> None:
+    # The job file changes while verify runs: the stamp names the tree it started on.
+    root = tmp_path / "root"
+    before: list[str] = []
+    result, _, _, _ = run_verify(
+        tmp_path,
+        "--no-merge",
+        project_root="git",
+        tree_before=before,
+        STACK="healthy",
+        EDIT_FILE=str(root / "job.py"),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines()[-1] == "verify ok"
+    stamp = (root / ".verify-stamp").read_text().split()
+    assert stamp[0] == "fast"
+    assert stamp[2] == before[0]
+    assert stamp[2] != tree_hash(root)
+    # What the stamp did reaches stderr, as `kept the full verify stamp` must after a full run.
+    assert f"verify: wrote the fast stamp for tree {before[0]}" in result.stderr
+
+
+def test_verify_is_ok_when_the_tree_cannot_be_stamped(tmp_path: Path) -> None:
+    result, _, _, _ = run_verify(tmp_path, "--no-merge", project_root="plain", STACK="healthy")
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines()[-1] == "verify ok"
+    assert "was not stamped" in result.stderr
+    assert not (tmp_path / "root" / ".verify-stamp").exists()
+
+
+def test_verify_is_ok_when_the_stamp_cannot_be_written(tmp_path: Path) -> None:
+    # The tree id is read, writing the stamp fails: the data checks passed, so verify still passes.
+    result, _, _, _ = run_verify(
+        tmp_path, "--no-merge", project_root="git", block_stamp=True, STACK="healthy"
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines()[-1] == "verify ok"
+    assert "was not stamped (" in result.stderr and "IsADirectoryError" in result.stderr
+
+
+def test_verify_runs_agent_state_with_the_project_python() -> None:
+    for name in ("scripts/verify.sh", "scripts/report.sh", "Makefile"):
+        lines = (REPO / name).read_text().splitlines()
+        bad = [line for line in lines if "agent_state" in line and "python3" in line]
+        assert not bad, f"{name}: {bad}"

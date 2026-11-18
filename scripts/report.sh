@@ -11,7 +11,7 @@ git status --short
 git diff --stat HEAD
 echo "== stamps"
 for kind in verify check review; do
-  shown="$(python3 scripts/agent_state.py show "$kind" "$root" 2>/dev/null || echo unreadable)"
+  shown="$("$root/.venv/bin/python" scripts/agent_state.py show "$kind" "$root" 2>/dev/null || echo unreadable)"
   echo "$kind: $shown"
 done
 echo "== containers"

@@ -154,7 +154,7 @@ test: ## unit tests (Spark ones skip on a host without Java)
 	uv run pytest tests/unit -q
 
 check: ## make lint and make test, then stamps the tree they passed on for the commit gate (.check-stamp)
-	@python3 scripts/agent_state.py check "$(CURDIR)"
+	@uv run python scripts/agent_state.py check "$(CURDIR)"
 
 SPARK_TESTS := test_bronze_cdc_ingest.py test_contracts.py test_envelope.py test_iceberg_demo.py \
   test_iceberg_sink.py test_silver_upsert.py test_orders_per_minute.py test_maintenance.py

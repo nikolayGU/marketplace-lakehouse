@@ -3,7 +3,9 @@
 Three git-ignored stamps, each one line `<mode> <written_at> <tree>`, the tree being the git tree
 id of the working tree, untracked files included:
 
-- `.verify-stamp`, mode `fast` or `full`: written by `make verify-fast` and `make verify`.
+- `.verify-stamp`, mode `fast` or `full`: written by `make verify-fast` and `make verify`. A `fast`
+  verify keeps a `full` stamp whose tree differs from the new one in no code (Markdown and `docs/`
+  only), since the full run already covers it.
 - `.check-stamp`, mode `check`: written by `make check` (`run_check`), after `make lint` and
   `make test` passed on a tree that did not change while they ran.
 - `.review-stamp`, mode `accept`, `accept-with-notes` or `return`: kept by the hook
@@ -117,16 +119,42 @@ def _store(root: Path, name: str, mode: str, tree: str) -> None:
     (root / name).write_text(f"{mode} {written_at} {tree}\n")
 
 
-def write_stamp(root: Path, mode: str) -> None:
-    """Stamp the working tree as it is now: `fast` and `full` in `.verify-stamp`, `check` in
-    `.check-stamp`. A review verdict is stamped only by `record_review`."""
+def _kept_full(root: Path, tree: str) -> str | None:
+    """A message when `.verify-stamp` holds a `full` stamp whose tree differs from `tree` in no code
+    (only Markdown and `docs/`), so a `fast` verify has nothing to add to it. None when there is no
+    such stamp, or when the tree it names is gone from the object store."""
+    stamp = read_stamp(root, current=tree)
+    if stamp is None or stamp.mode != "full":
+        return None
+    try:
+        if _code_diff(root, stamp.tree, tree):
+            return None
+    except subprocess.CalledProcessError:
+        return None
+    return f"kept the full verify stamp of {stamp.written_at}: it covers this tree"
+
+
+def write_stamp(root: Path, mode: str, tree: str | None = None) -> str:
+    """Stamp a tree: `fast` and `full` in `.verify-stamp`, `check` in `.check-stamp`. `tree` is the
+    tree id to stamp, the working tree as it is now by default; an id that is no tree of this
+    repository is refused. A `fast` stamp does not replace a `full` one that covers the same code.
+    A review verdict is stamped only by `record_review`. Returns what was done."""
     if mode in MODES:
         name = STAMP
     elif mode == CHECK_MODE:
         name = CHECK_STAMP
     else:
         raise ValueError(f"unknown stamp mode {mode!r}, expected one of {(*MODES, CHECK_MODE)}")
-    _store(root, name, mode, tree_hash(root))
+    if tree is None:
+        tree = tree_hash(root)
+    elif not (_TREE_ID.fullmatch(tree) and _is_tree(root, tree)):
+        raise ValueError(f"{tree!r} is not a tree of this repository")
+    if mode == "fast":
+        kept = _kept_full(root, tree)
+        if kept:
+            return kept
+    _store(root, name, mode, tree)
+    return f"wrote the {mode} stamp for tree {tree}"
 
 
 def _kind(kind: str) -> tuple[str, tuple[str, ...]]:
@@ -151,14 +179,31 @@ def read_stamp(root: Path, kind: str = "verify", current: str | None = None) -> 
 
 
 def describe_stamp(root: Path, kind: str = "verify") -> str:
-    stamp = read_stamp(root, kind)
+    """One line for `show`: `fresh` for the working tree, `covers` when only Markdown and `docs/`
+    changed since the stamped tree, else `stale` with the reason. `covers` states the relation of
+    the two trees only: whether the commit gate takes the stamp also depends on its mode (a `fast`
+    verify never opens it, a `check` or review stamp is judged by its own rule)."""
+    current = tree_hash(root)
+    stamp = read_stamp(root, kind, current)
     if stamp is None:
         return "none"
-    return f"{stamp.mode} at {stamp.written_at}, {'fresh' if stamp.fresh else 'stale'}"
+    head = f"{stamp.mode} at {stamp.written_at}"
+    if stamp.fresh:
+        return f"{head}, fresh"
+    try:
+        changed = code_changes_since(root, stamp, current)
+    except subprocess.CalledProcessError:
+        return f"{head}, stale (the stamped tree is gone)"
+    if not changed:
+        return f"{head}, covers (only Markdown and docs/ changed since)"
+    return f"{head}, stale (code changed: {len(changed)} path{'' if len(changed) == 1 else 's'})"
 
 
 def _is_code(path: str) -> bool:
-    return not path.endswith(".md") and not path.startswith("docs/")
+    # dbt reads the `{% docs %}` blocks of dbt/**/*.md, so Markdown there changes the models.
+    return not (path.endswith(".md") and not path.startswith("dbt/")) and not path.startswith(
+        "docs/"
+    )
 
 
 def _paths(output: bytes) -> list[str]:
@@ -191,6 +236,20 @@ def code_changes_since(root: Path, stamp: Stamp, current: str | None = None) -> 
     return _code_diff(root, stamp.tree, now)
 
 
+_VERDICT_WORD = re.compile("вердикт", re.IGNORECASE)
+_VERDICT_PHRASE = re.compile(rf"(?<!\w)(?:{_phrases(VERDICTS)})(?!\w)", re.IGNORECASE)
+_TAKES_BACK_RE = re.compile(_TAKES_BACK, re.IGNORECASE)
+_TREE_ID = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
+_RETURN_WORD = re.compile(r"(?<!\w)вернуть(?!\w)", re.IGNORECASE)
+
+
+def _two_subjects(found: re.Match[str]) -> bool:
+    """A subject line that names more than one subject ("план и код") is no subject: `код` among
+    other words must not read as a review of code, nor `план` hide a review of code."""
+    line = found.string[found.start(1) :].lower()
+    return sum(subject in line for subject in SUBJECTS) > 1
+
+
 @dataclass(frozen=True)
 class _Report:
     """The verdict, subject and tree lines of a reviewer report: the values of the lines that hold
@@ -205,11 +264,20 @@ def _read_report(report: str) -> _Report:
     values: dict[str, set[str]] = {name: set() for name in _FIELDS}
     garbled: set[str] = set()
     for line in report.splitlines():
+        if not any(head.match(line) for head, _ in _FIELDS.values()):
+            # "Итог. Вердикт: вернуть", "Вердикт - вернуть", "Итог. Вердикт: не принять": a verdict
+            # out of format that returns, or takes an accept back, still revokes.
+            if _VERDICT_WORD.search(line) and (
+                _RETURN_WORD.search(line)
+                or (_VERDICT_PHRASE.search(line) and _TAKES_BACK_RE.search(line))
+            ):
+                garbled.add("verdict")
+            continue
         for name, (head, valid) in _FIELDS.items():
             if not head.match(line):
                 continue
             found = valid.match(line)
-            if found and "|" not in found[2]:
+            if found and "|" not in found[2] and not (name == "subject" and _two_subjects(found)):
                 values[name].add(" ".join(found[1].lower().split()))
             else:
                 garbled.add(name)
@@ -246,7 +314,10 @@ def record_review(root: Path, report: str) -> str:
     accepting verdict for that tree, unless code changed since it (Markdown and `docs/` do not
     count), and `return` for the working tree. Any other report with a verdict line revokes the
     stamp, `return` for the working tree, so a garbled or late `вернуть` never leaves an earlier
-    accepting verdict in force. Returns what happened."""
+    accepting verdict in force. That covers a line that mentions `вердикт` and `вернуть` but does
+    not start with the `Вердикт:` head ("Итог. Вердикт: вернуть", "Вердикт - вернуть"), and a
+    subject line that names more than one of `код`, `план`, `документ` ("Предмет: план и код").
+    Returns what happened."""
     parsed = _read_report(report)
     verdicts, subjects = parsed.values["verdict"], parsed.values["subject"]
     if not verdicts and "verdict" not in parsed.garbled:
@@ -287,15 +358,24 @@ def run_check(root: Path, command: Sequence[str] = CHECK_COMMAND) -> int:
     return 0
 
 
+def _covers(root: Path, limit: int = 20) -> str:
+    """The code a review of the working tree now would cover: the paths changed since HEAD."""
+    changed = code_changes(root)
+    if not changed:
+        return "covers no code changed since HEAD"
+    more = f" and {len(changed) - limit} more" if len(changed) > limit else ""
+    return f"covers code changed since HEAD: {', '.join(changed[:limit])}{more}"
+
+
 def main() -> None:
     usage = (
-        f"usage: {sys.argv[0]} stamp fast|full|check <repo root>"
+        f"usage: {sys.argv[0]} stamp fast|full <repo root> [<tree id>] | stamp check <repo root>"
         " | show [verify|check|review] <repo root> | tree <repo root> | check <repo root>"
     )
     match sys.argv[1:]:
-        case ["stamp", mode, root]:
+        case ["stamp", mode, root, *rest] if len(rest) <= 1 and (mode in MODES or not rest):
             try:
-                write_stamp(Path(root), mode)
+                print(write_stamp(Path(root), mode, *rest), file=sys.stderr)
             except ValueError as error:
                 sys.exit(str(error))
         case ["show", root]:
@@ -304,6 +384,7 @@ def main() -> None:
             print(describe_stamp(Path(root), kind))
         case ["tree", root]:
             print(tree_hash(Path(root)))
+            print(_covers(Path(root)), file=sys.stderr)
         case ["check", root]:
             sys.exit(run_check(Path(root)))
         case _:

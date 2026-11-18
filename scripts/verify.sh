@@ -11,7 +11,10 @@
 # each ends within TRINO_PROBE_WAIT (default 20) + 2 s at most, so a refusal comes within three
 # times that.
 # `--no-merge` (make verify-fast) skips the merge and writes nothing to the lake.
-# On success it stamps the working tree (.verify-stamp) for the agent hooks in .claude/hooks.
+# On success it stamps for the agent hooks in .claude/hooks the working tree as it was when verify
+# started (a file edited during the run is not covered). A stamp that fails (no git, no .venv) is
+# reported on stderr and does not fail verify: the data checks passed, and the commit gate stays
+# closed without the stamp.
 . "$(dirname "$0")/chaos/lib.sh"
 
 # bash runs a trap once the foreground command ends: a Ctrl+C that only the script gets (the Trino
@@ -25,6 +28,8 @@ case "${1:-}" in
   --no-merge) mode=fast ;;
   *) echo "usage: verify.sh [--no-merge]" >&2; exit 2 ;;
 esac
+python="$ROOT/.venv/bin/python"
+tree=$("$python" "$ROOT/scripts/agent_state.py" tree "$ROOT" 2>/dev/null) || tree=""
 
 fail() {
   echo "verify failed: $*" >&2
@@ -64,5 +69,13 @@ tables=$(trino_value "select count(distinct source_table) from bronze.cdc_events
                                              'order_items', 'payments', 'reviews')") ||
   fail "counting the source tables in bronze failed"
 [ "$tables" = 7 ] || fail "bronze holds events of $tables of the 7 source tables"
-python3 "$ROOT/scripts/agent_state.py" stamp "$mode" "$ROOT"
+if [ -z "$tree" ]; then
+  echo "verify: the working tree was not stamped (its tree id could not be read: no git" \
+    "repository or no .venv); the checks above passed" >&2
+elif said=$("$python" "$ROOT/scripts/agent_state.py" stamp "$mode" "$ROOT" "$tree" 2>&1); then
+  # What the stamp did, e.g. that a full stamp covering this tree was kept by a fast run.
+  [ -z "$said" ] || echo "verify: $said" >&2
+else
+  echo "verify: the working tree was not stamped (${said##*$'\n'}); the checks above passed" >&2
+fi
 echo "verify ok"

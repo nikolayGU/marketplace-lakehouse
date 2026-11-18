@@ -1162,7 +1162,31 @@ def test_stop_gate_blocks_a_stamp_of_a_tree_that_is_gone(repo: Path) -> None:
     assert json.loads(result.stdout)["decision"] == "block"
 
 
-def test_session_context_reports_state_goal_and_stamp(repo: Path) -> None:
+def test_stop_gate_blocks_an_edit_of_a_dbt_docs_block(repo: Path) -> None:
+    (repo / "dbt" / "models").mkdir(parents=True)
+    (repo / "dbt" / "models" / "docs.md").write_text("{% docs a %}\nA\n{% enddocs %}\n")
+    write_stamp(repo, "full")
+    (repo / "dbt" / "models" / "docs.md").write_text("{% docs a %}\nB\n{% enddocs %}\n")
+
+    reason = json.loads(hook("stop_gate.py", {}, repo).stdout)["reason"]
+
+    assert "dbt/models/docs.md" in reason
+
+
+def test_commit_after_full_then_fast_verify_is_allowed(repo: Path) -> None:
+    (repo / "job.py").write_text("x = 2\n")
+    gate_stamps(repo)
+    write_stamp(repo, "fast")
+
+    assert decision(bash(COMMIT, repo)) == "allow"
+
+
+def test_session_context_reports_state_goal_and_stamp(
+    repo: Path, tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_docker(
+        tmp_path_factory.mktemp("bin") / "bin", monkeypatch, running="", stopped="", rows=""
+    )
     (repo / "docs").mkdir()
     (repo / "docs" / "HANDOFF.md").write_text(
         "# HANDOFF\n\n## Состояние на 17.10\n\nW3-T01 done.\n\n### Done\n\ndetails\n"
@@ -1180,7 +1204,12 @@ def test_session_context_reports_state_goal_and_stamp(repo: Path) -> None:
     assert "Uncommitted: 1 paths\n?? docs/" in context
 
 
-def test_session_context_survives_missing_docs(repo: Path) -> None:
+def test_session_context_survives_missing_docs(
+    repo: Path, tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_docker(
+        tmp_path_factory.mktemp("bin") / "bin", monkeypatch, running="", stopped="", rows=""
+    )
     result = hook("session_context.py", {}, repo)
     context = json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]
 

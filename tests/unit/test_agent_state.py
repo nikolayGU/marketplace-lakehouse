@@ -109,7 +109,173 @@ def test_describe_stamp(repo: Path) -> None:
     write_stamp(repo, "full")
     assert describe_stamp(repo).startswith("full at ") and describe_stamp(repo).endswith("fresh")
     (repo / "job.py").write_text("x = 5\n")
-    assert describe_stamp(repo).endswith("stale")
+    assert describe_stamp(repo).endswith("stale (code changed: 1 path)")
+
+
+def test_a_fast_verify_keeps_a_full_stamp_that_covers_the_tree(repo: Path) -> None:
+    write_stamp(repo, "full")
+    full = read_stamp(repo)
+    (repo / "NOTES.md").write_text("x")
+
+    message = write_stamp(repo, "fast")
+
+    stamp = read_stamp(repo)
+    assert full is not None and stamp is not None
+    assert (stamp.mode, stamp.written_at, stamp.tree) == ("full", full.written_at, full.tree)
+    assert message == f"kept the full verify stamp of {full.written_at}: it covers this tree"
+
+
+def test_a_fast_verify_replaces_a_full_stamp_of_older_code(repo: Path) -> None:
+    write_stamp(repo, "full")
+    (repo / "job.py").write_text("x = 2\n")
+
+    message = write_stamp(repo, "fast")
+
+    stamp = read_stamp(repo)
+    assert stamp is not None and (stamp.mode, stamp.fresh) == ("fast", True)
+    assert isinstance(message, str) and message and not message.startswith("kept")
+
+
+def test_a_fast_verify_replaces_a_full_stamp_whose_tree_is_gone(repo: Path) -> None:
+    (repo / STAMP).write_text(f"full 2026-10-30T10:00:00Z {'0' * 40}\n")
+
+    message = write_stamp(repo, "fast")
+
+    stamp = read_stamp(repo)
+    assert stamp is not None and (stamp.mode, stamp.fresh) == ("fast", True)
+    assert isinstance(message, str) and message and not message.startswith("kept")
+
+
+def test_a_fast_verify_replaces_a_fast_stamp(repo: Path) -> None:
+    write_stamp(repo, "fast")
+    (repo / "job.py").write_text("x = 2\n")
+
+    write_stamp(repo, "fast")
+
+    stamp = read_stamp(repo)
+    assert stamp is not None and (stamp.mode, stamp.fresh) == ("fast", True)
+
+
+def test_a_full_verify_replaces_a_full_stamp_that_covers_the_tree(repo: Path) -> None:
+    write_stamp(repo, "full")
+    (repo / "NOTES.md").write_text("x")
+
+    write_stamp(repo, "full")
+
+    stamp = read_stamp(repo)
+    assert stamp is not None and (stamp.mode, stamp.fresh) == ("full", True)
+
+
+def test_write_stamp_uses_the_given_tree(repo: Path) -> None:
+    tree = tree_hash(repo)
+    (repo / "job.py").write_text("x = 2\n")
+
+    write_stamp(repo, "full", tree)
+
+    stamp = read_stamp(repo)
+    assert stamp is not None and (stamp.mode, stamp.tree, stamp.fresh) == ("full", tree, False)
+
+
+@pytest.mark.parametrize("bad", ["0" * 40, "not-a-tree", "HEAD", "HEAD:", "HEAD^{tree}", "short"])
+def test_write_stamp_refuses_an_id_that_is_no_tree(repo: Path, bad: str) -> None:
+    if bad == "short":
+        bad = tree_hash(repo)[:10]
+
+    with pytest.raises(ValueError, match="tree"):
+        write_stamp(repo, "full", bad)
+
+    assert not (repo / STAMP).exists()
+
+
+def test_cli_stamps_the_given_tree(repo: Path) -> None:
+    tree = tree_hash(repo)
+    (repo / "job.py").write_text("x = 2\n")
+
+    result = cli("stamp", "fast", repo, tree)
+
+    stamp = read_stamp(repo)
+    assert result.returncode == 0 and result.stdout == "" and result.stderr.strip()
+    assert stamp is not None and (stamp.mode, stamp.tree) == ("fast", tree)
+
+
+def test_cli_refuses_a_given_id_that_is_no_tree(repo: Path) -> None:
+    result = cli("stamp", "fast", repo, "0" * 40)
+
+    assert result.returncode != 0 and "is not a tree" in result.stderr
+    assert not (repo / STAMP).exists()
+
+
+def test_cli_says_when_a_fast_verify_kept_the_full_stamp(repo: Path) -> None:
+    write_stamp(repo, "full")
+    (repo / "NOTES.md").write_text("x")
+
+    result = cli("stamp", "fast", repo)
+
+    assert result.returncode == 0
+    assert "kept the full verify stamp of " in result.stderr
+    stamp = read_stamp(repo)
+    assert stamp is not None and stamp.mode == "full"
+
+
+def test_cli_tree_lists_the_code_paths_it_covers(repo: Path) -> None:
+    clean = cli("tree", repo)
+    assert clean.stdout == f"{tree_hash(repo)}\n"
+    assert clean.stderr.strip() == "covers no code changed since HEAD"
+
+    (repo / "job.py").write_text("x = 2\n")
+    (repo / "NOTES.md").write_text("x")
+    edited = cli("tree", repo)
+
+    assert edited.stdout == f"{tree_hash(repo)}\n"
+    assert edited.stderr.strip() == "covers code changed since HEAD: job.py"
+
+
+def test_cli_tree_cuts_a_long_list_of_code_paths(repo: Path) -> None:
+    for number in range(25):
+        (repo / f"f{number:02}.py").write_text("x\n")
+
+    result = cli("tree", repo)
+
+    assert result.stdout == f"{tree_hash(repo)}\n"
+    assert "f19.py" in result.stderr and "f20.py" not in result.stderr
+    assert result.stderr.strip().endswith("and 5 more")
+
+
+def test_describe_stamp_says_covers_after_a_markdown_edit(repo: Path) -> None:
+    write_stamp(repo, "full")
+    (repo / "NOTES.md").write_text("x")
+
+    assert describe_stamp(repo).endswith(", covers (only Markdown and docs/ changed since)")
+
+
+def test_describe_stamp_counts_the_code_paths_of_a_stale_stamp(repo: Path) -> None:
+    write_stamp(repo, "full")
+    (repo / "job.py").write_text("x = 2\n")
+    assert describe_stamp(repo).endswith(", stale (code changed: 1 path)")
+
+    (repo / "extra.py").write_text("y = 1\n")
+    assert describe_stamp(repo).endswith(", stale (code changed: 2 paths)")
+
+
+def test_describe_stamp_says_when_the_stamped_tree_is_gone(repo: Path) -> None:
+    (repo / STAMP).write_text(f"full 2026-10-30T10:00:00Z {'0' * 40}\n")
+
+    assert describe_stamp(repo).endswith(", stale (the stamped tree is gone)")
+
+
+def test_markdown_under_dbt_is_code(repo: Path) -> None:
+    # dbt reads `{% docs %}` blocks from Markdown, so an edit of one changes the models.
+    (repo / "dbt" / "models").mkdir(parents=True)
+    (repo / "dbt" / "models" / "docs.md").write_text("{% docs a %}\nA\n{% enddocs %}\n")
+
+    assert code_changes(repo) == ["dbt/models/docs.md"]
+
+
+def test_markdown_of_the_agent_roles_stays_no_code(repo: Path) -> None:
+    (repo / ".claude" / "agents").mkdir(parents=True)
+    (repo / ".claude" / "agents" / "x.md").write_text("role\n")
+
+    assert code_changes(repo) == []
 
 
 def test_cli_refuses_an_unknown_command(repo: Path) -> None:
@@ -303,7 +469,7 @@ def test_check_stamp_is_kept_apart_from_the_verify_stamp(repo: Path) -> None:
     (repo / "job.py").write_text("x = 6\n")
     stale = read_stamp(repo, "check")
     assert stale is not None and not stale.fresh
-    assert describe_stamp(repo, "check").endswith("stale")
+    assert describe_stamp(repo, "check").endswith("stale (code changed: 1 path)")
     assert describe_stamp(repo, "review") == "none"
 
 
@@ -456,6 +622,52 @@ def test_record_review_revokes_on_a_garbled_verdict_line(repo: Path, line: str) 
     message = record_review(repo, lines(line, "Предмет: код", f"Дерево: {tree}"))
 
     assert_revoked(repo, message)
+
+
+@pytest.mark.parametrize("line", ["Итог. Вердикт: вернуть", "Вердикт - вернуть"])
+def test_record_review_revokes_on_a_verdict_line_out_of_format(repo: Path, line: str) -> None:
+    tree = tree_hash(repo)
+    record_review(repo, reviewer_report("принять", tree))
+
+    message = record_review(repo, lines(line, "Предмет: код", f"Дерево: {tree}"))
+
+    assert_revoked(repo, message)
+    assert "verdict" in message
+
+
+@pytest.mark.parametrize(
+    "line", ["Итоговый вердикт: принять нельзя, есть высокое", "Итог. Вердикт: не принять"]
+)
+def test_a_headless_line_that_takes_the_verdict_back_revokes_a_valid_accept(
+    repo: Path, line: str
+) -> None:
+    tree = tree_hash(repo)
+
+    message = record_review(repo, reviewer_report("принять", tree) + line + "\n")
+
+    assert_revoked(repo, message)
+    assert "verdict" in message
+
+
+@pytest.mark.parametrize(
+    ("verdict", "subject"),
+    [
+        ("вернуть", "план и код"),
+        ("принять", "план и код"),
+        ("принять", "документ, не код"),
+        ("принять", "код и план"),
+    ],
+)
+def test_a_subject_line_with_two_subjects_revokes(repo: Path, verdict: str, subject: str) -> None:
+    tree = tree_hash(repo)
+    record_review(repo, reviewer_report("принять", tree))
+
+    message = record_review(
+        repo, lines(f"Вердикт: {verdict}", f"Предмет: {subject}", f"Дерево: {tree}")
+    )
+
+    assert_revoked(repo, message)
+    assert "subject" in message
 
 
 def test_record_review_never_accepts_a_verdict_that_words_after_it_take_back(repo: Path) -> None:
@@ -795,7 +1007,14 @@ def test_make_check_runs_lint_and_test_through_run_check() -> None:
     )
 
     assert result.returncode == 0
-    assert result.stdout.split() == ["python3", "scripts/agent_state.py", "check", f'"{REPO}"']
+    assert result.stdout.split() == [
+        "uv",
+        "run",
+        "python",
+        "scripts/agent_state.py",
+        "check",
+        f'"{REPO}"',
+    ]
     assert CHECK_COMMAND == ("make", "--no-print-directory", "lint", "test")
 
 
