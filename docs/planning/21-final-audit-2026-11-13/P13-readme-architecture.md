@@ -159,7 +159,9 @@ Production gap; Security model; evidence со статусом и произво
    (Analytics and BI, Testing and CI, Production); «Lessons» по В-08; оглавление с числами.
 6. Бриф K, `docs-writer`: `tests/README.md` по `reports/QA.md`, «Карта набора» и «Пропуски на
    хосте» (без чисел); `connect/README.md:6` по DP-10; `airflow/README.md:10` строка `dq_checks` по
-   задачам DAG; `scripts/README.md:16` по DC-12; `dbt/README.md`, `oltp/README.md:31`,
+   задачам DAG; `scripts/README.md:16` по DC-12 и `:12` по P02 (verify ставит отметку дереву на
+   старте, `verify-fast` оставляет покрывающий `full`, сбой отметки не роняет verify);
+   `dbt/README.md`, `oltp/README.md:31`,
    `spark-stalled.md:30` по DC-05; OPERATIONS: колонка «Login» в «Ports», строка `connect-configs`
    в «Access control» (что видно, почему принято, `EnvVarConfigProvider` в проде);
    `docs/supply-chain.md`, «Not covered»: «no CVE scanning of the images».

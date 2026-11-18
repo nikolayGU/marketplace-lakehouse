@@ -1,5 +1,5 @@
 # P02. Отметки гейта: fast не затирает full, разбор «вернуть», интерпретатор проекта
-Статус: не начат. Оркестратор на Opus или новее, запуск из корня:
+Статус: исполнен 18.11.2026, `3af49bd`. Оркестратор на Opus или новее, запуск из корня:
 `/task docs/planning/21-final-audit-2026-11-13/P02-harness-stamps.md`.
 
 ## Цель
@@ -173,16 +173,16 @@ verify (`verify-fast` затирает `full`); verify ставит отметк
 
 ## Готово, когда
 
-- [ ] вывод шага 1 до правки: каждый новый тест `FAILED`, сохранён в «Итог»
-- [ ] `uv run pytest tests/unit/test_agent_state.py tests/unit/test_agent_hooks.py tests/unit/test_verify_script.py tests/unit/test_report.py -q` -> `passed`, 0 failed
-- [ ] `grep -nE 'python3.*agent_state' scripts/verify.sh scripts/report.sh Makefile` -> пусто
-- [ ] `python3 scripts/agent_state.py tree .` -> одна строка id в stdout, в stderr `covers code changed since HEAD:` со списком
-- [ ] в `<scratchpad>/P02/trap/docker` скрипт, который дописывает строку в `<scratchpad>/P02/trap/log` и выходит 1; `PATH=<scratchpad>/P02/trap:$PATH uv run pytest tests/unit/test_agent_hooks.py -q -k "reports_state_goal_and_stamp or survives_missing_docs"` -> 2 passed, файла `log` нет
-- [ ] пробы аудита: красные ровно три теста из шага 6
-- [ ] `make check` -> зелёный; `python3 scripts/agent_state.py show check .` -> `check at ..., fresh`
-- [ ] вердикт `reviewer` «принять» или «принять с замечаниями» по дереву
-- [ ] цикл verify: `make verify` -> последняя строка `verify ok`; затем `make verify-fast` -> в stderr `kept the full verify stamp`; `python3 scripts/agent_state.py show verify .` -> `full at ..., fresh`
-- [ ] коммит прошёл гейт; «Итог» ниже, статус в README папки, верх HANDOFF
+- [x] вывод шага 1 до правки: каждый новый тест `FAILED`, сохранён в «Итог»
+- [x] `uv run pytest tests/unit/test_agent_state.py tests/unit/test_agent_hooks.py tests/unit/test_verify_script.py tests/unit/test_report.py -q` -> `passed`, 0 failed
+- [x] `grep -nE 'python3.*agent_state' scripts/verify.sh scripts/report.sh Makefile` -> пусто
+- [x] `python3 scripts/agent_state.py tree .` -> одна строка id в stdout, в stderr `covers code changed since HEAD:` со списком
+- [x] в `<scratchpad>/P02/trap/docker` скрипт, который дописывает строку в `<scratchpad>/P02/trap/log` и выходит 1; `PATH=<scratchpad>/P02/trap:$PATH uv run pytest tests/unit/test_agent_hooks.py -q -k "reports_state_goal_and_stamp or survives_missing_docs"` -> 2 passed, файла `log` нет
+- [x] пробы аудита: красные ровно три теста из шага 6
+- [x] `make check` -> зелёный; `python3 scripts/agent_state.py show check .` -> `check at ..., fresh`
+- [x] вердикт `reviewer` «принять» или «принять с замечаниями» по дереву
+- [x] цикл verify: `make verify` -> последняя строка `verify ok`; затем `make verify-fast` -> в stderr `kept the full verify stamp`; `python3 scripts/agent_state.py show verify .` -> `full at ..., fresh`
+- [x] коммит прошёл гейт; «Итог» ниже, статус в README папки, верх HANDOFF
 
 ## Не входит
 
@@ -225,3 +225,71 @@ verify (`verify-fast` затирает `full`); verify ставит отметк
   этого файла; для `agent_state.py` хватает строки `:25`.
 
 ## Итог
+
+Исполнен 18.11.2026 (UTC), коммит кода `3af49bd`. Решений В-n у пакета нет; рутина сессии «да»
+в аргументе `/task`. Два «ок» на `cp <scratchpad>/P02/agent_state.py scripts/agent_state.py`
+(06:35 и 07:03 UTC, вопрос с вариантами; журнал «ок»). Кто писал: тесты и `agent_state.py`
+`implementer` (бриф шагов 1, 2, 5 и круг исправлений), `verify.sh`, `report.sh`, `Makefile` и их
+тесты второй `implementer` (шаги 3, 4) параллельно; оркестратор сам: вывод строки отметки в
+`verify.sh` при успехе и одна строка теста к ней; ревью `reviewer` (Opus) в два прохода.
+
+| Критерий («Готово, когда») | Проверка, вывод (18.11 UTC) |
+|---|---|
+| новые тесты красные до правки | шаг 1 в чистом клоне HEAD `a963109` (`<scratchpad>/P02/step1-red-head.txt`): `23 failed, 1011 passed`; красные: `test_describe_stamp`, `test_check_stamp_is_kept_apart_from_the_verify_stamp`, `test_make_check_runs_lint_and_test_through_run_check` (изменённые ожидания); `test_a_fast_verify_keeps_a_full_stamp_that_covers_the_tree`, `..._replaces_a_full_stamp_of_older_code`, `..._replaces_a_full_stamp_whose_tree_is_gone`, `test_write_stamp_uses_the_given_tree`, `test_write_stamp_refuses_an_id_that_is_no_tree` (3), `test_cli_stamps_the_given_tree`, `test_cli_says_when_a_fast_verify_kept_the_full_stamp`, `test_cli_tree_lists_the_code_paths_it_covers`, `test_cli_tree_cuts_a_long_list_of_code_paths`, `test_describe_stamp_says_covers_after_a_markdown_edit`, `..._counts_the_code_paths_of_a_stale_stamp`, `..._says_when_the_stamped_tree_is_gone`, `test_markdown_under_dbt_is_code`, `test_record_review_revokes_on_a_verdict_line_out_of_format` (2), `test_a_subject_line_with_two_subjects_revokes`, `test_stop_gate_blocks_an_edit_of_a_dbt_docs_block`, `test_commit_after_full_then_fast_verify_is_allowed`. Шаг 3 на HEAD (`step3-red.txt`): `3 failed` (`test_verify_stamps_the_tree_it_started_on`, `test_verify_is_ok_when_the_tree_cannot_be_stamped`, `test_verify_runs_agent_state_with_the_project_python`). Круг 1 на первой установленной версии (`round1-red.txt`): `5 failed` (`HEAD:`, `HEAD^{tree}`, короткий id; две формы отказа от принятия) |
+| набор карточки `passed`, 0 failed | `uv run pytest tests/unit/test_agent_state.py tests/unit/test_agent_hooks.py tests/unit/test_verify_script.py tests/unit/test_report.py -q` -> `1083 passed` после первой установки, `1092 passed` в копии после круга 1; ревьюер на дереве `73c2601`: `221 passed` и `871 passed` двумя прогонами |
+| grep `python3.*agent_state` пуст | `grep -nE 'python3.*agent_state' scripts/verify.sh scripts/report.sh Makefile` -> пусто, exit 1 |
+| `tree` | `python3 scripts/agent_state.py tree .` -> stdout `73c260193a18bb7041d32956a1dd9492b4f2d466`, stderr `covers code changed since HEAD: Makefile, scripts/agent_state.py, scripts/report.sh, scripts/verify.sh, tests/unit/test_agent_hooks.py, tests/unit/test_agent_state.py, tests/unit/test_verify_script.py` |
+| ловушка docker | `PATH=<scratchpad>/P02/trap:$PATH uv run pytest tests/unit/test_agent_hooks.py -q -k "reports_state_goal_and_stamp or survives_missing_docs"` -> `2 passed`, файла `log` нет; контроль ревьюера: те же тесты без `fake_docker` оставляют в log строку |
+| пробы аудита | до: `26 passed` (`probes-before.txt`); после: `3 failed, 23 passed`, красные ровно `test_f1_fast_after_full_downgrades_the_stamp`, `test_h1_markdown_read_by_tools_is_not_code[dbt/models/docs.md]`, `test_h6_describe_says_stale_for_a_stamp_that_covers`; `test_hs_old_items.py`: формы 1 и 2 `revoked (garbled verdict line) -> return`, форма 3 `revoked (garbled subject line) -> return`, форма 4 `revoked (expected one subject line, found 0) -> return` |
+| `make check` | `1960 passed, 146 skipped` (первая версия), `1969 passed, 146 skipped in 150.13s` (круг 1); `show check .` -> `check at 2026-11-18T07:05:45Z, fresh` |
+| ревью | проход 1 на дереве `211ae14`: «принять с замечаниями» (2 средних, 6 низких); круг 1 на дереве `73c2601`: «принять с замечаниями» (2 низких); `show review .` -> `accept-with-notes at 2026-11-18T07:11:14Z, fresh` |
+| цикл verify | пауза `silver_upsert`, `dbt_build`, `dq_checks`, running пусто у них и у `iceberg_maintenance`, stop scheduler; `make verify` -> 7 из 7 `rows ok keys ok ... values ok`, `verify: wrote the full stamp for tree 73c2601...`, `verify ok`; start scheduler; `make verify-fast` -> `verify: kept the full verify stamp of 2026-11-18T07:13:40Z: it covers this tree`, `verify ok`; `show verify .` -> `full at 2026-11-18T07:13:40Z, fresh`; DAG сняты с паузы после коммита, `iceberg_maintenance` не трогался (не на паузе), `iceberg_orphans` на паузе как был |
+| коммит прошёл гейт | `3af49bd` (7 файлов), push `a963109..3af49bd`; ci `44257375861`: `gh run watch --exit-status` exit 0, 12 из 12 job `success` |
+
+Изменение: `3af49bd`. `scripts/agent_state.py`: `write_stamp(root, mode, tree=None)` (данный id
+только 40/64 hex и существующее дерево, `fast` оставляет `full`, если код не менялся, возвращает
+строку), CLI `stamp fast|full <root> [<tree>]` со строкой в stderr, `tree` с покрытыми путями в
+stderr, `describe_stamp` в четырёх формах, `.md` под `dbt/` это код, разбор отчёта ревью (строка
+без головы со словом «вердикт» и «вернуть» или с принятием и словом отказа; строка предмета с двумя
+предметами). `scripts/verify.sh`: дерево на старте через `.venv/bin/python`, отметка этому дереву,
+строка отметки в stderr, сбой отметки печатает `was not stamped` и не роняет verify.
+`scripts/report.sh` и `Makefile` (цель `check`, `uv run python`) без системного `python3`. Тесты:
+`test_agent_state.py`, `test_agent_hooks.py` (2 новых, HS-12 с `fake_docker`), `test_verify_script.py`
+(режим фейка `STACK=healthy`, 4 теста). Живой `make verify-fast` до установки нового файла (старый
+CLI) напечатал `verify: the working tree was not stamped (usage: ...); the checks above passed` и
+`verify ok`: ветка сбоя отметки проверена и вживую.
+
+Отклонения от текста пакета:
+- Строка без головы поля отзывает отметку со словом «вернуть» или с фразой принятия и словом
+  отказа из `_TAKES_BACK`, а не с любым словом из `VERDICTS`: иначе краснеет существующий
+  `test_record_review_ignores_a_line_that_is_not_a_verdict` (`Итог. Вердикт: принять` ничего не
+  пишет). Гейт от этого не открывается: такая строка ничего не принимает. Оговорка названа в «ок»
+  06:35; форма «принять нельзя» добавлена по ревью (замечание 1, тест
+  `test_a_headless_line_that_takes_the_verdict_back_revokes_a_valid_accept`).
+- Третье изменённое ожидание: `test_check_stamp_is_kept_apart_from_the_verify_stamp` ждёт
+  `stale (code changed: 1 path)` (то же правило, что `test_describe_stamp`).
+- Зелёные на HEAD по замыслу (стражи неизменной части правила): `test_markdown_of_the_agent_roles_stays_no_code`,
+  `test_a_fast_verify_replaces_a_fast_stamp`, `test_a_full_verify_replaces_a_full_stamp_that_covers_the_tree`,
+  `test_cli_refuses_a_given_id_that_is_no_tree`; круга 1 `test_verify_is_ok_when_the_stamp_cannot_be_written`
+  и `test_a_subject_line_with_two_subjects_revokes` с «принять» (поймали мутации в копии).
+- Сверх брифа: тесты `fast` после `fast`, `full` после `full`, длинный список `tree`, пропавшее
+  дерево в `describe_stamp`, сбой записи отметки в verify.
+
+Замечания ревью: проход 1 №1-6 исправлены в круге 1 (тест и мутация на каждое); №7 (тексты
+`AGENTS.md:33` и `scripts/README.md:12` об отметке рабочего дерева) отдано строками в P04 и P13;
+№8 (`tree` печатает две строки, в строку `Дерево:` шаблона идёт только id из stdout) строкой в P04.
+Круг 1: №1 (`describe_stamp` считает дерево до проверки файла: без git отсутствующая отметка даёт
+исключение вместо `none`, `make report` пишет `unreadable`) и №2 (докстринг `record_review` не
+называет форму с отказом от принятия) низкие, не исправлены, отданы строкой в P03 (он правит
+`agent_state.py`).
+
+Не проверено: прогон под системным Python 3.11 (хост 3.14, `.venv` 3.12); путь `make verify` с
+merge фейком (тесты только `--no-merge`; живой полный verify прошёл).
+
+Замечено вне пакета: исполнитель шага 3 после отказа guard на heredoc с именами отметок правил
+тест скриптом Python из scratchpad (`edit_tests.py`), а не Edit, как велит `AGENTS.md`; diff
+прошёл ревью. Строка `Предмет: код (diff по шагам плана)` отзывает отметку: `план` ищется
+подстрокой (закрытая сторона, проба ревьюера).
+
+Риски: новый разбор отзывает чаще (прозаическая строка с «вердикт» и «вернуть»): цена один проход
+ревью. Откат: `git revert 3af49bd` (класс C для `scripts/agent_state.py`).
