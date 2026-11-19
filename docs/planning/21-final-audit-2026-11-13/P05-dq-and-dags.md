@@ -1,5 +1,5 @@
 # P05. DQ: гейт silver-gold по снапшотам, позиция CDC, диагноз по ключу, тесты проводки DAG
-Статус: не начат. Оркестратор Opus по `13-harness.md`: `/task docs/planning/21-final-audit-2026-11-13/P05-dq-and-dags.md`.
+Статус: исполнен 19.11.2026, `093d50d`, `9b1246b`.
 
 ## Цель
 
@@ -243,3 +243,62 @@
   ничего не прячется.
 
 ## Итог
+
+Исполнено 19.11.2026 одной сессией на Opus (оркестратор), коммиты `093d50d` (шаги 2-5 и правки по
+ревью) и `9b1246b` (OR-04). Решения: В-04 «да», рутина сессии «да», `iceberg_maintenance` не
+паузить, `clients.py` править вне окна 03:00-04:00 UTC при пустом `list-runs` (аргумент `/task`).
+Код и тесты писал `implementer` (4 брифа), ревью `reviewer` (два прохода на коммит 1, один на
+коммит 2), пробы, мутации, живой стек и документы: оркестратор.
+
+| Критерий | Проверка | Результат |
+|---|---|---|
+| Вход | grep по цитатам, Trino `max(key)` по `source_table`, набор базы | все факты подтверждены (строки сдвинуты: гейт `dq_checks.py:278-280`, `_lookup` `reconcile.py:414`); ключи bronze как в пакете; база `393 passed, 65 skipped` |
+| Пауза | `airflow dags pause dq_checks`, `list-runs dq_checks --state running` | 17:15 UTC, `No data found`; последний прогон до паузы 17:00 `success` |
+| Тесты на отказ | новые тесты шагов 2-4 на HEAD `a89b354` (`scratchpad/p05-red.txt`) | `7 failed, 208 passed`: два гейта снапшотов (`0 == 1`, `ValueError`), два сдвига CDC (`ValueError` ×2), `X:1 (merge_pending)` против `(unknown)`, два SQL без `'$.order_item_id'`/`'$.order_id'`; контроли шага 3 зелёные |
+| Тесты после | `uv run --no-sync pytest tests/unit/test_dags.py tests/unit/test_reconcile.py ...` (8 файлов «Вход») | `424 passed, 65 skipped`; область OR-04 (6 файлов) `356 passed, 65 skipped` до и после `9b1246b` |
+| grep | `grep -rn "SILVER_UPDATED" airflow tests`; `grep -rn 'split(":")\[0\]' airflow/dags` | пусто, пусто |
+| Мутации | копия в scratchpad, раннер `work/QA/mutate.py.txt`, тесты копии venv репо | W1, W2, W4, W5, R1, T1, O1 `RED`, T3 `GREEN`; после ревью ещё A1, A2 (ветки сдвига и сбоя чтения CDC), A6, A7, A8 (форма ключа) `RED`; после `9b1246b` W2' `RED` |
+| `make check`, `make dags-check` | | `2098 passed, 146 skipped` (коммит 1 и 2); `5 dags import, timeouts, retry budget, force removal and the maintenance switch checked: ['dbt_build', 'dq_checks', 'iceberg_maintenance', 'iceberg_orphans', 'silver_upsert']` |
+| Живой SQL | `bronze_lookup_sql('order_items', [da2b5ed33ae5068005e9d2c43e7a3de1:9, :1])` в `trino --catalog lake --execute` | одна строка `"da2b5ed33ae5068005e9d2c43e7a3de1:1"`, 4.5 с; silver у заказа держит позиции 1 и 2; поиск quarantine пуст и проходит на 4 строках `orders` с `key` null |
+| OR-04 равенство | вывод 50 построителей `reconcile` и `sql` (`scratchpad/builders.py`) до и после | `diff` пуст; ревьюер сравнил аргументы всех DockerOperator DagBag HEAD и дерева в образе Airflow: равны |
+| Ревью | `reviewer` | коммит 1: «принять с замечаниями (3 средних, 5 низких)», после круга 1 «принять с замечаниями (1 средний, 2 низких)»; коммит 2: «принять с замечаниями (1 средний, 3 низких)» |
+| Verify | цикл §5 перед каждым коммитом (bronze последний коммит 06.11, реплей не играет) | `make verify` -> `verify ok` на деревьях `5e0a6c9` и `9fca6e4` |
+| После снятия пауз | `list-runs dq_checks`; Prometheus `lakehouse_dq_reconcile_gold_compared` | после `093d50d`: 17:45 и 18:00 `success`, gauge `1`, `reconcile_in_flight` `0`; после `9b1246b`: 18:15 и 18:30 `success`, gauge `1`; `silver_upsert` 18:20-18:30 `success` (merge пропущен: нет новых снапшотов bronze) |
+| CI | `gh run list --commit` | `093d50d` `success`; `9b1246b` `success` (run 44580289288 и 44585443968) |
+
+Отклонения от пакета:
+- В стенде теста шага 2 ветка `SILVER_UPDATED` нужна для красного прогона на HEAD (без неё первый
+  тест зелёный и на HEAD): красный записан с веткой, затем она удалена, как велит пакет.
+- `silver_matches_postgres` печатает причину `the source or the slot moved during the run`, в
+  сообщении при сбое второго чтения позиции хвост `the CDC position check failed as well`.
+- Параметр `after_the_gold_watermark` теста базы позиции (запрос `GOLD_UPDATED` больше не идёт
+  между чтениями) заменён на `fingerprint_sql_trino` последней таблицы источника.
+- OR-04: в `silver_matches_postgres` момент `now` для `at_rest` теперь берётся до счётов, а не
+  после (на секунды раньше). Порядок запросов прежний; сдвиг только в сторону «in flight» у порога
+  5 мин, ревью: не блок. Docstring модуля `dq_checks.py` с ID карточек оставлен P10.
+
+Риски и что осталось (ревью, не исправлено):
+- Остаточное окно OR-03 (ревью, среднее): запись между `cdc_progress` и первым чтением позиции в
+  задаче (по 13.11 около 7-8 с ожидания в очереди) не видна ни как стоящий CDC, ни как сдвиг.
+  Закрыть: брать базу из позиции, которую записал `cdc_progress` этого прогона; это снова смена
+  условия проверки, решение владельца.
+- Окно OR-01 из «Рисков» пакета: merge закоммитил silver посреди `dbt_build`, gold закоммичен
+  позже из старого silver, гейт открыт до следующего build.
+- Счётчика прогонов без вердикта source-silver (аналога `gold_not_compared_runs`) нет; живьём
+  `avg_over_time(lakehouse_dq_reconcile_in_flight[7d])` 0 (ревью).
+- Тексты сообщений (`moved during the run`, хвост сбоя CDC) тестами не закреплены (мутации A5,
+  A9, A10 зелёные); тело `postgres_value` и `postgres_rows` без своего теста (пробел и до правки).
+- Merge через `spark_job_kwargs` живьём не запускался: bronze без новых снапшотов с 06.11, merge
+  пропускается; равенство аргументов доказано сравнением DagBag.
+
+Строки для следующих пакетов:
+- P11: «гейт silver-gold по снапшотам с `093d50d`; сдвиг CDC во время проверки = in flight».
+  OPERATIONS `:670`, `:765`, `:768`, `:850` описывают старый гейт и «deleted order»; ссылка
+  `OPERATIONS.md:1738` на `silver_upsert.py:38-39` после `9b1246b` указывает на
+  `execution_timeout` (теперь `:36-37`); остаточные окна OR-01 и OR-03 описать.
+- P10: docstring `spark_task.py:12` «Same ... as silver_upsert's merge» стал круговым.
+- P09: комментарий гейта в `alerts.yml:110-112`, `:124-128`.
+
+Замечено вне пакета: в Airflow есть DAG `probe_echo` на паузе (файла в `airflow/dags/` нет,
+`dags-check` видит 5 DAG); `implementer` круга 1 ревью положил в `scratchpad/mut` полную копию дерева с
+`.env` (scratchpad сессии, права 600 у файла).
