@@ -53,32 +53,17 @@ def _epoch(value: object) -> float | None:
     return None if value is None else float(str(value))
 
 
-def count_gold_run(compared: bool) -> int:
-    """Runs in a row that did not compare silver with gold, kept in an Airflow Variable: 0 after a
-    comparison, one more after a run without. A Variable that is missing or unreadable counts as
-    0. The Variable is written here, after the comparison, so a run that fails in between leaves
-    the count as it was."""
-    remembered = Variable.get(GOLD_NOT_COMPARED_RUNS, default=None)
+def _count_runs(variable: str, grows: bool) -> int:
+    """Runs in a row for which `grows` held, kept in an Airflow Variable: one more when it holds,
+    0 when not. A Variable that is missing or unreadable counts as 0. It is written here, after
+    the comparison, so a run that fails in between leaves the count as it was."""
+    remembered = Variable.get(variable, default=None)
     try:
         before = max(int(remembered or 0), 0)
     except ValueError:
         before = 0
-    runs = 0 if compared else before + 1
-    Variable.set(GOLD_NOT_COMPARED_RUNS, str(runs))
-    return runs
-
-
-def count_stale_run(stale: bool | None) -> int:
-    """Runs in a row at rest with gold not rebuilt since the last data commit of silver, kept in an
-    Airflow Variable like count_gold_run: one more when stale, 0 when not, and 0 when None (no
-    verdict, the stand is not at rest). A missing or unreadable Variable counts as 0."""
-    remembered = Variable.get(GOLD_STALE_RUNS, default=None)
-    try:
-        before = max(int(remembered or 0), 0)
-    except ValueError:
-        before = 0
-    runs = before + 1 if stale else 0
-    Variable.set(GOLD_STALE_RUNS, str(runs))
+    runs = before + 1 if grows else 0
+    Variable.set(variable, str(runs))
     return runs
 
 
@@ -109,6 +94,18 @@ def dq_checks() -> None:
         failed = {table: count for table, count in duplicates.items() if count}
         if failed:
             raise ValueError(f"silver holds a primary key more than once: {failed}")
+
+    def _resting() -> tuple[int | None, str | None, bool]:
+        """The latest bronze snapshot, the one silver merged last, and whether the stand is at
+        rest."""
+        rows = trino_rows(settings, sql.LATEST_BRONZE_SNAPSHOT)
+        latest, committed_at = (int(rows[0][0]), rows[0][1]) if rows else (None, None)
+        remembered = Variable.get(LAST_BRONZE_SNAPSHOT, default=None)
+        return (
+            latest,
+            remembered,
+            checks.at_rest(latest, committed_at, remembered, datetime.now(UTC)),
+        )
 
     def _oldest_unmerged_age(latest: int | None, remembered: str | None) -> int | None:
         if latest is None or remembered is None or str(latest) == remembered:
@@ -143,15 +140,12 @@ def dq_checks() -> None:
         a red into in flight. The backend hands its writes to the counter late, when it idles, and
         the baseline is read inside the task after cdc_progress: the window narrows but does
         not close."""
-        rows = trino_rows(settings, sql.LATEST_BRONZE_SNAPSHOT)
-        latest, committed_at = (int(rows[0][0]), rows[0][1]) if rows else (None, None)
-        remembered = Variable.get(LAST_BRONZE_SNAPSHOT, default=None)
+        latest, remembered, resting = _resting()
         cdc_before = _cdc_position()
         postgres = {t: int(postgres_value(settings, sql.source_rows(t))) for t in SOURCE_TABLES}
         silver = {t: int(trino_value(settings, sql.silver_live_rows(t))) for t in SOURCE_TABLES}
         moved = _cdc_position() != cdc_before
         differences = checks.count_differences(postgres, silver)
-        resting = checks.at_rest(latest, committed_at, remembered, datetime.now(UTC))
         outcome = checks.count_outcome(bool(differences), resting, stalled)
         if outcome == "red" and moved:
             outcome = "in_flight"
@@ -239,16 +233,13 @@ def dq_checks() -> None:
         wrote or the slot moved since the start of the task, it waits ("in flight"); if its
         queries fail, the finished verdicts are still printed, counted and sent, and the run then
         fails with that error."""
-        rows = trino_rows(settings, sql.LATEST_BRONZE_SNAPSHOT)
-        latest, committed_at = (int(rows[0][0]), rows[0][1]) if rows else (None, None)
-        remembered = Variable.get(LAST_BRONZE_SNAPSHOT, default=None)
-        resting = checks.at_rest(latest, committed_at, remembered, datetime.now(UTC))
+        _, _, resting = _resting()
         if not resting:
             print("dq reconcile_in_flight=1")
             print("in flight: bronze or silver has not caught up yet, no verdict")
-            runs = count_gold_run(compared=False)
+            runs = _count_runs(GOLD_NOT_COMPARED_RUNS, True)
             print(f"dq gold_not_compared_runs={runs}")
-            stale_runs = count_stale_run(None)
+            stale_runs = _count_runs(GOLD_STALE_RUNS, False)
             print(f"dq gold_stale_runs={stale_runs}")
             # Gold is not compared either: the alert needs the count, not a gap in the series.
             export(
@@ -351,12 +342,11 @@ def dq_checks() -> None:
                 )
             customers_silver = int(trino_value(settings, reconcile.SILVER_CUSTOMERS_WITH_ORDERS))
             customers_gold = int(trino_value(settings, reconcile.GOLD_CUSTOMERS))
-            customers = reconcile.Verdict(
-                "silver_gold", "dim_customers", customers_silver, customers_gold
+            verdicts.append(
+                reconcile.count_verdict(
+                    "silver_gold", "dim_customers", customers_silver, customers_gold
+                )
             )
-            if customers_silver != customers_gold:
-                customers.changed = ["row count"]
-            verdicts.append(customers)
             gauges.append(
                 (
                     "lakehouse.dq.reconcile_rows",
@@ -399,7 +389,7 @@ def dq_checks() -> None:
         # Independent of skip_source. If the metadata queries fail, the counts and their gauges
         # stay as they were and the run fails after the verdicts are sent.
         if snapshots_stale is not None:
-            runs = count_gold_run(compared=gold_ready)
+            runs = _count_runs(GOLD_NOT_COMPARED_RUNS, not gold_ready)
             print(f"dq gold_not_compared_runs={runs}")
             gauges.append(("lakehouse.dq.gold_not_compared_runs", runs, {}))
             try:
@@ -413,7 +403,7 @@ def dq_checks() -> None:
                 stale_failure = error
                 print(f"dq gold_stale_failed=1 {type(error).__name__}: {error}")
             else:
-                stale_runs = count_stale_run(mart_behind or snapshots_stale)
+                stale_runs = _count_runs(GOLD_STALE_RUNS, mart_behind or snapshots_stale)
                 print(f"dq gold_stale_runs={stale_runs}")
                 gauges.append(("lakehouse.dq.gold_stale_runs", stale_runs, {}))
         gauges.append(("lakehouse.dq.reconcile_verdict_timestamp_seconds", time.time(), {}))

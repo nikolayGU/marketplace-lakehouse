@@ -476,6 +476,14 @@ class Verdict:
         return "\n".join(lines)
 
 
+def count_verdict(pair: str, table: str, left: int, right: int) -> Verdict:
+    """A verdict from two row counts alone: unequal counts mark "row count" as changed."""
+    verdict = Verdict(pair, table, left, right)
+    if left != right:
+        verdict.changed = ["row count"]
+    return verdict
+
+
 def compare(
     pair: str,
     table: str,

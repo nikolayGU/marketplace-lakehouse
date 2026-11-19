@@ -9,7 +9,6 @@ container_name makes a second start fail with 409 while one exists: one Airflow 
 and `make silver` refuses while the container exists.
 """
 
-import os
 from datetime import datetime, timedelta
 
 from airflow.providers.docker.operators.docker import DockerOperator
@@ -21,11 +20,10 @@ from lakehouse.settings import (
     LAST_BRONZE_SNAPSHOT,
     SILVER_ASSET_NAME,
     Settings,
-    spark_silver_environment,
 )
+from lakehouse.spark_task import spark_job_kwargs
 
 settings = Settings()
-public_env, private_env = spark_silver_environment(os.environ)
 
 
 @dag(
@@ -54,18 +52,9 @@ def silver_upsert() -> None:
     merge = DockerOperator(
         task_id="merge",
         container_name="lakehouse-silver-merge",
-        image=settings.spark_image,
         command=["silver_upsert"],
-        network_mode=settings.lake_network,
-        environment=public_env,
-        private_environment=private_env,
-        mem_limit="2g",
-        # Airflow runs in a container: a host temp dir to mount does not exist.
-        mount_tmp_dir=False,
-        auto_remove="force",
-        pool=LAKE_WRITERS_POOL,
         outlets=[Asset(SILVER_ASSET_NAME)],
-        do_xcom_push=False,
+        **spark_job_kwargs(LAKE_WRITERS_POOL),
     )
 
     @task
