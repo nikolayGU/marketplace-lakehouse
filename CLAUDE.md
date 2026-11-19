@@ -1,27 +1,26 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
-
 @AGENTS.md
 
-## Только для Claude Code
+## Плагины
 
-- Плагины и триггеры: `docs/planning/03-agent-tooling.md`, раздел «Плагины агента» в `docs/agent-rules.md`; версии и флаги инструментов сначала через `context7`, не по памяти.
-- Модели и роли: `AGENTS.md`, «Подагенты» (у `scout` effort medium). Цикл задачи: `/task <ID карточки | фраза>`.
-- `superpowers`: спеки и планы в `docs/planning/` на русском; без коммита после каждого шага, без worktrees, `finishing-a-development-branch`, `subagent-driven-development`, `executing-plans` и `requesting-code-review` (цикл задают роли и `/task`).
-- Хуки и разрешения в `.claude/settings.json` меняются только с «ок» владельца.
+- `context7` (плагин или коннектор claude.ai): версии и флаги стека сначала через него.
+- `superpowers`: выбор реализации `brainstorming`, план в `docs/planning/` по-русски; баг
+  `systematic-debugging`; код `test-driven-development`; перед «готово»
+  `verification-before-completion`.
+- Не применяются: коммит после шага, worktrees, `finishing-a-development-branch`,
+  `subagent-driven-development`, `executing-plans`, `requesting-code-review`.
 
 ## Точечные проверки
 
-- Один тест: `uv run pytest tests/unit/test_dags.py::<имя> -q`.
-- Spark-тесты на хосте пропускаются (нет JVM); один файл в образе:
-  `make test-spark SPARK_TESTS=test_silver_upsert.py`.
-- Одна модель dbt: `cd dbt && uv run dbt build --profiles-dir . --target dev --select <модель>`
-  (нужен `make start`, пишет в `lake.gold`).
-- Корни импорта как в образах (`pythonpath` в `pyproject.toml`): `replayer` из `oltp/`,
-  `spark_jobs` из `streaming/`, `lakehouse` из `airflow/dags/`.
+- Тест: `uv run pytest tests/unit/test_dags.py::<имя> -q`.
+- Spark только в образе: `make test-spark SPARK_TESTS=test_silver_upsert.py`.
+- dbt: `cd dbt && uv run dbt build --profiles-dir . --target dev --select <модель>` (нужен
+  `make start`, пишет в `lake.gold`).
+- Корни импорта (`pyproject.toml`): `replayer` в `oltp/`, `spark_jobs` в `streaming/`,
+  `lakehouse` в `airflow/dags/`.
 
 ## Где что
 
-- Поток данных и откуда берётся exactly-once: `ARCHITECTURE.md`.
-- `make verify`: `scripts/verify.sh`; `reconcile`: `scripts/chaos/lib.sh` и `scripts/reconcile_sql.py`.
+Поток и exactly-once: `ARCHITECTURE.md`; verify: `scripts/verify.sh`; `reconcile`:
+`scripts/chaos/lib.sh`, `scripts/reconcile_sql.py`.

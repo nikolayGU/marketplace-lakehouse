@@ -2878,6 +2878,7 @@ def test_settings_wire_the_review_hook_and_make_the_guard_fail_closed() -> None:
     for plugin in (
         "feature-dev@claude-plugins-official",
         "pr-review-toolkit@claude-plugins-official",
+        "claude-md-management@claude-plugins-official",
     ):
         assert settings["enabledPlugins"][plugin] is False
     assert (HOOKS / "review_stamp.py").exists()
