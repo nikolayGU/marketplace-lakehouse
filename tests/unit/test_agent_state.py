@@ -276,11 +276,12 @@ def test_markdown_under_dbt_is_code(repo: Path) -> None:
     assert code_changes(repo) == ["dbt/models/docs.md"]
 
 
-def test_markdown_of_the_agent_roles_stays_no_code(repo: Path) -> None:
+def test_markdown_of_the_agent_roles_is_code(repo: Path) -> None:
+    # The tests read the agent roles, so an edit of one is checked like code.
     (repo / ".claude" / "agents").mkdir(parents=True)
     (repo / ".claude" / "agents" / "x.md").write_text("role\n")
 
-    assert code_changes(repo) == []
+    assert code_changes(repo) == [".claude/agents/x.md"]
 
 
 def test_cli_refuses_an_unknown_command(repo: Path) -> None:
@@ -1074,7 +1075,7 @@ def test_every_stamp_is_git_ignored_in_this_repo() -> None:
         ("README.md", "none"),
         ("docs/x.py", "none"),
         ("dbt/models/docs.md", "verify"),
-        (".claude/agents/r.md", "none"),
+        (".claude/agents/r.md", "check"),
         ("tests/unit/t.py", "check"),
         (".github/workflows/ci.yml", "check"),
         (".claude/hooks/guard.py", "check"),
@@ -1235,6 +1236,28 @@ def test_session_base_is_written_once(repo: Path) -> None:
 
     assert remember_session_base(repo, "abc-1_X") == first
     assert session_base(repo, "abc-1_X") == first
+
+
+def test_an_empty_session_base_file_is_written_again(repo: Path) -> None:
+    (repo / ".git" / "claude-base-broken").write_text("")
+    assert session_base(repo, "broken") is None
+
+    first = tree_hash(repo)
+    assert remember_session_base(repo, "broken") == first
+    (repo / "job.py").write_text("x = 2\n")
+    assert remember_session_base(repo, "broken") == first
+
+
+def test_a_base_that_cannot_be_cleaned_up_still_gets_written(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    remember_session_base(repo, "old")
+    old = repo / ".git" / "claude-base-old"
+    os.utime(old, (0, 0))
+    monkeypatch.setattr(Path, "unlink", lambda *_a, **_k: (_ for _ in ()).throw(PermissionError()))
+
+    assert remember_session_base(repo, "new") == tree_hash(repo)
+    assert session_base(repo, "new") == tree_hash(repo)
 
 
 def test_session_base_without_a_file_is_none(repo: Path) -> None:

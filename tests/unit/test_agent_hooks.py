@@ -22,11 +22,18 @@ COMMIT = "git add -A && git commit -m change"
 
 
 def _load_guard() -> Any:
-    os.environ.setdefault("CLAUDE_PROJECT_DIR", str(REPO))
     spec = importlib.util.spec_from_file_location("guard_in_process", HOOKS / "guard.py")
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    saved = os.environ.get("CLAUDE_PROJECT_DIR")
+    os.environ["CLAUDE_PROJECT_DIR"] = str(REPO)  # guard.py reads it once, at import
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        if saved is None:
+            del os.environ["CLAUDE_PROJECT_DIR"]
+        else:
+            os.environ["CLAUDE_PROJECT_DIR"] = saved
     return module
 
 
@@ -1508,8 +1515,17 @@ def test_the_forms_of_the_review_keep_the_decision_of_the_old_guard(
     assert decision(bash(command, repo)) == expected
 
 
-# The gate holds only on a tree with a full verify; a commit chained after `make verify` runs it
-# first. Words of other commands (a comment, a quoted `make verify && git commit`) are no chain.
+def stage_full_level_code_with_check_and_review(repo: Path) -> None:
+    """Code of the `full` level on the tree, a check and a review of it, and no verify: only the
+    verify is left for the commit, so the case decides on the chain alone."""
+    add_file(repo, "streaming/job.py")
+    write_stamp(repo, "check")
+    review(repo)
+
+
+# The gate holds only on a tree with a full verify of code of the `full` level; a commit chained
+# after `make verify` runs it first. Words of other commands (a comment, a quoted
+# `make verify && git commit`) are no chain.
 @pytest.mark.parametrize(
     ("command", "expected"),
     [
@@ -1525,6 +1541,8 @@ def test_the_forms_of_the_review_keep_the_decision_of_the_old_guard(
     ],
 )
 def test_a_commit_is_gated_whatever_surrounds_it(repo: Path, command: str, expected: str) -> None:
+    stage_full_level_code_with_check_and_review(repo)
+
     assert decision(bash(command, repo)) == expected
 
 
@@ -1541,6 +1559,8 @@ def test_a_commit_is_gated_whatever_surrounds_it(repo: Path, command: str, expec
 def test_every_commit_of_a_text_needs_a_verify_of_its_own(
     repo: Path, command: str, expected: str
 ) -> None:
+    stage_full_level_code_with_check_and_review(repo)
+
     assert decision(bash(command, repo)) == expected
 
 
@@ -1971,7 +1991,7 @@ def test_guard_on_file_writes(path: str, expected: str) -> None:
 
 def test_commit_needs_a_full_verify_of_this_tree(repo: Path) -> None:
     commit = "git add -A && git commit -m change"
-    (repo / "job.py").write_text("x = 2\n")
+    add_file(repo, "streaming/job.py", "x = 2\n")
     assert decision(bash(commit, repo)) == "deny"
 
     write_stamp(repo, "fast")
@@ -1982,7 +2002,7 @@ def test_commit_needs_a_full_verify_of_this_tree(repo: Path) -> None:
     write_stamp(repo, "full")
     assert decision(bash(commit, repo)) == "allow"
 
-    (repo / "job.py").write_text("x = 3\n")
+    add_file(repo, "streaming/job.py", "x = 3\n")
     assert decision(bash(commit, repo)) == "deny"
 
 
@@ -2002,6 +2022,22 @@ def test_guard_run_as_a_hook_denies_with_exit_code_2_and_the_reason_on_stderr() 
 
     assert result.returncode == 2
     assert "writes a gate stamp by hand" in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("command", "reason"),
+    [
+        ("echo x > .verify-stamp", "writes a gate stamp by hand"),
+        ("cp /tmp/g .claude/hooks/guard.py", "shell write to the agent hooks or settings"),
+    ],
+)
+def test_guard_run_as_a_hook_denies_a_bash_write_with_exit_code_2(
+    command: str, reason: str
+) -> None:
+    result = hook_process("guard.py", {"tool_name": "Bash", "tool_input": {"command": command}})
+
+    assert result.returncode == 2
+    assert reason in result.stderr
 
 
 def test_guard_run_as_a_hook_asks_with_json_on_stdout() -> None:
@@ -2068,17 +2104,26 @@ def test_stop_gate_names_code_with_an_odd_name_by_its_real_name(repo: Path) -> N
     assert "моя задача.py" in reason
 
 
-def test_docs_after_a_fast_verify_do_not_open_the_commit(repo: Path) -> None:
+def test_docs_after_a_fast_verify_need_nothing_to_commit(repo: Path) -> None:
+    # Markdown alone needs no stamp, so a fast verify neither opens nor closes the commit.
     write_stamp(repo, "fast")
     (repo / "NOTES.md").write_text("x")
 
-    assert decision(bash("git commit -m notes", repo)) == "deny"
+    assert decision(bash("git commit -m notes", repo)) == "allow"
 
 
 def test_commit_chained_after_a_full_verify_is_allowed(repo: Path) -> None:
+    (repo / "streaming").mkdir()
+    (repo / "streaming" / "job.py").write_text("x = 1\n")
+    write_stamp(repo, "check")
+    review(repo)
     assert decision(bash("make verify && git add -A && git commit -m x", repo)) == "allow"
     assert decision(bash("make verify-fast && git commit -m x", repo)) == "deny"
     assert decision(bash("make verify; git commit -m x", repo)) == "deny"
+
+
+def test_a_commit_on_a_clean_tree_needs_nothing(repo: Path) -> None:
+    assert decision(bash("git commit -m x", repo)) == "allow"
 
 
 def test_stop_gate_blocks_code_changes_without_a_fresh_stamp(repo: Path) -> None:
@@ -2145,10 +2190,10 @@ MOVED_OUT = pytest.mark.parametrize(
 )
 
 
-def move_code_out(repo: Path, target: str) -> None:
-    """`job.py` leaves the code paths with its content: git shows it as a rename."""
+def move_code_out(repo: Path, target: str, source: str = "job.py") -> None:
+    """`source` leaves the code paths with its content: git shows it as a rename."""
     (repo / target).parent.mkdir(exist_ok=True)
-    (repo / "job.py").rename(repo / target)
+    (repo / source).rename(repo / target)
 
 
 @MOVED_OUT
@@ -2197,9 +2242,12 @@ def test_commit_of_a_staged_move_of_code_out_of_the_code_paths_needs_check_and_r
 def test_commit_is_refused_when_code_moved_out_of_the_code_paths_after_the_stamps(
     repo: Path, target: str
 ) -> None:
-    (repo / "job.py").write_text("x = 2\n")
+    add_file(repo, "streaming/job.py", "x = 1\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "streaming")
+    add_file(repo, "streaming/job.py", "x = 2\n")
     gate_stamps(repo)
-    move_code_out(repo, target)
+    move_code_out(repo, target, "streaming/job.py")
 
     result = bash(COMMIT, repo)
 
@@ -2344,7 +2392,7 @@ def test_session_context_names_a_stopped_container_that_should_run(
 
     context = session_context(repo)
 
-    assert "lakehouse-kafka-1 Up 2 hours (healthy)" in context
+    assert "1 running, 1 healthy" in context and "lakehouse-kafka-1" not in context
     stopped = [line for line in context.splitlines() if "docker start" in line]
     assert len(stopped) == 2
     assert stopped[0].startswith("lakehouse-prometheus-1: exited (255)")
@@ -2367,7 +2415,7 @@ def test_session_context_has_no_stopped_line_when_everything_runs(
 
     context = session_context(repo)
 
-    assert "lakehouse-kafka-1 Up 2 hours (healthy)" in context
+    assert "1 running, 1 healthy" in context and "lakehouse-kafka-1" not in context
     assert "docker start" not in context and "Not running" not in context
 
 
@@ -2426,7 +2474,7 @@ def test_session_context_says_when_the_stack_directory_matches_no_container(
     context = session_context(repo)
 
     assert f"no containers of the stack at {repo}/docker" in context
-    assert "otherstack-kafka-1 Up 2 hours (healthy)" in context
+    assert "1 running, 1 healthy" in context and "otherstack-kafka-1" not in context
     assert "docker start" not in context
 
 
@@ -2472,6 +2520,7 @@ def test_session_context_inspects_nothing_when_the_project_has_no_containers(
 
     calls = (bin_dir / "calls.txt").read_text().splitlines()
     assert not [call for call in calls if call.startswith("inspect")]
+    assert "0 running, 0 healthy" in context
     assert "ghost" not in context and "Not running" not in context and "docker start" not in context
 
 
@@ -2488,7 +2537,7 @@ def test_session_context_survives_a_docker_that_fails_or_is_missing(
     fake_docker(half, monkeypatch, running="", stopped="", rows="")
     (half / "docker").write_text('#!/bin/sh\ncase "$1" in ps) echo aaa;; *) exit 1;; esac\n')
     context = session_context(repo)
-    assert "Containers:\naaa" in context and "docker start" not in context
+    assert "Containers:\n0 running, 0 healthy\naaa" in context and "docker start" not in context
 
     # Nothing but git on PATH: no docker at all.
     only_git = tmp_path_factory.mktemp("only-git")
@@ -2500,7 +2549,7 @@ def test_session_context_survives_a_docker_that_fails_or_is_missing(
 
 
 def test_commit_of_code_lists_every_step_of_the_gate_it_lacks(repo: Path) -> None:
-    (repo / "job.py").write_text("x = 2\n")
+    add_file(repo, "streaming/job.py", "x = 2\n")
 
     result = bash(COMMIT, repo)
     assert decision(result) == "deny"
@@ -2559,9 +2608,9 @@ def test_commit_of_code_is_refused_after_a_return_verdict(repo: Path) -> None:
 
 
 def test_code_edited_after_the_stamps_needs_all_of_them_again(repo: Path) -> None:
-    (repo / "job.py").write_text("x = 2\n")
+    add_file(repo, "streaming/job.py", "x = 2\n")
     gate_stamps(repo)
-    (repo / "job.py").write_text("x = 3\n")
+    add_file(repo, "streaming/job.py", "x = 3\n")
 
     result = bash(COMMIT, repo)
     assert decision(result) == "deny"
@@ -2601,12 +2650,13 @@ def test_docs_changed_after_every_stamp_keep_the_commit_open(repo: Path) -> None
     assert decision(bash(COMMIT, repo)) == "allow"
 
 
-def test_only_docs_changed_needs_a_full_verify_and_nothing_else(repo: Path) -> None:
+def test_only_docs_changed_needs_nothing(repo: Path) -> None:
+    # The commit of Markdown and docs/ asks for no stamp at all.
     (repo / "NOTES.md").write_text("x")
-    assert decision(bash("git commit -m notes", repo)) == "deny"
+    (repo / "docs").mkdir()
+    (repo / "docs" / "plan.txt").write_text("x")
 
-    write_stamp(repo, "full")
-    assert not (repo / ".check-stamp").exists() and not (repo / ".review-stamp").exists()
+    assert not list(repo.glob(".*-stamp"))
     assert decision(bash("git commit -m notes", repo)) == "allow"
 
 
@@ -2622,7 +2672,7 @@ def test_a_verify_before_the_commit_in_one_chain_does_not_replace_check_and_revi
     write_stamp(repo, "check")
     review(repo)
     assert decision(bash(chain, repo)) == "allow"
-    assert decision(bash("make verify-fast && git commit -m x", repo)) == "deny"
+    assert decision(bash("make verify -n && git commit -m x", repo)) == "deny"
 
 
 def test_a_stamp_of_a_tree_that_is_gone_counts_as_missing(repo: Path) -> None:
@@ -2859,3 +2909,341 @@ def test_a_failure_in_every_text_of_the_command_asks(monkeypatch: pytest.MonkeyP
         GUARD.check({"tool_name": "Bash", "tool_input": {"command": "echo a\\\nb"}})
 
     assert raised.value.kind == "ask"
+
+
+def add_file(root: Path, rel: str, text: str = "y = 1\n") -> None:
+    (root / rel).parent.mkdir(parents=True, exist_ok=True)
+    (root / rel).write_text(text)
+
+
+def test_markdown_only_commit_needs_no_stamp(repo: Path) -> None:
+    add_file(repo, "NOTES.md", "x")
+    add_file(repo, "docs/plan.txt", "x")
+
+    assert decision(bash(COMMIT, repo)) == "allow"
+
+
+def test_ci_and_tests_commit_needs_check_and_review_only(repo: Path) -> None:
+    add_file(repo, "tests/test_job.py", "def test_x() -> None: ...\n")
+    add_file(repo, ".github/ci.yml", "x: 1\n")
+
+    result = bash(COMMIT, repo)
+    assert decision(result) == "deny"
+    assert "git commit without make check and a reviewer verdict on" in result.stderr
+    assert "make verify" not in result.stderr
+
+    write_stamp(repo, "check")
+    review(repo)
+    assert decision(bash(COMMIT, repo)) == "allow"
+
+
+def test_stack_code_commit_needs_a_verify(repo: Path) -> None:
+    (repo / "job.py").write_text("x = 2\n")
+
+    result = bash(COMMIT, repo)
+    assert decision(result) == "deny"
+    assert "a make verify-fast or make verify, make check and a reviewer verdict" in result.stderr
+
+    write_stamp(repo, "check")
+    review(repo)
+    result = bash(COMMIT, repo)
+    assert decision(result) == "deny"
+    assert "git commit without a make verify-fast or make verify on" in result.stderr
+
+    write_stamp(repo, "fast")
+    assert decision(bash(COMMIT, repo)) == "allow"
+
+
+def test_streaming_commit_needs_a_full_verify(repo: Path) -> None:
+    add_file(repo, "streaming/job.py")
+    write_stamp(repo, "check")
+    review(repo)
+    assert decision(bash("make verify && git add -A && git commit -m x", repo)) == "allow"
+
+    write_stamp(repo, "fast")
+    result = bash(COMMIT, repo)
+    assert decision(result) == "deny"
+    assert "git commit without a full make verify on" in result.stderr
+
+    write_stamp(repo, "full")
+    assert decision(bash(COMMIT, repo)) == "allow"
+
+
+def test_a_tests_edit_after_a_verify_keeps_it_covering(repo: Path) -> None:
+    (repo / "job.py").write_text("x = 2\n")
+    gate_stamps(repo)
+    add_file(repo, "tests/test_job.py", "def test_x() -> None: ...\n")
+
+    result = bash(COMMIT, repo)
+    assert decision(result) == "deny"
+    assert "git commit without make check and a reviewer verdict on" in result.stderr
+    assert "make verify" not in result.stderr
+
+    write_stamp(repo, "check")
+    review(repo)
+    verify = read_stamp(repo, "verify")
+    assert verify is not None and not verify.fresh
+    assert decision(bash(COMMIT, repo)) == "allow"
+
+
+@pytest.fixture
+def quiet_docker(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_docker(
+        tmp_path_factory.mktemp("bin") / "bin", monkeypatch, running="", stopped="", rows=""
+    )
+
+
+def start_session(root: Path, session_id: str, source: str = "startup") -> None:
+    result = hook("session_context.py", {"source": source, "session_id": session_id}, root)
+    assert result.returncode == 0
+
+
+def blocked(result: subprocess.CompletedProcess[str]) -> str:
+    """The reason of a block, an empty string when the turn may end."""
+    return str(json.loads(result.stdout)["reason"]) if result.stdout.strip() else ""
+
+
+def test_stop_gate_ignores_code_outside_the_stack(repo: Path) -> None:
+    add_file(repo, "tests/test_job.py", "def test_x() -> None: ...\n")
+    add_file(repo, ".github/ci.yml", "x: 1\n")
+    add_file(repo, ".claude/hooks/new.py")
+    add_file(repo, ".sqlfluff", "[sqlfluff]\n")
+
+    assert hook("stop_gate.py", {}, repo).stdout == ""
+
+    (repo / "job.py").write_text("x = 2\n")
+    reason = blocked(hook("stop_gate.py", {}, repo))
+    assert "job.py" in reason and "tests/test_job.py" not in reason
+
+
+def test_stop_gate_ignores_code_changed_before_the_session(repo: Path, quiet_docker: None) -> None:
+    (repo / "job.py").write_text("x = 2\n")
+    start_session(repo, "s-before")
+
+    assert hook("stop_gate.py", {"session_id": "s-before"}, repo).stdout == ""
+    assert "job.py" in blocked(hook("stop_gate.py", {"session_id": "other"}, repo))
+
+
+def test_stop_gate_blocks_code_changed_in_the_session(repo: Path, quiet_docker: None) -> None:
+    (repo / "job.py").write_text("x = 2\n")
+    start_session(repo, "s-in")
+    add_file(repo, "extra.py")
+    add_file(repo, "tests/test_job.py", "def test_x() -> None: ...\n")
+
+    reason = blocked(hook("stop_gate.py", {"session_id": "s-in"}, repo))
+    assert "extra.py" in reason and "job.py" not in reason and "tests/" not in reason
+
+    write_stamp(repo, "fast")
+    assert hook("stop_gate.py", {"session_id": "s-in"}, repo).stdout == ""
+
+
+def test_a_resumed_session_keeps_its_base(repo: Path, quiet_docker: None) -> None:
+    start_session(repo, "s-resume")
+    base = (repo / ".git" / "claude-base-s-resume").read_text()
+    (repo / "job.py").write_text("x = 2\n")
+
+    for source in ("resume", "compact", "clear"):
+        start_session(repo, "s-resume", source)
+
+    assert (repo / ".git" / "claude-base-s-resume").read_text() == base
+    assert "job.py" in blocked(hook("stop_gate.py", {"session_id": "s-resume"}, repo))
+
+
+def test_stop_gate_without_a_base_behaves_as_before(repo: Path) -> None:
+    (repo / "job.py").write_text("x = 2\n")
+
+    assert "job.py" in blocked(hook("stop_gate.py", {}, repo))
+    assert "job.py" in blocked(hook("stop_gate.py", {"session_id": "never-started"}, repo))
+
+
+def test_stop_gate_with_a_base_tree_that_is_gone_behaves_as_without_a_base(
+    repo: Path, quiet_docker: None
+) -> None:
+    start_session(repo, "s-gone")
+    (repo / ".git" / "claude-base-s-gone").write_text(f"{'0' * 40}\n")
+    (repo / "job.py").write_text("x = 2\n")
+
+    assert "job.py" in blocked(hook("stop_gate.py", {"session_id": "s-gone"}, repo))
+
+
+@pytest.mark.parametrize("session_id", ["../outside", "a/b", "", "x" * 129])
+def test_a_session_id_with_a_slash_writes_no_base(
+    repo: Path, quiet_docker: None, session_id: str
+) -> None:
+    before = sorted(p.name for p in repo.parent.iterdir())
+    git_dir_before = sorted(p.name for p in (repo / ".git").iterdir())
+    (repo / "job.py").write_text("x = 2\n")
+
+    start_session(repo, session_id)
+
+    assert sorted(p.name for p in repo.parent.iterdir()) == before
+    assert sorted(p.name for p in (repo / ".git").iterdir()) == git_dir_before
+    assert "job.py" in blocked(hook("stop_gate.py", {"session_id": session_id}, repo))
+
+
+def test_session_context_survives_an_empty_or_odd_input(repo: Path, quiet_docker: None) -> None:
+    env = {**os.environ, "CLAUDE_PROJECT_DIR": str(repo)}
+    for stdin in ("", "not json", "[]", '{"session_id": 5}'):
+        result = subprocess.run(
+            [sys.executable, str(HOOKS / "session_context.py")],
+            input=stdin,
+            capture_output=True,
+            text=True,
+            env=env,
+            check=False,
+        )
+        assert result.returncode == 0
+        assert "Session start facts" in result.stdout
+
+
+def test_session_context_lists_only_unhealthy_containers(
+    repo: Path, tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_docker(
+        tmp_path_factory.mktemp("bin") / "bin",
+        monkeypatch,
+        running=(
+            "lakehouse-kafka-1 Up 2 hours (healthy)\n"
+            "lakehouse-trino-1 Up 3 minutes (unhealthy)\n"
+            "lakehouse-airflow-1 Up 5 seconds (health: starting)\n"
+            "lakehouse-grafana-1 Up 2 hours\n"
+        ),
+        stopped="",
+        rows="",
+    )
+
+    context = session_context(repo)
+
+    assert "4 running, 1 healthy" in context
+    assert "lakehouse-trino-1 Up 3 minutes (unhealthy)" in context
+    assert "lakehouse-airflow-1 Up 5 seconds (health: starting)" in context
+    assert "lakehouse-kafka-1" not in context and "lakehouse-grafana-1" not in context
+
+
+def test_session_context_shows_the_three_stamps_and_short_commits(
+    repo: Path, quiet_docker: None
+) -> None:
+    git(repo, "commit", "-q", "--allow-empty", "-m", "s" * 100)
+    git(repo, "commit", "-q", "--allow-empty", "-m", "short")
+    write_stamp(repo, "check")
+
+    context = session_context(repo)
+
+    assert "Verify stamp: none" in context and "Review stamp: none" in context
+    assert "Check stamp: check at " in context
+    commits = context.split("Last commits:\n")[1].split("\n\n")[0].splitlines()
+    assert "s" * 100 not in context
+    assert len(commits[1].split(" ", 1)[1]) == 72 and commits[1].endswith("..")
+    assert commits[0].endswith(" short")
+    assert all(line == line.rstrip() for line in context.splitlines())
+
+
+def test_session_context_shows_a_restarting_and_a_paused_container(
+    repo: Path, tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_docker(
+        tmp_path_factory.mktemp("bin") / "bin",
+        monkeypatch,
+        running=(
+            "lakehouse-kafka-1 Up 2 hours (healthy)\n"
+            "lakehouse-trino-1 Restarting (1) 5 seconds ago\n"
+            "lakehouse-airflow-1 Up 3 minutes (Paused)\n"
+        ),
+        stopped="",
+        rows="",
+    )
+
+    context = session_context(repo)
+
+    assert "2 running, 1 healthy" in context
+    assert "lakehouse-trino-1 Restarting (1) 5 seconds ago" in context
+    assert "lakehouse-airflow-1 Up 3 minutes (Paused)" in context
+    assert "lakehouse-kafka-1" not in context
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git apply /tmp/p.patch && git add -A && git commit -m x",
+        "git stash pop && git add -A && git commit -m x",
+        "git cherry-pick -n abc && git commit -m x",
+        "echo 'x = 9' > streaming/job.py && git add -A && git commit -m x",
+        "git rm -q --cached job.py && git commit -m x",
+        "make verify && echo x > a.py && git add -A && git commit -m x",
+    ],
+)
+def test_a_commit_after_a_command_that_changes_the_tree_is_refused(
+    repo: Path, command: str
+) -> None:
+    # The gate reads the tree before the command runs, so a write in the same text is not seen.
+    result = bash(command, repo)
+
+    assert decision(result) == "deny"
+    assert "run it first, then commit" in result.stderr
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git add -A && git commit -m x",
+        "git status && git commit -m x",
+        "cd . && git add -A && git commit -m x",
+        "make verify && git add -A && git commit -m x",
+        "make check && git commit -m x",
+    ],
+)
+def test_a_commit_after_only_a_read_an_add_a_cd_or_a_verify_is_decided_by_the_stamps(
+    repo: Path, command: str
+) -> None:
+    assert decision(bash(command, repo)) == "allow"
+
+
+def test_a_fast_verify_before_the_commit_stands_for_a_verify_only_below_the_full_level(
+    repo: Path,
+) -> None:
+    (repo / "job.py").write_text("x = 2\n")
+    write_stamp(repo, "check")
+    review(repo)
+    assert decision(bash("make verify-fast && git commit -m x", repo)) == "allow"
+    assert decision(bash("make verify -n && git commit -m x", repo)) == "deny"
+
+    add_file(repo, "streaming/job.py")
+    write_stamp(repo, "check")
+    review(repo)
+    assert decision(bash("make verify-fast && git commit -m x", repo)) == "deny"
+    assert decision(bash("make verify && git commit -m x", repo)) == "allow"
+
+
+def test_markdown_under_the_agent_directory_needs_check_and_review(repo: Path) -> None:
+    add_file(repo, ".claude/agents/r.md", "x\n")
+
+    result = bash(COMMIT, repo)
+    assert decision(result) == "deny"
+    assert "git commit without make check and a reviewer verdict on" in result.stderr
+    assert "make verify" not in result.stderr
+    assert hook("stop_gate.py", {}, repo).stdout == ""
+
+    write_stamp(repo, "check")
+    review(repo)
+    assert decision(bash(COMMIT, repo)) == "allow"
+
+
+def test_stop_gate_does_not_blame_code_that_came_in_a_commit_after_the_base(
+    repo: Path, quiet_docker: None
+) -> None:
+    start_session(repo, "s-pull")
+    add_file(repo, "other.py")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "owner or pull")
+
+    assert hook("stop_gate.py", {"session_id": "s-pull"}, repo).stdout == ""
+
+
+def test_stop_gate_does_not_blame_the_discard_of_an_edit_made_before_the_session(
+    repo: Path, quiet_docker: None
+) -> None:
+    (repo / "job.py").write_text("x = 2\n")
+    start_session(repo, "s-discard")
+    git(repo, "checkout", "--", "job.py")
+
+    assert hook("stop_gate.py", {"session_id": "s-discard"}, repo).stdout == ""

@@ -5,8 +5,9 @@ id of the working tree, untracked files included:
 
 - `.verify-stamp`, mode `fast` or `full`: written by `make verify-fast` and `make verify`. A `fast`
   verify keeps a `full` stamp whose tree differs from the new one in no path of the `verify` level
-  or above (see `gate_level`: Markdown, `docs/`, `tests/`, `.github/`, `.claude/` and the lint
-  configs do not count), since the full run already covers it.
+  or above (see `gate_level`: Markdown outside `dbt/` and `.claude/`, `docs/`, `tests/`,
+  `.github/`, `.claude/`, the lint configs `.pre-commit-config.yaml`, `.yamllint`, `.sqlfluff` and
+  `scripts/agent_state.py` do not count), since the full run already covers it.
 - `.check-stamp`, mode `check`: written by `make check` (`run_check`), after `make lint` and
   `make test` passed on a tree that did not change while they ran.
 - `.review-stamp`, mode `accept`, `accept-with-notes` or `return`: kept by the hook
@@ -139,22 +140,31 @@ def _base_path(root: Path, session_id: str) -> Path | None:
 
 def remember_session_base(root: Path, session_id: str) -> str | None:
     """Keep the tree id the session started on, only if the session has none yet (a second call
-    does not move it), and drop bases of other sessions older than 7 days. Returns the base, None
+    does not move it; a file with no tree id in it, left by a failed write, is written again), and
+    drop bases of other sessions older than 7 days, each file on its own. Returns the base, None
     for an id out of `[A-Za-z0-9_-]{1,128}` or when git cannot answer."""
     path = _base_path(root, session_id)
     if path is None:
         return None
     try:
-        for old in path.parent.glob(f"{_BASE_PREFIX}*"):
+        stale = list(path.parent.glob(f"{_BASE_PREFIX}*"))
+    except OSError:
+        stale = []
+    for old in stale:  # one try per file: a file that cannot be dropped must not stop the base
+        try:
             if old != path and time.time() - old.stat().st_mtime > _BASE_MAX_AGE:
                 old.unlink(missing_ok=True)
-        if not path.exists():
+        except OSError:
+            continue
+    try:
+        if session_base(root, session_id) is None:  # none yet, or a file with no tree id in it
             tree = tree_hash(root)
             try:
                 with path.open("x") as handle:
                     handle.write(f"{tree}\n")
             except FileExistsError:
-                pass
+                if session_base(root, session_id) is None:
+                    path.write_text(f"{tree}\n")
     except (subprocess.CalledProcessError, OSError):
         return None
     return session_base(root, session_id)
@@ -193,7 +203,8 @@ def write_stamp(root: Path, mode: str, tree: str | None = None) -> str:
     """Stamp a tree: `fast` and `full` in `.verify-stamp`, `check` in `.check-stamp`. `tree` is the
     tree id to stamp, the working tree as it is now by default; an id that is no tree of this
     repository is refused. A `fast` stamp does not replace a `full` one when no path of the `verify`
-    level or above changed since it (a change in `tests/`, `.github/` or `.claude/` does not count).
+    level or above changed since it (a change in `tests/`, `.github/`, `.claude/`, a lint config
+    or `scripts/agent_state.py` does not count).
     A review verdict is stamped only by `record_review`. Returns what was done."""
     if mode in MODES:
         name = STAMP
@@ -255,7 +266,7 @@ def describe_stamp(root: Path, kind: str = "verify") -> str:
         return f"{head}, fresh"
     floor = "verify" if kind == "verify" else "check"
     try:
-        changed = _changed_paths(root, stamp.tree, current)
+        changed = changed_paths(root, stamp.tree, current)
     except subprocess.CalledProcessError:
         return f"{head}, stale (the stamped tree is gone)"
     open_paths = [p for p in changed if _rank(gate_level(p)) >= _rank(floor)]
@@ -273,15 +284,16 @@ def describe_stamp(root: Path, kind: str = "verify") -> str:
 LEVELS = ("none", "check", "verify", "full")
 _FULL_PREFIXES = ("streaming/", "contracts/")
 _CHECK_PREFIXES = ("tests/", ".github/", ".claude/")
-# Root files only: `dbt/.sqlfluff` is read by the dbt lint inside the verify run.
+# Exact paths; `dbt/.sqlfluff` stays at `verify` conservatively, only `make lint` reads it.
 _CHECK_FILES = (".pre-commit-config.yaml", ".yamllint", ".sqlfluff", "scripts/agent_state.py")
 
 
 def _is_code(path: str) -> bool:
-    # dbt reads the `{% docs %}` blocks of dbt/**/*.md, so Markdown there changes the models.
-    return not (path.endswith(".md") and not path.startswith("dbt/")) and not path.startswith(
-        "docs/"
-    )
+    # dbt reads the `{% docs %}` blocks of dbt/**/*.md, so Markdown there changes the models; the
+    # tests read the Markdown of `.claude/` (the agent roles), so it counts as well.
+    if path.startswith((".claude/", "dbt/")):
+        return True
+    return not path.endswith(".md") and not path.startswith("docs/")
 
 
 def _rank(level: str) -> int:
@@ -289,9 +301,10 @@ def _rank(level: str) -> int:
 
 
 def gate_level(path: str) -> str:
-    """The gate a change of `path` needs: `none` (Markdown outside `dbt/`, `docs/`), `check` (tests,
-    CI, agent files, lint configs, this module), `full` (`streaming/`, `contracts/`, whose result
-    only a full verify shows) or `verify` (everything else)."""
+    """The gate a change of `path` needs: `none` (Markdown outside `dbt/` and `.claude/`, `docs/`),
+    `check` (tests, CI, everything under `.claude/` Markdown included, lint configs, this module),
+    `full` (`streaming/`, `contracts/`, whose result only a full verify shows) or `verify`
+    (everything else)."""
     if not _is_code(path):
         return "none"
     if path.startswith(_FULL_PREFIXES):
@@ -312,7 +325,8 @@ def _paths(output: bytes) -> list[str]:
 
 
 def code_changes(root: Path) -> list[str]:
-    """Changed or untracked paths other than Markdown and `docs/`: what a check must cover."""
+    """Changed or untracked paths other than Markdown (outside `dbt/` and `.claude/`) and `docs/`:
+    what a check must cover."""
     # --no-renames: a staged `git mv` is listed as `old -> new`, and only the new name was read.
     # -z: otherwise git quotes a path with a space, a quote or a non-ASCII letter, and the quoted
     # name starts with `"`, so it always counted as code. An entry is `XY path`.
@@ -329,16 +343,18 @@ def _code_diff(root: Path, old: str, new: str) -> list[str]:
     return sorted(p for p in names if _is_code(p))
 
 
-def _changed_paths(root: Path, old: str, new: str) -> list[str]:
+def changed_paths(root: Path, old: str, new: str) -> list[str]:
     """Every path that differs between two trees, renames listed as a delete and an add."""
     return sorted(_paths(_git(root, "diff", "--name-only", "-z", "--no-renames", old, new)))
 
 
 def uncovered(root: Path, stamp: Stamp, current: str, floor: str) -> list[str]:
     """Paths of level `floor` or above that differ between the stamped tree and `current`. When git
-    cannot compare (the stamped tree is gone), the stamp covers nothing: one entry says so."""
+    cannot compare (the stamped tree is gone), the stamp covers nothing: one placeholder entry
+    says so. It is no path: the result then only means "not covered", and `gate_level` must not
+    be applied to it."""
     try:
-        changed = _changed_paths(root, stamp.tree, current)
+        changed = changed_paths(root, stamp.tree, current)
     except subprocess.CalledProcessError:
         return [f"(tree {stamp.tree} of the stamp is gone: nothing is covered)"]
     return [p for p in changed if _rank(gate_level(p)) >= _rank(floor)]

@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 """SessionStart hook: the facts a session starts from, so it does not depend on the agent reading
-them first. Git state, the verify stamp, the current state section of docs/HANDOFF.md, the goal
-in docs/NEXT_SESSION.md, the running containers and the ones that should run but do not. Reads
-only; a missing piece is reported as such, never fatal."""
+them first. Git state, the verify, check and review stamps, the current state section of
+docs/HANDOFF.md, the goal in docs/NEXT_SESSION.md, the containers (one line `N running, M healthy`,
+then only the ones that are unhealthy or still starting) and the ones that should run but do not.
+It also keeps the tree the session starts on (`remember_session_base`, on every source, a second
+call does not move it), which stop_gate.py reads. Apart from that base it reads only; a missing
+piece is reported as such, never fatal."""
 
+import contextlib
 import json
 import os
 import subprocess
@@ -12,7 +16,7 @@ from pathlib import Path
 
 ROOT = Path(os.environ.get("CLAUDE_PROJECT_DIR") or Path(__file__).resolve().parents[2])
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from scripts.agent_state import describe_stamp  # noqa: E402
+from scripts.agent_state import describe_stamp, remember_session_base  # noqa: E402
 
 # The stack is found by the directory of its compose file, which docker compose writes into the
 # label of every container, not by the project name: the name may come from .env, which neither
@@ -121,17 +125,44 @@ def next_session_goal() -> str:
     return "\n".join(head)
 
 
-def stamp_line() -> str:
+def stamp_line(kind: str) -> str:
     try:
-        return describe_stamp(ROOT)
+        return describe_stamp(ROOT, kind)
     except Exception as error:  # git trouble must not block the session start
         return f"unreadable ({error.__class__.__name__})"
 
 
+def keep_session_base(event: object) -> None:
+    session_id = event.get("session_id") if isinstance(event, dict) else None
+    if not isinstance(session_id, str):
+        return
+    try:
+        remember_session_base(ROOT, session_id)
+    except Exception as error:  # the base is a convenience, the facts are still worth printing
+        print(f"session_context.py kept no session base: {error}", file=sys.stderr)
+
+
+def running_summary(listing: str) -> str:
+    """`N running, M healthy` (a container runs when its status starts with `Up`), then the lines of
+    every container that does not, or is unhealthy, still starting or paused; a healthy one and one
+    without a healthcheck are only counted."""
+    rows = listing.splitlines()
+    up = [row for row in rows if row.partition(" ")[2].startswith("Up")]
+    healthy = sum("(healthy)" in row for row in up)
+    unwell = [
+        row
+        for row in rows
+        if row not in up
+        or any(mark in row for mark in ("(unhealthy)", "(health: starting)", "(Paused)"))
+    ]
+    return "\n".join([f"{len(up)} running, {healthy} healthy", *unwell])
+
+
 def containers_section() -> str:
-    running = run("docker", "ps", "--format", "{{.Names}} {{.Status}}") or "none"
-    if running.startswith("unavailable"):  # no point in asking a docker that does not answer
-        return running
+    listing = run("docker", "ps", "--format", "{{.Names}} {{.Status}}")
+    if listing.startswith("unavailable"):  # no point in asking a docker that does not answer
+        return listing
+    running = running_summary(listing)
     try:
         missing = stack_missing()
         stopped = stopped_containers()
@@ -146,13 +177,21 @@ def containers_section() -> str:
     )
 
 
+with contextlib.suppress(ValueError):  # empty or non-JSON stdin: no session id to keep a base for
+    keep_session_base(json.load(sys.stdin))
 status = run("git", "status", "--short")
 context = "\n\n".join(
     [
         "Session start facts (from .claude/hooks/session_context.py). Rules: AGENTS.md.",
-        "Last commits:\n" + run("git", "log", "--oneline", "-5"),
+        "Last commits:\n"
+        + "\n".join(
+            line.rstrip()
+            for line in run("git", "log", "-5", "--format=%h %<(72,trunc)%s").split("\n")
+        ),
         "Uncommitted: " + (f"{len(status.splitlines())} paths\n{status}" if status else "none"),
-        "Verify stamp: " + stamp_line(),
+        "Verify stamp: " + stamp_line("verify"),
+        "Check stamp: " + stamp_line("check"),
+        "Review stamp: " + stamp_line("review"),
         "HANDOFF:\n" + handoff_state(),
         "NEXT_SESSION:\n" + next_session_goal(),
         "Containers:\n" + containers_section(),

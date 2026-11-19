@@ -11,11 +11,17 @@ without WHERE, advancing or dropping a replication slot, pg_logical_emit_message
 (a file tool on .verify-stamp, .check-stamp or .review-stamp; a command that names one of them and
 is not a read; `agent_state.py stamp` or `check` run directly; Python that names agent_state and one
 of its writers; `agent_state.py tree` and `show` are reads), and `git commit` unless the gate holds
-on this working tree. The gate: a full `make verify` always (passed on this tree, or run right
-before the commit in the same `&&` chain); and when code changed (not Markdown and docs/), also
-`make check` (.check-stamp) and a reviewer verdict other than "return" (.review-stamp, written by
-review_stamp.py). A stamp counts when it is fresh for the tree or only Markdown and docs/ changed
-since it.
+on this working tree. The gate asks for as many stamps as the change proves, by the highest
+`gate_level` of the changed paths: Markdown and docs/ nothing; tests, CI, agent files and lint
+configs `make check` (.check-stamp) and a reviewer verdict other than "return" (.review-stamp,
+written by review_stamp.py); other code also a verify of any mode (.verify-stamp) or a
+`make verify &&` chain right before the commit (`make verify-fast &&` below the full level); a
+command other than a read, `git add`, `cd`, `make verify` or `make check` before the commit in
+the same text is refused, since the gate sees the tree as it is before the text runs;
+streaming/ and contracts/
+a full `make verify`. A stamp counts when no path at or above its floor changed since its tree
+(`uncovered`): the `verify` level for the verify stamp, the `check` level for the others; a stamp
+whose tree is gone from the object store covers nothing.
 ask (a permission prompt, so the owner's ok is a click): replay and scenarios, source, bronze,
 silver, gold and other lake writes, Iceberg maintenance and its DAGs, push, rebase, history
 rewrites, discarded work (`checkout -- path`, `switch -f`), volume, image and recursive deletes
@@ -60,7 +66,6 @@ import json
 import os
 import re
 import shlex
-import subprocess
 import sys
 from pathlib import Path
 from typing import Any, NamedTuple, NoReturn
@@ -690,23 +695,46 @@ def running(found: list[Command]) -> list[Command]:
     return kept[::-1]
 
 
-def verified_before_commit(found: list[Command]) -> bool:
-    """Every command that commits has a `make verify` chained with && before it: the commit only
-    runs if the verify passed. A second commit with no verify of its own is not covered by the
-    verify of the first."""
+def verified_before_commit(found: list[Command]) -> str | None:
+    """`full` when every command that commits has a `make verify` chained with && before it (the
+    commit only runs if the verify passed), `fast` when a `make verify-fast` does as well, None
+    when a commit has neither, or there is none. A second commit with no verify of its own is not
+    covered by the verify of the first. Extra words (`make verify -n`) make it no verify."""
     commits = 0
+    level: str | None = "full"
     for at, item in enumerate(found):
         if item.read or not COMMIT.search(item.text.lower()):
             continue
         commits += 1
         before = at - 1
         while before >= 0 and found[before].end == "&&":
-            if found[before].words[:2] == ["make", "verify"]:
+            words = found[before].words
+            if words in (["make", "verify"], ["make", "verify-fast"]):
+                if words[1] == "verify-fast":
+                    level = "fast"
                 break
             before -= 1
         else:
-            return False
-    return commits > 0
+            return None
+    return level if commits else None
+
+
+PREPARES = (["make", "verify"], ["make", "verify-fast"], ["make", "check"])
+
+
+def changes_before_commit(found: list[Command]) -> bool:
+    """A command other than a read, `git add`, `cd`, `make verify` or `make check` runs before a
+    commit of the same text: the gate reads the tree as it is before the text runs, so what that
+    command writes (an apply, a stash pop, a redirect) would reach the commit unseen."""
+    for at, item in enumerate(found):
+        if item.read or not COMMIT.search(item.text.lower()):
+            continue
+        for before in found[:at]:
+            if before.read or before.words[0] == "cd" or before.words in PREPARES:
+                continue
+            if not re.match(GIT + r"add\b", before.text.lower().strip()):
+                return True
+    return False
 
 
 def subcommand(args: list[str], value_options: set[str]) -> int | None:
@@ -858,43 +886,46 @@ def writes_stamp(run: str, whole: str) -> bool:
     )
 
 
-def commit_gap(chained: bool) -> list[str]:
-    """What a `git commit` still lacks on this working tree, empty when it may go ahead: a full
-    verify always (chained: a `make verify &&` runs right before it), and for changed code also a
-    check and a reviewer verdict that is not `return`."""
+def commit_gap(chained: str | None) -> list[str]:
+    """What a `git commit` still lacks on this working tree, empty when it may go ahead. The need
+    is the highest `gate_level` of the changed paths: `none` nothing; `check` a check and a
+    reviewer verdict that is not `return`; `verify` also a verify of any mode; `full` also a full
+    verify. A `make verify &&` run right before the commit (chained `full`) stands for the verify,
+    a `make verify-fast &&` (chained `fast`) for one below the `full` level. A stamp covers when
+    no path at or above its floor changed since its tree."""
     from scripts.agent_state import (
         ACCEPTED,
         Stamp,
         code_changes,
-        code_changes_since,
+        gate_need,
         read_stamp,
         tree_hash,
+        uncovered,
     )
 
+    need = gate_need(code_changes(ROOT))
+    if need == "none":
+        return []
     current = tree_hash(ROOT)
 
-    def covers(stamp: Stamp | None) -> bool:
-        # The same rule as stop_gate.py: a stamp covers the tree it was written on and any tree
-        # that differs from it only in Markdown and docs/.
-        if stamp is None:
-            return False
-        try:
-            return stamp.fresh or not code_changes_since(ROOT, stamp, current)
-        except subprocess.CalledProcessError:  # the stamped tree is gone from the object store
-            return False
+    def covers(stamp: Stamp | None, floor: str) -> bool:
+        return stamp is not None and not uncovered(ROOT, stamp, current, floor)
 
     missing = []
-    verify = read_stamp(ROOT, "verify", current)
-    if not chained and not (verify is not None and verify.mode == "full" and covers(verify)):
-        missing.append("a full make verify")
-    if not code_changes(ROOT):
-        return missing
-    if not covers(read_stamp(ROOT, "check", current)):
+    chain_covers = chained == "full" or (chained == "fast" and need == "verify")
+    if need in ("verify", "full") and not chain_covers:
+        verify = read_stamp(ROOT, "verify", current)
+        if need == "full":
+            if verify is None or verify.mode != "full" or not covers(verify, "verify"):
+                missing.append("a full make verify")
+        elif not covers(verify, "verify"):
+            missing.append("a make verify-fast or make verify")
+    if not covers(read_stamp(ROOT, "check", current), "check"):
         missing.append("make check")
     review = read_stamp(ROOT, "review", current)
-    if review is None or not covers(review):
+    if not covers(review, "check"):
         missing.append("a reviewer verdict")
-    elif review.mode not in ACCEPTED:
+    elif review is not None and review.mode not in ACCEPTED:
         missing.append("a reviewer verdict other than 'return'")
     return missing
 
@@ -986,7 +1017,12 @@ def check_bash(command: str) -> None:
     if writes_stamp(run, writes):
         deny("writes a gate stamp by hand", STAMP_FIX)
     if COMMIT.search(low):
-        missing = commit_gap(found is not None and verified_before_commit(found))
+        if found is not None and changes_before_commit(found):
+            deny(
+                "git commit after a command that changes the tree in the same text",
+                "run it first, then commit",
+            )
+        missing = commit_gap(None if found is None else verified_before_commit(found))
         if missing:
             deny(
                 f"git commit without {listed(missing)} on this working tree",
