@@ -168,20 +168,14 @@ GOLD_UPDATED = "select cast(max(updated_at) as varchar) from gold.fct_orders"
 # The mart has caught up with fct_orders when its watermark (the newest fct_orders.updated_at among
 # the orders of a row) is not older than the newest fct_orders row. gold_at_rest compares them.
 MART_UPDATED = "select cast(max(source_updated_at) as varchar) from gold.mart_daily_sales"
-SILVER_UPDATED = """
-select cast(max(u) as varchar) from (
-    select max(_updated_at) as u from silver.orders
-    union all select max(_updated_at) from silver.order_items
-    union all select max(_updated_at) from silver.payments)
-"""
 
 # Gold is stale when silver took a data commit after the newest rebuild of the oldest-built gold
-# table. Snapshots, not data: a deleted order leaves the watermarks above apart for good, a gold
-# that dbt_build did not rebuild leaves the snapshots apart until it does. `replace` commits
-# (compaction, rewrite by iceberg_maintenance) change no rows and are left out. The marts that are
-# tables get a new snapshot on every build (`+on_table_exists: replace`); the incremental
-# mart_daily_sales may add none on an empty increment, so it is not read here: dq_checks compares
-# its watermark MART_UPDATED with fct_orders instead. A test keeps the list equal to the models.
+# table. Snapshots, not data: a gold that dbt_build did not rebuild leaves the snapshots apart
+# until it does, whatever the rows say. `replace` commits (compaction, rewrite by
+# iceberg_maintenance) change no rows and are left out. The marts that are tables get a new
+# snapshot on every build (`+on_table_exists: replace`); the incremental mart_daily_sales may add
+# none on an empty increment, so it is not read here: dq_checks compares its watermark
+# MART_UPDATED with fct_orders instead. A test keeps the list equal to the models.
 # Both queries return epoch seconds; GOLD_REBUILT is NULL when any table has no snapshot.
 GOLD_REBUILT_TABLES = (
     "dim_customers",
@@ -411,27 +405,27 @@ def gold_at_rest(gold_updated: str | None, silver_updated: str | None) -> bool:
     return gold_updated is not None and gold_updated >= silver_updated
 
 
-def _lookup(relation: str, table: str, keys: list[str], where: str) -> str | None:
-    """The first key column's value of each key found in `relation`; None when a key could put
-    anything but a plain identifier into the query."""
+def _key_sql(table: str, column: str) -> str:
+    """The key of a bronze or quarantine row as the text the source-silver pairs use: the key
+    columns in the table's order, joined by a colon when there is more than one."""
+    parts = [f"json_extract_scalar({column}, '$.{c}')" for c in TABLES[table][0]]
+    return parts[0] if len(parts) == 1 else f"concat_ws(':', {', '.join(parts)})"
+
+
+def _lookup(relation: str, table: str, keys: list[str], where: str, key_column: str) -> str | None:
+    """The whole keys found in `relation`; None when a key could put anything but a plain
+    identifier into the query."""
     if table not in TABLES or not keys or not all(SAFE_KEY.fullmatch(k) for k in keys):
         return None
-    first = TABLES[table][0][0]
-    ids = ", ".join(f"'{k.split(':')[0]}'" for k in keys)
+    ids = ", ".join(f"'{k}'" for k in keys)
     return (
         f"select id from unnest(array[{ids}]) as t(id) where exists (select 1 from {relation} x "
-        f"where {where.format(col=first)})"
+        f"where {where} and {_key_sql(table, key_column)} = t.id)"
     )
 
 
 def bronze_lookup_sql(table: str, keys: list[str]) -> str | None:
-    return _lookup(
-        "lake.bronze.cdc_events",
-        table,
-        keys,
-        f"x.source_table = '{table}' and strpos(coalesce(x.after, x.before), "
-        "concat('\"{col}\":\"', t.id, '\"')) > 0",
-    )
+    return _lookup("lake.bronze.cdc_events", table, keys, f"x.source_table = '{table}'", "x.key")
 
 
 def quarantine_lookup_sql(table: str, keys: list[str]) -> str | None:
@@ -439,8 +433,8 @@ def quarantine_lookup_sql(table: str, keys: list[str]) -> str | None:
         "lake.silver.quarantine",
         table,
         keys,
-        f"x.topic = 'oltp.shop.{table}' and "
-        "strpos(x.payload, concat('\"{col}\":\"', t.id, '\"')) > 0",
+        f"x.topic = 'oltp.shop.{table}'",
+        "coalesce(x.key, x.payload)",
     )
 
 

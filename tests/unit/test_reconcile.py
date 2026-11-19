@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from dbt_sql import output_columns
 from lakehouse import reconcile
 from lakehouse.reconcile import Column
 
@@ -38,11 +39,29 @@ def test_all_seven_source_tables_are_covered() -> None:
 
 @pytest.mark.parametrize("gold", sorted(reconcile.GOLD_PAIRS))
 def test_gold_columns_exist_in_the_model(gold: str) -> None:
-    text = (MODELS / f"{gold}.sql").read_text()
+    produced = output_columns((MODELS / f"{gold}.sql").read_text())
     pair = reconcile.GOLD_PAIRS[gold]
 
     for column in pair.columns:
-        assert re.search(rf"\b{column.gold_name}\b", text), f"{gold} lacks {column.gold_name}"
+        assert column.gold_name.lower() in produced, f"{gold} lacks {column.gold_name}"
+
+
+@pytest.mark.parametrize("table", sorted(reconcile.TABLES))
+def test_silver_side_of_the_value_comparison_leaves_out_deleted_rows(table: str) -> None:
+    live = "where not _is_deleted"
+
+    assert live in reconcile.fingerprint_sql_trino(table)
+    assert live in reconcile.pairs_sql_trino(table)
+
+
+@pytest.mark.parametrize("gold", sorted(reconcile.GOLD_PAIRS))
+def test_gold_silver_side_leaves_out_deleted_rows_only_for_live_pairs(gold: str) -> None:
+    # fct_order_items carries _is_deleted as a column of its own, so its silver side keeps them.
+    has_filter = "where not _is_deleted" in reconcile.gold_silver_sql_trino(gold)
+
+    assert has_filter is reconcile.GOLD_PAIRS[gold].live_only
+    assert reconcile.GOLD_PAIRS["fct_order_items"].live_only is False
+    assert sum(pair.live_only for pair in reconcile.GOLD_PAIRS.values()) == 3
 
 
 def _statuses(sql: str) -> list[frozenset[str]]:
@@ -166,6 +185,43 @@ def test_lookup_sql_refuses_a_key_that_is_not_a_plain_identifier() -> None:
     assert reconcile.bronze_lookup_sql("orders", ["ok-1_x"]) is not None
     assert reconcile.bronze_lookup_sql("orders", ["a' or '1'='1"]) is None
     assert reconcile.quarantine_lookup_sql("orders", ["a'b"]) is None
+
+
+def test_lookup_sql_searches_the_whole_key_of_a_composite_table() -> None:
+    for query in (
+        reconcile.bronze_lookup_sql("order_items", ["X:2"]),
+        reconcile.quarantine_lookup_sql("order_items", ["X:2"]),
+    ):
+        assert query is not None
+        assert "'$.order_item_id'" in query
+        assert "'X:2'" in query
+
+
+def test_lookup_sql_builds_the_key_in_the_order_of_the_table() -> None:
+    items = reconcile.bronze_lookup_sql("order_items", ["X:2"])
+    reviews = reconcile.bronze_lookup_sql("reviews", ["X"])
+    quarantine = reconcile.quarantine_lookup_sql("order_items", ["X:2"])
+
+    assert items is not None and reviews is not None and quarantine is not None
+    assert (
+        "concat_ws(':', json_extract_scalar(x.key, '$.order_id'), "
+        "json_extract_scalar(x.key, '$.order_item_id'))" in items
+    )
+    assert (
+        "concat_ws(':', json_extract_scalar(x.key, '$.review_id'), "
+        "json_extract_scalar(x.key, '$.order_id'))" in reviews
+    )
+    assert "coalesce(x.key, x.payload)" in quarantine
+
+
+def test_lookup_sql_searches_the_one_key_column_of_a_plain_table() -> None:
+    for query in (
+        reconcile.bronze_lookup_sql("orders", ["X"]),
+        reconcile.quarantine_lookup_sql("orders", ["X"]),
+    ):
+        assert query is not None
+        assert "'$.order_id'" in query
+        assert "'X'" in query
 
 
 def _pairs(mapping: dict[str, str]):  # type: ignore[no-untyped-def]

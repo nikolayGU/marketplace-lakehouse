@@ -11,7 +11,7 @@ from typing import Any
 import jinja2
 import pytest
 import yaml
-from lakehouse import checks, reconcile, sql
+from lakehouse import checks, clients, reconcile, sql
 from lakehouse.maintenance_commands import (
     DRY_RUN_FLAG,
     compact_bronze_command,
@@ -29,6 +29,7 @@ from lakehouse.settings import (
     GOLD_NOT_COMPARED_RUNS,
     GOLD_STALE_RUNS,
     GOLD_WRITERS_POOL,
+    LAKE_WRITERS_POOL,
     LAST_BRONZE_SNAPSHOT,
     MAINTENANCE_TABLES,
     RETENTION_DAYS,
@@ -263,6 +264,10 @@ class DqChecks:
         self.cdc_second_read_fails = False
         self.silver_changed: float | None = 1000.0
         self.gold_rebuilt: float | None = 2000.0
+        self.source_differs = False
+        self.trino_value_of: dict[str, Any] = {}
+        self.trino_rows_of: dict[str, list[list[Any]]] = {}
+        self.postgres_rows_of: dict[str, list[tuple[Any, ...]]] = {}
         variables = self.variables
 
         class Variable:
@@ -332,6 +337,10 @@ class DqChecks:
             return [] if self.cdc is None else [self.cdc]
         if query == reconcile.gmv_pairs_sql_postgres():
             return [("2026-07-17", "20585.00")]
+        if query in self.postgres_rows_of:
+            return self.postgres_rows_of[query]
+        if self.source_differs and query == reconcile.pairs_sql_postgres("orders"):
+            return [("key", "original")]
         return []
 
     def trino_rows(self, _settings: object, query: str) -> list[list[Any]]:
@@ -340,6 +349,10 @@ class DqChecks:
             return self.bronze
         if query == reconcile.gmv_pairs_sql_trino():
             return [["2026-07-17", "20585.01" if self.gmv_differs else "20585.00"]]
+        if query in self.trino_rows_of:
+            return self.trino_rows_of[query]
+        if self.source_differs and query == reconcile.pairs_sql_trino("orders"):
+            return [["key", "changed"]]
         for gold in reconcile.GOLD_PAIRS:
             if query == reconcile.gold_pairs_sql_trino(gold, "gold") and self.gold_differs:
                 return [["key", "changed"]]
@@ -353,6 +366,10 @@ class DqChecks:
             raise RuntimeError("trino is down")
         if query == reconcile.gmv_fingerprint_sql_trino():
             return "596 other" if self.gmv_differs else "596 gmv"
+        if query in self.trino_value_of:
+            return self.trino_value_of[query]
+        if self.source_differs and query == reconcile.fingerprint_sql_trino("orders"):
+            return "10 other"
         for table in SOURCE_TABLES:
             if query == sql.silver_live_rows(table):
                 return 10
@@ -366,8 +383,6 @@ class DqChecks:
             return self.gold_updated
         if query == reconcile.MART_UPDATED:
             return self.mart_updated
-        if query == reconcile.SILVER_UPDATED:
-            return "2026-10-01 00:00:00"
         if query == reconcile.SILVER_DATA_CHANGED:
             return self.silver_changed
         if query == reconcile.GOLD_REBUILT:
@@ -553,7 +568,7 @@ def test_gmv_is_not_compared_at_a_stalled_cdc(dq: DqChecks) -> None:
 def test_gmv_is_not_compared_while_gold_is_behind_silver(dq: DqChecks) -> None:
     dq.at_rest()
     dq.gmv_differs = True
-    dq.gold_updated = "2026-09-30 00:00:00"
+    dq.silver_changed, dq.gold_rebuilt = 3000.0, 2000.0
 
     dq.run("reconcile_values", False)
 
@@ -646,7 +661,7 @@ def test_a_run_without_a_verdict_counts_one_more_run_without_gold(dq: DqChecks) 
 
 def test_gold_behind_silver_counts_one_more_run_without_gold(dq: DqChecks) -> None:
     dq.at_rest()
-    dq.gold_updated = "2026-09-30 00:00:00"
+    dq.silver_changed, dq.gold_rebuilt = 3000.0, 2000.0
     dq.variables[GOLD_NOT_COMPARED_RUNS] = "3"
 
     dq.run("reconcile_values", False)
@@ -698,11 +713,11 @@ def test_a_count_that_is_missing_or_unreadable_starts_from_zero(
 @pytest.mark.parametrize(
     "failing_query",
     [
-        reconcile.GOLD_UPDATED,  # before gold is known to be at rest
+        reconcile.SILVER_DATA_CHANGED,  # before gold is known to be at rest
         reconcile.gold_sql_trino(next(iter(reconcile.GOLD_PAIRS))),  # inside the pair comparison
         reconcile.GOLD_CUSTOMERS,  # after the pairs
     ],
-    ids=["gold_updated", "first_gold_pair", "gold_customers"],
+    ids=["silver_data_changed", "first_gold_pair", "gold_customers"],
 )
 def test_a_comparison_that_fails_does_not_reset_the_count(dq: DqChecks, failing_query: str) -> None:
     dq.at_rest()
@@ -783,6 +798,57 @@ def test_the_gold_pool_has_one_slot_and_dbt_build_takes_it() -> None:
     assert "pools set gold_writers 1" in (REPO / "Makefile").read_text()
 
 
+def test_the_lake_writers_pool_has_one_slot() -> None:
+    assert LAKE_WRITERS_POOL == "lake_writers"
+    assert "pools set lake_writers 1" in (REPO / "Makefile").read_text()
+
+
+def operator_settings(dag_file: str, task_id: str) -> dict[str, str]:
+    """Source text of the settings of the DockerOperator with `task_id`, whether they are
+    keywords of the call or come from `**spark_job_kwargs(pool, **extra)` (the pool is its first
+    argument)."""
+    tree = ast.parse((REPO / "airflow" / "dags" / dag_file).read_text())
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and getattr(node.func, "id", None) == "DockerOperator"):
+            continue
+        keywords = {k.arg: k.value for k in node.keywords if k.arg}
+        if ast.unparse(keywords.get("task_id", ast.Constant(None))) != repr(task_id):
+            continue
+        found = {name: ast.unparse(value) for name, value in keywords.items()}
+        for k in node.keywords:
+            call = k.value
+            if k.arg is None and isinstance(call, ast.Call):
+                if getattr(call.func, "id", None) == "spark_job_kwargs" and call.args:
+                    found["pool"] = ast.unparse(call.args[0])
+                found.update({e.arg: ast.unparse(e.value) for e in call.keywords if e.arg})
+        return found
+    raise AssertionError(f"{dag_file} has no DockerOperator {task_id}")
+
+
+def test_silver_upsert_runs_one_merge_at_a_time() -> None:
+    dag = dag_keywords("silver_upsert.py", "dag")
+
+    assert ast.literal_eval(dag["max_active_runs"]) == 1
+    assert ast.literal_eval(dag["catchup"]) is False
+
+
+def test_the_silver_merge_takes_the_lake_writers_pool() -> None:
+    assert operator_settings("silver_upsert.py", "merge")["pool"] == "LAKE_WRITERS_POOL"
+
+
+def test_the_silver_merge_publishes_the_silver_asset_that_wakes_dbt_build() -> None:
+    assert operator_settings("silver_upsert.py", "merge")["outlets"] == "[Asset(SILVER_ASSET_NAME)]"
+    schedule = dag_keywords("dbt_build.py", "dag")["schedule"]
+    assert ast.unparse(schedule) == "[Asset(SILVER_ASSET_NAME)]"
+
+
+def test_the_snapshot_is_remembered_only_after_the_merge() -> None:
+    edges = dependency_edges("silver_upsert.py")
+
+    assert ("snapshot", "merge") in edges
+    assert ("merge", "remember_snapshot") in edges
+
+
 def test_maintenance_covers_every_silver_table_and_orders_per_minute() -> None:
     assert (*SILVER_KEYS, "orders_per_minute") == MAINTENANCE_TABLES
     assert RETENTION_DAYS == 7
@@ -824,11 +890,74 @@ def test_mapped_gold_orphans_commands_carry_no_template(dry_run: bool) -> None:
     assert maintenance.parse_args(command[1:]).dry_run is dry_run
 
 
-def test_the_gold_orphans_task_builds_commands_from_the_params() -> None:
-    source = (REPO / "airflow" / "dags" / "iceberg_orphans.py").read_text()
+class OrphansDag:
+    """iceberg_orphans.py loaded with Airflow's decorators and DockerOperator stubbed: the task
+    bodies stay plain functions and the operators record their keywords."""
 
-    assert "gold_orphans_command(name, params or {})" in source
-    assert "orphans_command([gold_table" not in source
+    def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self.bodies: dict[str, Callable[..., Any]] = {}
+        self.expanded: list[dict[str, Any]] = []
+        expanded = self.expanded
+
+        class DockerOperator:
+            def __init__(self, **_: Any) -> None:
+                pass
+
+            @classmethod
+            def partial(cls, **_: Any) -> "DockerOperator":
+                return cls()
+
+            def expand(self, **kwargs: Any) -> None:
+                expanded.append(kwargs)
+
+            def __rshift__(self, other: object) -> object:
+                return other
+
+        def task(body: Callable[..., Any]) -> Callable[..., Any]:
+            self.bodies[body.__name__] = body
+            return body
+
+        def dag(**_: Any) -> Callable[[Callable[[], None]], Callable[[], None]]:
+            return lambda body: body
+
+        sdk = types.ModuleType("airflow.sdk")
+        sdk.dag = dag  # type: ignore[attr-defined]
+        sdk.task = task  # type: ignore[attr-defined]
+        docker = types.ModuleType("airflow.providers.docker.operators.docker")
+        docker.DockerOperator = DockerOperator  # type: ignore[attr-defined]
+        for name, module in {
+            "airflow": types.ModuleType("airflow"),
+            "airflow.sdk": sdk,
+            "airflow.providers": types.ModuleType("airflow.providers"),
+            "airflow.providers.docker": types.ModuleType("airflow.providers.docker"),
+            "airflow.providers.docker.operators": types.ModuleType(
+                "airflow.providers.docker.operators"
+            ),
+            "airflow.providers.docker.operators.docker": docker,
+        }.items():
+            monkeypatch.setitem(sys.modules, name, module)
+        for key in SPARK_SILVER_ENV:
+            monkeypatch.setenv(key, "x")
+        monkeypatch.setattr(clients, "trino_rows", lambda *_: [["orders_daily"]])
+        spec = importlib.util.spec_from_file_location(
+            "iceberg_orphans_under_test", REPO / "airflow" / "dags" / "iceberg_orphans.py"
+        )
+        assert spec is not None and spec.loader is not None
+        spec.loader.exec_module(importlib.util.module_from_spec(spec))
+
+
+@pytest.mark.parametrize(
+    ("params", "flag"), [({"dry_run": False}, "--no-dry-run"), (None, "--dry-run")]
+)
+def test_the_gold_orphans_task_builds_commands_from_the_params(
+    monkeypatch: pytest.MonkeyPatch, params: dict[str, object] | None, flag: str
+) -> None:
+    dag = OrphansDag(monkeypatch)
+
+    commands = dag.bodies["gold_orphan_commands"](params)
+
+    assert commands == [gold_orphans_command("orders_daily", params or {})]
+    assert commands[0][2] == flag
 
 
 def test_orphans_dag_is_a_weekly_dry_run_by_default() -> None:
@@ -879,6 +1008,8 @@ def dependency_edges(dag_file: str) -> set[tuple[str, str]]:
     def names(node: ast.expr) -> set[str]:
         if isinstance(node, ast.Name):
             return {node.id}
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            return {node.func.id}
         if isinstance(node, ast.List):
             return set().union(*(names(item) for item in node.elts))
         if isinstance(node, ast.BinOp) and isinstance(node.op, ast.RShift):
@@ -1183,12 +1314,13 @@ def test_the_merge_container_has_a_fixed_name() -> None:
 @pytest.mark.parametrize(
     ("side", "failing_query"),
     [
+        ("trino", reconcile.GOLD_UPDATED),
         ("trino", reconcile.MART_UPDATED),
         ("postgres", reconcile.gmv_fingerprint_sql_postgres()),
         ("trino", reconcile.gmv_fingerprint_sql_trino()),
-        ("cdc", sql.CDC_PROGRESS),  # the second read, just before the GMV queries
+        ("cdc", sql.CDC_PROGRESS),  # the second read, after the source-silver pairs
     ],
-    ids=["mart_updated", "gmv_postgres", "gmv_trino", "cdc_reread"],
+    ids=["gold_updated", "mart_updated", "gmv_postgres", "gmv_trino", "cdc_reread"],
 )
 def test_a_failing_gmv_step_sends_the_finished_verdicts_then_fails_the_run(
     dq: DqChecks,
@@ -1224,6 +1356,14 @@ def test_a_failing_gmv_step_sends_the_finished_verdicts_then_fails_the_run(
     assert dq.gauge("lakehouse.dq.gold_not_compared_runs") == 0
     assert any(name == "lakehouse.dq.reconcile_verdict_timestamp_seconds" for name, _, _ in dq.sent)
     assert dq.variables[GOLD_NOT_COMPARED_RUNS] == "0"
+    if side == "cdc":
+        assert dq.gauge("lakehouse.dq.reconcile_in_flight") == 1
+        assert not [tags for _, _, tags in dq.sent if tags.get("pair") == "source_silver"]
+        assert not [
+            tags
+            for name, _, tags in dq.sent
+            if name == "lakehouse.dq.reconcile_rows" and tags.get("layer") in ("source", "silver")
+        ]
 
 
 def test_a_failing_gmv_step_does_not_hide_a_silver_gold_difference(dq: DqChecks) -> None:
@@ -1243,14 +1383,16 @@ def test_a_failing_gmv_step_does_not_hide_a_silver_gold_difference(dq: DqChecks)
     [(12, "0/10"), (10, "0/20"), (9, "0/10")],
     ids=["source_wrote", "slot_moved", "counter_fell"],
 )
+@pytest.mark.parametrize("moved_at", ["after_the_pairs", "before_the_gmv"])
 def test_gmv_is_not_compared_when_cdc_moved_since_the_start_of_the_task(
-    dq: DqChecks, capsys: pytest.CaptureFixture[str], later: tuple[int, str]
+    dq: DqChecks, capsys: pytest.CaptureFixture[str], later: tuple[int, str], moved_at: str
 ) -> None:
     # Postgres is read last, after the gold queries: a write that landed in between is in the
     # source and not yet in the mart, a difference that is not an error. Not a false red.
     dq.at_rest()
     dq.gmv_differs = True
-    dq.cdc_reads = [(10, "0/10"), later]
+    start = (10, "0/10")
+    dq.cdc_reads = [start, later] if moved_at == "after_the_pairs" else [start, start, later]
 
     dq.run("reconcile_values", False)
 
@@ -1258,26 +1400,35 @@ def test_gmv_is_not_compared_when_cdc_moved_since_the_start_of_the_task(
     assert "in flight" in capsys.readouterr().out
     assert dq.gauge("lakehouse.dq.reconcile_gmv_compared") == 0
     assert dq.gauge("lakehouse.dq.reconcile_gold_compared") == 1
+    if moved_at == "after_the_pairs":
+        assert not [
+            tags
+            for name, _, tags in dq.sent
+            if name == "lakehouse.dq.reconcile_rows" and tags.get("layer") in ("source", "silver")
+        ]
     assert dq.gauge("lakehouse.dq.gold_not_compared_runs") == 0
 
 
 def test_gmv_is_still_compared_when_cdc_did_not_move_during_the_task(dq: DqChecks) -> None:
     dq.at_rest()
     dq.gmv_differs = True
-    dq.cdc_reads = [(10, "0/10"), (10, "0/10")]
+    dq.cdc_reads = [(10, "0/10"), (10, "0/10"), (10, "0/10")]
 
     with pytest.raises(ValueError, match="mart_daily_sales_gmv"):
         dq.run("reconcile_values", False)
 
     assert dq.queried_gmv()
     assert dq.gauge("lakehouse.dq.reconcile_gmv_compared") == 1
-    assert dq.queries.count(sql.CDC_PROGRESS) == 2
+    assert dq.queries.count(sql.CDC_PROGRESS) == 3
 
 
 @pytest.mark.parametrize(
     "event",
-    [reconcile.fingerprint_sql_postgres(SOURCE_TABLES[0]), reconcile.GOLD_UPDATED],
-    ids=["after_the_first_source_pair", "after_the_gold_watermark"],
+    [
+        reconcile.fingerprint_sql_postgres(SOURCE_TABLES[0]),
+        reconcile.fingerprint_sql_trino(SOURCE_TABLES[-1]),
+    ],
+    ids=["after_the_first_source_pair", "after_the_last_source_pair"],
 )
 def test_the_cdc_position_of_the_start_is_read_before_any_comparison(
     dq: DqChecks, event: str
@@ -1294,7 +1445,7 @@ def test_the_cdc_position_of_the_start_is_read_before_any_comparison(
     assert dq.gauge("lakehouse.dq.reconcile_gmv_compared") == 0
 
 
-def test_the_cdc_position_is_read_before_the_comparisons_and_again_before_the_gmv(
+def test_the_cdc_position_is_read_before_the_pairs_after_them_and_again_before_the_gmv(
     dq: DqChecks,
 ) -> None:
     dq.at_rest()
@@ -1305,18 +1456,21 @@ def test_the_cdc_position_is_read_before_the_comparisons_and_again_before_the_gm
 
     reads = [i for i, q in enumerate(dq.queries) if q == sql.CDC_PROGRESS]
     first_source = dq.queries.index(reconcile.fingerprint_sql_postgres(SOURCE_TABLES[0]))
+    last_source = dq.queries.index(reconcile.fingerprint_sql_trino(SOURCE_TABLES[-1]))
+    first_gold = dq.queries.index(reconcile.gold_silver_sql_trino(next(iter(reconcile.GOLD_PAIRS))))
     mart = dq.queries.index(reconcile.MART_UPDATED)
     gmv = dq.queries.index(reconcile.gmv_fingerprint_sql_postgres())
-    assert len(reads) == 2
+    assert len(reads) == 3
     assert reads[0] < first_source
-    assert mart < reads[1] < gmv
+    assert last_source < reads[1] < first_gold
+    assert mart < reads[2] < gmv
 
 
 def test_gold_older_than_silver_at_rest_counts_a_stale_run(
     dq: DqChecks, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # Snapshots, not data: a deleted order leaves the watermarks apart for good, a gold that was
-    # not rebuilt after the last silver commit (dbt_build paused or red) does not.
+    # Snapshots, not data: a gold that was not rebuilt after the last silver commit (dbt_build
+    # paused or red) is stale, whatever its newest row says.
     dq.at_rest()
     dq.silver_changed, dq.gold_rebuilt = 3000.0, 2000.0
     dq.variables[GOLD_STALE_RUNS] = "1"
@@ -1351,7 +1505,8 @@ def test_work_in_flight_resets_the_stale_count_and_asks_no_metadata(dq: DqChecks
 
 
 def test_a_stalled_cdc_and_a_gold_that_is_behind_still_count_a_stale_run(dq: DqChecks) -> None:
-    # Neither skip_source nor gold_ready (gold behind silver by data) gates the snapshot count.
+    # Neither skip_source nor gold_ready (gold rebuilt before the last silver commit) gates the
+    # snapshot count.
     dq.at_rest()
     dq.gold_updated = "2026-09-30 00:00:00"
     dq.silver_changed, dq.gold_rebuilt = 3000.0, 2000.0
@@ -1382,18 +1537,24 @@ def test_a_failing_metadata_query_keeps_the_verdicts_and_the_count_then_fails(
     dq.at_rest()
     dq.trino_fails_on = failing
     dq.variables[GOLD_STALE_RUNS] = "1"
+    dq.variables[GOLD_NOT_COMPARED_RUNS] = "4"
 
     with pytest.raises(RuntimeError, match="trino is down"):
         dq.run("reconcile_values", False)
 
-    gold = next(iter(reconcile.GOLD_PAIRS))
     assert (
         "lakehouse.dq.reconcile_values_differing",
         0,
-        {"pair": "silver_gold", "table": gold},
+        {"pair": "source_silver", "table": "orders"},
     ) in dq.sent
+    assert dq.gauge("lakehouse.dq.reconcile_gold_compared") == 0
     assert dq.variables[GOLD_STALE_RUNS] == "1"
-    assert not any(name == "lakehouse.dq.gold_stale_runs" for name, _, _ in dq.sent)
+    assert dq.variables[GOLD_NOT_COMPARED_RUNS] == "4"
+    assert not dq.queried_gold_values()
+    assert not any(
+        name in {"lakehouse.dq.gold_stale_runs", "lakehouse.dq.gold_not_compared_runs"}
+        for name, _, _ in dq.sent
+    )
 
 
 def test_a_mart_behind_fct_orders_counts_a_stale_run_though_the_snapshots_are_fresh(
@@ -1430,8 +1591,9 @@ def test_a_mart_behind_counts_with_a_stalled_cdc_too(dq: DqChecks) -> None:
 
 
 def test_a_mart_behind_counts_while_gold_is_behind_silver_too(dq: DqChecks) -> None:
-    # A deleted order keeps gold_ready False for good; a mart behind fct_orders still counts.
+    # A mart behind fct_orders counts whatever the snapshots of the other gold tables say.
     dq.at_rest()
+    dq.silver_changed, dq.gold_rebuilt = 3000.0, 2000.0
     dq.gold_updated = "2026-09-30 00:00:00"
     dq.mart_updated = "2026-09-29 00:00:00"
 
@@ -1459,10 +1621,95 @@ def test_a_failing_mart_query_is_handled_as_a_failing_metadata_query(dq: DqCheck
 
 def test_a_value_difference_and_a_failing_metadata_query_are_both_reported(dq: DqChecks) -> None:
     dq.at_rest()
-    dq.gold_differs = True
+    dq.source_differs = True
     dq.trino_fails_on = reconcile.SILVER_DATA_CHANGED
 
     with pytest.raises(ValueError, match="values differ at rest") as failure:
         dq.run("reconcile_values", False)
 
     assert "the gold snapshot check failed as well" in str(failure.value)
+
+
+def test_a_gold_pair_is_compared_when_the_snapshots_say_gold_was_rebuilt(dq: DqChecks) -> None:
+    # The gate reads snapshots, not the newest row: a gold whose newest row is older than silver's
+    # (a deleted order leaves it so for good) is still compared once dbt rebuilt it.
+    dq.at_rest()
+    dq.gold_updated = "2026-09-30 00:00:00"
+
+    dq.run("reconcile_values", False)
+
+    assert dq.gauge("lakehouse.dq.reconcile_gold_compared") == 1
+
+
+def test_gold_rebuilt_before_the_last_silver_commit_is_not_compared_and_not_red(
+    dq: DqChecks,
+) -> None:
+    # In the middle of dbt_build: gold differs from silver for a reason that is not an error.
+    dq.at_rest()
+    dq.silver_changed, dq.gold_rebuilt = 3000.0, 2000.0
+    dq.gold_differs = True
+
+    dq.run("reconcile_values", False)
+
+    assert dq.gauge("lakehouse.dq.reconcile_gold_compared") == 0
+
+
+def test_a_source_difference_while_cdc_moved_during_the_pairs_is_in_flight(
+    dq: DqChecks, capsys: pytest.CaptureFixture[str]
+) -> None:
+    dq.at_rest()
+    dq.source_differs = True
+    dq.cdc_moves_after = reconcile.fingerprint_sql_postgres("orders")
+
+    dq.run("reconcile_values", False)
+
+    assert dq.gauge("lakehouse.dq.reconcile_in_flight") == 1
+    assert "in flight: the source or the slot moved during the run" in capsys.readouterr().out
+
+
+def test_a_source_difference_without_a_cdc_shift_is_red(dq: DqChecks) -> None:
+    dq.at_rest()
+    dq.source_differs = True
+
+    with pytest.raises(ValueError, match="source_silver orders"):
+        dq.run("reconcile_values", False)
+
+    assert dq.gauge("lakehouse.dq.reconcile_in_flight") == 0
+
+
+def test_a_count_difference_while_cdc_moved_during_the_counts_is_in_flight(
+    dq: DqChecks, capsys: pytest.CaptureFixture[str]
+) -> None:
+    dq.at_rest()
+    dq.postgres_counts = {"orders": 11}
+    dq.cdc_moves_after = sql.source_rows("orders")
+
+    dq.run("silver_matches_postgres", False)
+
+    assert "in flight" in capsys.readouterr().out
+
+
+def test_a_count_difference_without_a_cdc_shift_is_red(dq: DqChecks) -> None:
+    dq.at_rest()
+    dq.postgres_counts = {"orders": 11}
+
+    with pytest.raises(ValueError, match="silver differs from Postgres at rest"):
+        dq.run("silver_matches_postgres", False)
+
+
+def test_a_missing_composite_key_is_explained_by_its_whole_key(dq: DqChecks) -> None:
+    dq.at_rest()
+    items = "order_items"
+    dq.trino_value_of[reconcile.fingerprint_sql_trino(items)] = "0 empty"
+    dq.postgres_rows_of[reconcile.pairs_sql_postgres(items)] = [("X:1", "h"), ("X:9", "h")]
+    dq.trino_rows_of[reconcile.pairs_sql_trino(items)] = []
+    lookup = reconcile.bronze_lookup_sql(items, ["X:1", "X:9"])
+    assert lookup is not None
+    dq.trino_rows_of[lookup] = [["X:1"]]
+
+    with pytest.raises(ValueError) as failure:
+        dq.run("reconcile_values", False)
+
+    message = str(failure.value)
+    assert "X:9 (unknown)" in message
+    assert "X:1 (merge_pending)" in message
