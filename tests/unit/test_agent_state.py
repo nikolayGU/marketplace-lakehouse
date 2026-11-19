@@ -16,10 +16,15 @@ from scripts.agent_state import (
     code_changes,
     code_changes_since,
     describe_stamp,
+    gate_level,
+    gate_need,
     read_stamp,
     record_review,
+    remember_session_base,
     run_check,
+    session_base,
     tree_hash,
+    uncovered,
     write_stamp,
 )
 
@@ -1061,3 +1066,215 @@ def test_every_stamp_is_git_ignored_in_this_repo() -> None:
     ignored = (REPO / ".gitignore").read_text().split()
 
     assert {STAMP, CHECK_STAMP, REVIEW_STAMP} <= set(ignored)
+
+
+@pytest.mark.parametrize(
+    ("path", "level"),
+    [
+        ("README.md", "none"),
+        ("docs/x.py", "none"),
+        ("dbt/models/docs.md", "verify"),
+        (".claude/agents/r.md", "none"),
+        ("tests/unit/t.py", "check"),
+        (".github/workflows/ci.yml", "check"),
+        (".claude/hooks/guard.py", "check"),
+        (".yamllint", "check"),
+        (".pre-commit-config.yaml", "check"),
+        (".sqlfluff", "check"),
+        ("scripts/agent_state.py", "check"),
+        ("airflow/dags/x.py", "verify"),
+        ("dbt/models/x.sql", "verify"),
+        ("scripts/verify.sh", "verify"),
+        ("Makefile", "verify"),
+        ("docker/compose.yaml", "verify"),
+        ("uv.lock", "verify"),
+        ("dbt/.sqlfluff", "verify"),
+        ("streaming/spark_jobs/x.py", "full"),
+        ("contracts/silver/orders.json", "full"),
+    ],
+)
+def test_gate_level_of_each_path_class(path: str, level: str) -> None:
+    assert gate_level(path) == level
+
+
+def test_gate_need_is_the_highest_level_of_the_paths() -> None:
+    assert gate_need([]) == "none"
+    assert gate_need(["README.md", "docs/a.py"]) == "none"
+    assert gate_need(["README.md", "tests/t.py"]) == "check"
+    assert gate_need(["tests/t.py", "Makefile"]) == "verify"
+    assert gate_need(["Makefile", "streaming/a.py", "tests/t.py"]) == "full"
+
+
+def test_a_move_out_of_streaming_keeps_the_full_level(repo: Path) -> None:
+    (repo / "streaming").mkdir()
+    (repo / "docs").mkdir()
+    (repo / "streaming" / "job.py").write_text("x = 1\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-q", "-m", "streaming")
+    write_stamp(repo, "full")
+    stamp = read_stamp(repo)
+    assert stamp is not None
+    git(repo, "mv", "streaming/job.py", "docs/job.py")
+
+    paths = uncovered(repo, stamp, tree_hash(repo), "none")
+
+    assert "streaming/job.py" in paths
+    assert gate_need(paths) == "full"
+
+
+def changed_by_level(repo: Path) -> None:
+    """A stamped repo with one changed path of each level."""
+    write_stamp(repo, "full")
+    for name in ("README.md", "tests/t.py", "job.py", "streaming/s.py"):
+        (repo / name).parent.mkdir(exist_ok=True)
+        (repo / name).write_text("x = 2\n")
+
+
+@pytest.mark.parametrize(
+    ("floor", "expected"),
+    [
+        ("none", ["README.md", "job.py", "streaming/s.py", "tests/t.py"]),
+        ("check", ["job.py", "streaming/s.py", "tests/t.py"]),
+        ("verify", ["job.py", "streaming/s.py"]),
+        ("full", ["streaming/s.py"]),
+    ],
+)
+def test_uncovered_lists_the_paths_from_the_floor_up(
+    repo: Path, floor: str, expected: list[str]
+) -> None:
+    changed_by_level(repo)
+    stamp = read_stamp(repo)
+    assert stamp is not None
+
+    assert sorted(uncovered(repo, stamp, tree_hash(repo), floor)) == expected
+
+
+def test_uncovered_of_a_gone_tree_covers_nothing_and_does_not_raise(repo: Path) -> None:
+    (repo / STAMP).write_text(f"full 2026-10-30T10:00:00Z {'0' * 40}\n")
+    stamp = read_stamp(repo)
+    assert stamp is not None
+
+    result = uncovered(repo, stamp, tree_hash(repo), "full")
+
+    assert len(result) == 1 and "gone" in result[0]
+
+
+def test_a_fast_verify_keeps_a_full_stamp_after_an_edit_of_tests_or_hooks(repo: Path) -> None:
+    write_stamp(repo, "full")
+    full = read_stamp(repo)
+    for name in ("tests/t.py", ".github/ci.yml", ".claude/hooks/guard.py"):
+        (repo / name).parent.mkdir(parents=True, exist_ok=True)
+        (repo / name).write_text("x = 2\n")
+
+    message = write_stamp(repo, "fast")
+
+    stamp = read_stamp(repo)
+    assert full is not None and stamp is not None
+    assert (stamp.mode, stamp.written_at, stamp.tree) == ("full", full.written_at, full.tree)
+    assert message.startswith("kept the full verify stamp")
+
+
+@pytest.mark.parametrize("path", ["airflow/dags/x.py", "streaming/s.py", "dbt/m.sql"])
+def test_a_fast_verify_replaces_a_full_stamp_after_an_edit_of_stack_code(
+    repo: Path, path: str
+) -> None:
+    write_stamp(repo, "full")
+    (repo / path).parent.mkdir(parents=True, exist_ok=True)
+    (repo / path).write_text("x = 2\n")
+
+    message = write_stamp(repo, "fast")
+
+    stamp = read_stamp(repo)
+    assert stamp is not None and (stamp.mode, stamp.fresh) == ("fast", True)
+    assert not message.startswith("kept")
+
+
+def test_describe_stamp_of_a_verify_stamp_covers_a_change_below_the_verify_level(
+    repo: Path,
+) -> None:
+    write_stamp(repo, "full")
+    (repo / "tests").mkdir()
+    (repo / "tests" / "t.py").write_text("x = 1\n")
+
+    described = describe_stamp(repo)
+
+    assert ", covers (" in described and "only Markdown and docs/" not in described
+    assert "tests" in described
+
+
+def test_describe_stamp_of_a_check_stamp_is_stale_after_a_test_edit(repo: Path) -> None:
+    write_stamp(repo, "check")
+    (repo / "tests").mkdir()
+    (repo / "tests" / "t.py").write_text("x = 1\n")
+
+    assert describe_stamp(repo, "check").endswith("stale (code changed: 1 path)")
+
+
+def test_describe_stamp_of_a_verify_stamp_counts_the_paths_from_its_floor(repo: Path) -> None:
+    write_stamp(repo, "full")
+    (repo / "tests").mkdir()
+    (repo / "tests" / "t.py").write_text("x = 1\n")
+    (repo / "job.py").write_text("x = 2\n")
+
+    assert describe_stamp(repo).endswith("stale (code changed: 1 path)")
+
+
+def test_describe_stamp_without_a_stamp_file_is_none_outside_git(tmp_path: Path) -> None:
+    assert describe_stamp(tmp_path) == "none"
+    assert describe_stamp(tmp_path, "check") == "none"
+
+
+def test_the_record_review_docstring_names_the_headless_refusal_form() -> None:
+    assert "Итог. Вердикт: не принять" in (record_review.__doc__ or "")
+
+
+def test_session_base_is_written_once(repo: Path) -> None:
+    first = tree_hash(repo)
+    assert remember_session_base(repo, "abc-1_X") == first
+    (repo / "job.py").write_text("x = 2\n")
+
+    assert remember_session_base(repo, "abc-1_X") == first
+    assert session_base(repo, "abc-1_X") == first
+
+
+def test_session_base_without_a_file_is_none(repo: Path) -> None:
+    assert session_base(repo, "never") is None
+
+
+@pytest.mark.parametrize("bad", ["", "a/b", "../x", "a b", "x" * 129, "é"])
+def test_a_session_id_out_of_the_set_gives_no_base(repo: Path, bad: str) -> None:
+    before = sorted(p.name for p in (repo / ".git").iterdir())
+
+    assert remember_session_base(repo, bad) is None
+    assert session_base(repo, bad) is None
+    assert sorted(p.name for p in (repo / ".git").iterdir()) == before
+
+
+def test_old_session_bases_are_removed_and_fresh_ones_stay(repo: Path) -> None:
+    remember_session_base(repo, "old")
+    remember_session_base(repo, "fresh")
+    old = repo / ".git" / "claude-base-old"
+    eight_days_ago = old.stat().st_mtime - 8 * 86400
+    os.utime(old, (eight_days_ago, eight_days_ago))
+
+    remember_session_base(repo, "new")
+
+    assert not old.exists()
+    assert (repo / ".git" / "claude-base-fresh").exists()
+    assert session_base(repo, "old") is None
+    assert session_base(repo, "fresh") is not None
+
+
+def test_session_base_of_a_worktree_is_its_own_and_is_kept_there(
+    repo: Path, tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    # git resolves the name to the per-worktree git directory of a linked worktree.
+    other = tmp_path_factory.mktemp("wt") / "wt"
+    git(repo, "worktree", "add", "-q", str(other))
+    (other / "job.py").write_text("x = 7\n")
+    base = remember_session_base(repo, "s1")
+    other_base = remember_session_base(other, "s1")
+
+    assert base is not None and other_base == tree_hash(other) != base
+    assert session_base(repo, "s1") == base
+    assert session_base(other, "s1") == other_base

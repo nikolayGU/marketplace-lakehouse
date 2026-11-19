@@ -1052,12 +1052,17 @@ def check_bash(command: str) -> None:
             ask(reason)
 
 
-try:
-    check(json.load(sys.stdin))
-except VerdictError as verdict:
-    verdict.emit()
-except Exception as error:  # a broken guard must not wave the call through
-    VerdictError(
-        "ask", f"guard.py failed ({error.__class__.__name__}: {error}), check the call by hand"
-    ).emit()
-sys.exit(0)
+def main() -> None:
+    try:
+        check(json.load(sys.stdin))
+    except VerdictError as verdict:
+        verdict.emit()
+    except Exception as error:  # a broken guard must not wave the call through
+        VerdictError(
+            "ask", f"guard.py failed ({error.__class__.__name__}: {error}), check the call by hand"
+        ).emit()
+    sys.exit(0)
+
+
+if __name__ == "__main__":
+    main()

@@ -4,8 +4,9 @@ Three git-ignored stamps, each one line `<mode> <written_at> <tree>`, the tree b
 id of the working tree, untracked files included:
 
 - `.verify-stamp`, mode `fast` or `full`: written by `make verify-fast` and `make verify`. A `fast`
-  verify keeps a `full` stamp whose tree differs from the new one in no code (Markdown and `docs/`
-  only), since the full run already covers it.
+  verify keeps a `full` stamp whose tree differs from the new one in no path of the `verify` level
+  or above (see `gate_level`: Markdown, `docs/`, `tests/`, `.github/`, `.claude/` and the lint
+  configs do not count), since the full run already covers it.
 - `.check-stamp`, mode `check`: written by `make check` (`run_check`), after `make lint` and
   `make test` passed on a tree that did not change while they ran.
 - `.review-stamp`, mode `accept`, `accept-with-notes` or `return`: kept by the hook
@@ -14,6 +15,9 @@ id of the working tree, untracked files included:
   report on code stamps `return` for the working tree.
 
 Any edit or new file makes a stamp stale; staging or committing the checked content does not.
+Which edits matter to a stamp depends on the path: `gate_level` names the level a path needs
+(`none < check < verify < full`) and `uncovered` lists the changed paths from a floor upwards.
+`remember_session_base` keeps the tree a session started on, in the git directory.
 Stdlib only: the hooks run under the system python3, outside the project environment.
 """
 
@@ -22,6 +26,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -114,22 +119,72 @@ def tree_hash(root: Path) -> str:
         return _git(root, "write-tree", env=env).decode().strip()
 
 
+_SESSION_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
+_BASE_PREFIX = "claude-base-"
+_BASE_MAX_AGE = 7 * 24 * 3600
+
+
+def _base_path(root: Path, session_id: str) -> Path | None:
+    """The file of a session base, in the git directory of this worktree (`git rev-parse
+    --git-path`): a linked worktree keeps its own. None for an id out of `[A-Za-z0-9_-]{1,128}`,
+    or when git cannot say."""
+    if not _SESSION_ID.fullmatch(session_id):
+        return None
+    try:
+        out = _git(root, "rev-parse", "--git-path", f"{_BASE_PREFIX}{session_id}")
+    except (subprocess.CalledProcessError, OSError):
+        return None
+    return root / os.fsdecode(out).strip()  # git prints it relative to root, or absolute
+
+
+def remember_session_base(root: Path, session_id: str) -> str | None:
+    """Keep the tree id the session started on, only if the session has none yet (a second call
+    does not move it), and drop bases of other sessions older than 7 days. Returns the base, None
+    for an id out of `[A-Za-z0-9_-]{1,128}` or when git cannot answer."""
+    path = _base_path(root, session_id)
+    if path is None:
+        return None
+    try:
+        for old in path.parent.glob(f"{_BASE_PREFIX}*"):
+            if old != path and time.time() - old.stat().st_mtime > _BASE_MAX_AGE:
+                old.unlink(missing_ok=True)
+        if not path.exists():
+            tree = tree_hash(root)
+            try:
+                with path.open("x") as handle:
+                    handle.write(f"{tree}\n")
+            except FileExistsError:
+                pass
+    except (subprocess.CalledProcessError, OSError):
+        return None
+    return session_base(root, session_id)
+
+
+def session_base(root: Path, session_id: str) -> str | None:
+    """The tree id `remember_session_base` kept for the session, None when there is none or the id
+    is out of `[A-Za-z0-9_-]{1,128}`."""
+    path = _base_path(root, session_id)
+    if path is None:
+        return None
+    try:
+        text = path.read_text().strip()
+    except OSError:
+        return None
+    return text if _TREE_ID.fullmatch(text) else None
+
+
 def _store(root: Path, name: str, mode: str, tree: str) -> None:
     written_at = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     (root / name).write_text(f"{mode} {written_at} {tree}\n")
 
 
 def _kept_full(root: Path, tree: str) -> str | None:
-    """A message when `.verify-stamp` holds a `full` stamp whose tree differs from `tree` in no code
-    (only Markdown and `docs/`), so a `fast` verify has nothing to add to it. None when there is no
-    such stamp, or when the tree it names is gone from the object store."""
+    """A message when `.verify-stamp` holds a `full` stamp whose tree differs from `tree` in no path
+    of the `verify` level or above (Markdown, `docs/`, `tests/`, `.github/`, `.claude/` and the lint
+    configs may change), so a `fast` verify has nothing to add to it. None when there is no such
+    stamp, or when the tree it names is gone from the object store."""
     stamp = read_stamp(root, current=tree)
-    if stamp is None or stamp.mode != "full":
-        return None
-    try:
-        if _code_diff(root, stamp.tree, tree):
-            return None
-    except subprocess.CalledProcessError:
+    if stamp is None or stamp.mode != "full" or uncovered(root, stamp, tree, "verify"):
         return None
     return f"kept the full verify stamp of {stamp.written_at}: it covers this tree"
 
@@ -137,7 +192,8 @@ def _kept_full(root: Path, tree: str) -> str | None:
 def write_stamp(root: Path, mode: str, tree: str | None = None) -> str:
     """Stamp a tree: `fast` and `full` in `.verify-stamp`, `check` in `.check-stamp`. `tree` is the
     tree id to stamp, the working tree as it is now by default; an id that is no tree of this
-    repository is refused. A `fast` stamp does not replace a `full` one that covers the same code.
+    repository is refused. A `fast` stamp does not replace a `full` one when no path of the `verify`
+    level or above changed since it (a change in `tests/`, `.github/` or `.claude/` does not count).
     A review verdict is stamped only by `record_review`. Returns what was done."""
     if mode in MODES:
         name = STAMP
@@ -179,10 +235,17 @@ def read_stamp(root: Path, kind: str = "verify", current: str | None = None) -> 
 
 
 def describe_stamp(root: Path, kind: str = "verify") -> str:
-    """One line for `show`: `fresh` for the working tree, `covers` when only Markdown and `docs/`
-    changed since the stamped tree, else `stale` with the reason. `covers` states the relation of
-    the two trees only: whether the commit gate takes the stamp also depends on its mode (a `fast`
-    verify never opens it, a `check` or review stamp is judged by its own rule)."""
+    """One line for `show`: `fresh` for the working tree, `covers` when nothing at or above the
+    floor of the kind changed since the stamped tree, else `stale` with the reason. The floor is
+    `verify` for the verify stamp and `check` for a check or review stamp. `covers (only Markdown
+    and docs/ changed since)` means only paths of level `none` changed; a verify stamp also covers
+    changes of level `check` (tests, CI, hooks, lint configs) and says so. `covers` states the
+    relation of the two trees only: whether the commit gate takes the stamp also depends on its
+    mode (a `fast` verify never opens it, a `check` or review stamp is judged by its own rule).
+    A missing stamp file gives `none` before git is asked anything."""
+    name, _ = _kind(kind)
+    if not (root / name).exists():
+        return "none"
     current = tree_hash(root)
     stamp = read_stamp(root, kind, current)
     if stamp is None:
@@ -190,13 +253,28 @@ def describe_stamp(root: Path, kind: str = "verify") -> str:
     head = f"{stamp.mode} at {stamp.written_at}"
     if stamp.fresh:
         return f"{head}, fresh"
+    floor = "verify" if kind == "verify" else "check"
     try:
-        changed = code_changes_since(root, stamp, current)
+        changed = _changed_paths(root, stamp.tree, current)
     except subprocess.CalledProcessError:
         return f"{head}, stale (the stamped tree is gone)"
-    if not changed:
+    open_paths = [p for p in changed if _rank(gate_level(p)) >= _rank(floor)]
+    if open_paths:
+        count = len(open_paths)
+        return f"{head}, stale (code changed: {count} path{'' if count == 1 else 's'})"
+    if gate_need(changed) == "none":
         return f"{head}, covers (only Markdown and docs/ changed since)"
-    return f"{head}, stale (code changed: {len(changed)} path{'' if len(changed) == 1 else 's'})"
+    return (
+        f"{head}, covers (only paths below the {floor} level changed since: tests, CI, agent "
+        "files or lint configs)"
+    )
+
+
+LEVELS = ("none", "check", "verify", "full")
+_FULL_PREFIXES = ("streaming/", "contracts/")
+_CHECK_PREFIXES = ("tests/", ".github/", ".claude/")
+# Root files only: `dbt/.sqlfluff` is read by the dbt lint inside the verify run.
+_CHECK_FILES = (".pre-commit-config.yaml", ".yamllint", ".sqlfluff", "scripts/agent_state.py")
 
 
 def _is_code(path: str) -> bool:
@@ -204,6 +282,28 @@ def _is_code(path: str) -> bool:
     return not (path.endswith(".md") and not path.startswith("dbt/")) and not path.startswith(
         "docs/"
     )
+
+
+def _rank(level: str) -> int:
+    return LEVELS.index(level)
+
+
+def gate_level(path: str) -> str:
+    """The gate a change of `path` needs: `none` (Markdown outside `dbt/`, `docs/`), `check` (tests,
+    CI, agent files, lint configs, this module), `full` (`streaming/`, `contracts/`, whose result
+    only a full verify shows) or `verify` (everything else)."""
+    if not _is_code(path):
+        return "none"
+    if path.startswith(_FULL_PREFIXES):
+        return "full"
+    if path.startswith(_CHECK_PREFIXES) or path in _CHECK_FILES:
+        return "check"
+    return "verify"
+
+
+def gate_need(paths: Iterable[str]) -> str:
+    """The highest `gate_level` of the paths, `none` for no paths."""
+    return max((gate_level(p) for p in paths), key=_rank, default="none")
 
 
 def _paths(output: bytes) -> list[str]:
@@ -227,6 +327,21 @@ def _code_diff(root: Path, old: str, new: str) -> list[str]:
     # renamed to .md would look like a Markdown change. -z as in code_changes: no quoted names.
     names = _paths(_git(root, "diff", "--name-only", "-z", "--no-renames", old, new))
     return sorted(p for p in names if _is_code(p))
+
+
+def _changed_paths(root: Path, old: str, new: str) -> list[str]:
+    """Every path that differs between two trees, renames listed as a delete and an add."""
+    return sorted(_paths(_git(root, "diff", "--name-only", "-z", "--no-renames", old, new)))
+
+
+def uncovered(root: Path, stamp: Stamp, current: str, floor: str) -> list[str]:
+    """Paths of level `floor` or above that differ between the stamped tree and `current`. When git
+    cannot compare (the stamped tree is gone), the stamp covers nothing: one entry says so."""
+    try:
+        changed = _changed_paths(root, stamp.tree, current)
+    except subprocess.CalledProcessError:
+        return [f"(tree {stamp.tree} of the stamp is gone: nothing is covered)"]
+    return [p for p in changed if _rank(gate_level(p)) >= _rank(floor)]
 
 
 def code_changes_since(root: Path, stamp: Stamp, current: str | None = None) -> list[str]:
@@ -315,7 +430,9 @@ def record_review(root: Path, report: str) -> str:
     count), and `return` for the working tree. Any other report with a verdict line revokes the
     stamp, `return` for the working tree, so a garbled or late `вернуть` never leaves an earlier
     accepting verdict in force. That covers a line that mentions `вердикт` and `вернуть` but does
-    not start with the `Вердикт:` head ("Итог. Вердикт: вернуть", "Вердикт - вернуть"), and a
+    not start with the `Вердикт:` head ("Итог. Вердикт: вернуть", "Вердикт - вернуть"), a line
+    without the head that has the word `вердикт`, an accepting phrase and a word of refusal
+    ("Итог. Вердикт: не принять"), and a
     subject line that names more than one of `код`, `план`, `документ` ("Предмет: план и код").
     Returns what happened."""
     parsed = _read_report(report)

@@ -1,3 +1,6 @@
+import contextlib
+import importlib.util
+import io
 import json
 import os
 import shutil
@@ -18,7 +21,44 @@ PHRASE = {mode: phrase for phrase, mode in VERDICTS.items()}
 COMMIT = "git add -A && git commit -m change"
 
 
+def _load_guard() -> Any:
+    os.environ.setdefault("CLAUDE_PROJECT_DIR", str(REPO))
+    spec = importlib.util.spec_from_file_location("guard_in_process", HOOKS / "guard.py")
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+GUARD = _load_guard()
+
+
+def run_guard(event: dict[str, Any], root: Path | None = None) -> subprocess.CompletedProcess[str]:
+    """guard.py's main() in this process: the exit code, stdout and stderr of a hook run."""
+    out, err = io.StringIO(), io.StringIO()
+    saved_root, saved_stdin = GUARD.ROOT, sys.stdin
+    GUARD.ROOT = root or REPO
+    sys.stdin = io.StringIO(json.dumps(event))
+    code = 0
+    try:
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            GUARD.main()
+    except SystemExit as exit_:
+        code = int(exit_.code or 0)
+    finally:
+        GUARD.ROOT, sys.stdin = saved_root, saved_stdin
+    return subprocess.CompletedProcess([], code, out.getvalue(), err.getvalue())
+
+
 def hook(
+    name: str, event: dict[str, Any], root: Path | None = None
+) -> subprocess.CompletedProcess[str]:
+    if name == "guard.py":
+        return run_guard(event, root)
+    return hook_process(name, event, root)
+
+
+def hook_process(
     name: str, event: dict[str, Any], root: Path | None = None
 ) -> subprocess.CompletedProcess[str]:
     env = {**os.environ, "CLAUDE_PROJECT_DIR": str(root or REPO)}
@@ -37,6 +77,9 @@ def bash(command: str, root: Path | None = None) -> subprocess.CompletedProcess[
 
 
 def decision(result: subprocess.CompletedProcess[str]) -> str:
+    """deny, ask or allow; the ask of a guard that failed is `crash`, never a rule's ask."""
+    if "guard.py failed" in result.stdout:
+        return "crash"
     if result.returncode == 2:
         return "deny"
     if result.stdout.strip():
@@ -950,6 +993,25 @@ def test_commit_message_words_are_not_subcommands(repo: Path) -> None:
     assert decision(bash("git commit-tree HEAD^{tree}", repo)) == "deny"
 
 
+def test_guard_run_as_a_hook_denies_with_exit_code_2_and_the_reason_on_stderr() -> None:
+    event = {"tool_name": "Write", "tool_input": {"file_path": str(REPO / ".check-stamp")}}
+
+    result = hook_process("guard.py", event)
+
+    assert result.returncode == 2
+    assert "writes a gate stamp by hand" in result.stderr
+
+
+def test_guard_run_as_a_hook_asks_with_json_on_stdout() -> None:
+    event = {"tool_name": "Bash", "tool_input": {"command": "make nuke"}}
+
+    result = hook_process("guard.py", event)
+
+    assert result.returncode == 0
+    assert json.loads(result.stdout)["hookSpecificOutput"]["permissionDecision"] == "ask"
+    assert decision(result) == "ask"
+
+
 def test_guard_fails_closed() -> None:
     result = subprocess.run(
         [sys.executable, str(HOOKS / "guard.py")],
@@ -959,7 +1021,7 @@ def test_guard_fails_closed() -> None:
         check=False,
     )
 
-    assert decision(result) == "ask"
+    assert decision(result) == "crash"
     assert "guard.py failed" in result.stdout
 
 
@@ -1936,45 +1998,30 @@ def test_a_script_file_or_a_module_keeps_the_piped_text_as_data(command: str) ->
     assert decision(bash(command)) == "allow"
 
 
-def load_guard(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
-    """The guard's names without running its stdin check, to call `check` with a stub inside."""
-    source = (HOOKS / "guard.py").read_text()
-    head = source.split("\ntry:\n    check(json.load(sys.stdin))")[0]
-    names: dict[str, Any] = {"__name__": "guard_under_test", "__file__": str(HOOKS / "guard.py")}
-    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(REPO))
-    monkeypatch.syspath_prepend(str(REPO))
-    exec(compile(head, "guard.py", "exec"), names)
-    return names
-
-
 def test_a_failure_in_one_text_of_the_command_does_not_lower_a_deny_in_the_other(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    guard = load_guard(monkeypatch)
-
     def check_bash(text: str) -> None:
         if text == "echo ab":
             raise RuntimeError("a regex gave up")
-        raise guard["VerdictError"]("deny", "the raw text is denied")
+        raise GUARD.VerdictError("deny", "the raw text is denied")
 
-    guard["check_bash"] = check_bash
+    monkeypatch.setattr(GUARD, "check_bash", check_bash)
 
-    with pytest.raises(guard["VerdictError"]) as raised:
-        guard["check"]({"tool_name": "Bash", "tool_input": {"command": "echo a\\\nb"}})
+    with pytest.raises(GUARD.VerdictError) as raised:
+        GUARD.check({"tool_name": "Bash", "tool_input": {"command": "echo a\\\nb"}})
 
     assert raised.value.kind == "deny"
 
 
 def test_a_failure_in_every_text_of_the_command_asks(monkeypatch: pytest.MonkeyPatch) -> None:
-    guard = load_guard(monkeypatch)
-
     def check_bash(text: str) -> None:
         raise RuntimeError("a regex gave up")
 
-    guard["check_bash"] = check_bash
+    monkeypatch.setattr(GUARD, "check_bash", check_bash)
 
-    with pytest.raises(guard["VerdictError"]) as raised:
-        guard["check"]({"tool_name": "Bash", "tool_input": {"command": "echo a\\\nb"}})
+    with pytest.raises(GUARD.VerdictError) as raised:
+        GUARD.check({"tool_name": "Bash", "tool_input": {"command": "echo a\\\nb"}})
 
     assert raised.value.kind == "ask"
 
