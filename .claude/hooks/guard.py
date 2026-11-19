@@ -1,45 +1,57 @@
 #!/usr/bin/env python3
 """PreToolUse guard for AGENTS.md's hard rules.
 
+It reads the text of a command, so it catches a mistake in the usual form, not a bypass
+(docs/planning/13-harness.md, section 2): a renamed, encoded or split command, or a script written
+first and run later, is forbidden by the rules and is not looked for here.
+
 deny (exit 2, stderr is the reason): writes to secret files, force push, DROP, TRUNCATE, DELETE
 without WHERE, advancing or dropping a replication slot, pg_logical_emit_message, shell writes to
 .env, writes to the hooks and settings in this repository's .claude/, a gate stamp written by hand
 (a file tool on .verify-stamp, .check-stamp or .review-stamp; a command that names one of them and
-is not a plain read; `agent_state.py stamp` or `check` run directly; inline Python that names
-agent_state; `agent_state.py tree` and `show` are reads), `make check` with a flag, a variable or
-a make or pytest option variable that could stamp failing checks, and `git commit` unless the gate
-holds on this working tree. The gate: a full `make verify` always (passed on this
-tree, or run right before the commit in the same `&&` chain); and when code changed (not Markdown
-and docs/), also `make check` (.check-stamp) and a reviewer verdict other than "return"
-(.review-stamp, written by review_stamp.py). A stamp counts when it is fresh for the tree or only
-Markdown and docs/ changed since it.
-ask (a permission prompt, so the owner's ok is a click): replay and scenarios, source, silver and
-other lake writes, Iceberg maintenance and its DAGs, push, rebase, history rewrites, discarded work,
-volume, image and recursive deletes, stopped, removed or recreated containers (`make down` as well;
-not the scheduler stop of the verify cycle), Kafka topic settings, connector, catalog and Postgres
-settings, DDL, actions on GitHub, Windows and WSL settings, edits of the agent roles, skills and
-rules and of scripts/agent_state.py, which decides what a stamp means; and a command that shows a
-secret: a read of .env (cat, grep, jq, source, a `<` redirect, `$(<.env)`, inline Python and the
-like; not .env.example and not `--env-file .env`), `docker compose config` without -q or a listing
-flag (--services, --profiles, --images, --volumes), `docker inspect` without a --format or with one
-that prints Env or the whole object (`json`, a lone dot, `.Config` with no field), and `env` or
-`printenv` run by `docker exec` or `compose exec|run`, or a read of /proc/<pid>/environ.
+is not a read; `agent_state.py stamp` or `check` run directly; Python that names agent_state and one
+of its writers; `agent_state.py tree` and `show` are reads), and `git commit` unless the gate holds
+on this working tree. The gate: a full `make verify` always (passed on this tree, or run right
+before the commit in the same `&&` chain); and when code changed (not Markdown and docs/), also
+`make check` (.check-stamp) and a reviewer verdict other than "return" (.review-stamp, written by
+review_stamp.py). A stamp counts when it is fresh for the tree or only Markdown and docs/ changed
+since it.
+ask (a permission prompt, so the owner's ok is a click): replay and scenarios, source, bronze,
+silver, gold and other lake writes, Iceberg maintenance and its DAGs, push, rebase, history
+rewrites, discarded work (`checkout -- path`, `switch -f`), volume, image and recursive deletes
+(`find -delete` too), stopped, removed or recreated containers (`make down` as well; not the
+scheduler stop of the verify cycle, when the scheduler is the only target), Kafka topic settings,
+connector, catalog and Postgres settings (a publication too), DDL, actions on GitHub, Windows and
+WSL settings, edits of the agent roles, skills and rules and of scripts/agent_state.py, which
+decides what a stamp means; and a command that shows a secret: a read of .env (cat, grep, jq,
+source, a `<` redirect, `$(<.env)` and the like; not .env.example and not `--env-file .env`), the
+name .env in a command with an interpreter or `eval` (it may read the file), `docker compose
+config` without -q or a listing flag (--services, --profiles, --images, --volumes), `docker
+inspect` without a --format or with one that prints Env or the whole object (`json`, a lone dot,
+`.Config` with no field), and `env` or `printenv` run by `docker exec` or `compose exec|run`, or a
+read of /proc/<pid>/environ.
+The words are checked in the commands that run something. The text is cut into commands at
+separators outside quotes (a newline in quotes does not end one), a comment is dropped as bash
+does, and the lines of a here-document belong to the command that has the `<<` (the last
+command of its line may be another one). A command made
+only of searches and reads (grep, rg, echo, cat, git log and the like, no substitution or
+redirect) runs none of the words in it, so they are data, unless a command after it in the same
+pipeline runs the text (`echo "drop table t" | psql`; every command of a group `( ... )` or
+`{ ...; }` before a pipe feeds it). The quoted message of `git commit -m` is data too (cut
+inside that one command, also in a chain) when it has no substitution. Two more are data only
+when the whole text is that one simple command, with no `;`, `&&`, `||`, `|`, `&` or second
+command: the body of a here-document that a `cat` writes to a file (and the body only when the
+delimiter is quoted or it has no `$(...)` or backtick), and the message that is
+`"$(cat <<'EOF' ... EOF)"`. In a longer text they are read as any command is.
+The scan gives way where it does not model the text: with a substitution, a process
+substitution, a compound command (`for`, `while`, `if`, `case`, `eval`...), a here-document of a
+command other than `cat`, a redirect between the bracket of a group and its pipe, or quotes that
+do not balance, no read is data and the whole text is the text that runs, as for any command.
+The rules for writes to .env, the hooks, the rules and the stamp code read the whole text when
+something runs (a stamp name only in the commands that run). The secret check looks at the
+whole command, and the connector and catalog HTTP rule at the whole text that runs something.
 The match is on the command text, and on the text with each backslash-newline joined too (a
 comment ends at the newline, so the joined text can hide a command): the stricter answer wins.
-Inline code is code in `-c` or `-e` (after options whose quoted values may hold a `;`), a
-here-document or here-string, `-`, `< <(...)`, or the stdin of an interpreter at the end of a pipe
-with no script file or module (a wrapper such as `nice -n 5`, `timeout 60`, a redirect or a group
-bracket may stand around it). A shell counts only for the stdin forms: a here-document with no
-script file, or a pipe. A token scan of each simple command adds what those patterns cannot tell:
-an option with a value is not a script file (`bash -euo pipefail`, `-o name`, `--rcfile f`,
-`python3 --check-hash-based-pycs never`), `-s` reads the script from stdin whatever follows, `--`
-and `-` end the options, a group or `>(...)` after a pipe feeds its commands, and a process
-substitution given as the script is code (`python3 <(...)`, `bash <(...)`); node `-p`, `--print`,
-`--eval`, perl `-E` and pypy count as inline code. A word that starts with `#` is a comment up
-to the next line break (a `;` or `|` does not end it): it is no script file. The scan only adds
-to the patterns. A command made only of searches and reads (grep, rg, git log, cat and the like,
-no substitution or redirect) runs none of these words and passes, but the secret check runs before
-that exit.
 If the guard itself fails, or fails on one of the two texts, it asks instead of letting the call
 through (a deny of the other text still wins).
 """
@@ -51,7 +63,7 @@ import shlex
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, NoReturn
+from typing import Any, NamedTuple, NoReturn
 
 ROOT = Path(os.environ.get("CLAUDE_PROJECT_DIR") or Path(__file__).resolve().parents[2])
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -66,7 +78,7 @@ GIT = (
     + QUOTED_OR_WORD
     + r"|--(git-dir|work-tree|namespace|config-env|attr-source)\s+"
     + QUOTED_OR_WORD
-    + r"|--?[\w-]+(=\S+)?))*\s+[\"']?"
+    + r"|--?\w[\w-]*(=\S+)?))*\s+[\"']?"
 )
 FORCE_PUSH = re.compile(GIT + r"push\b[^\n;&|]*(\s--force(-with-lease)?\b|\s-[a-z]*f\b|\s\+\S)")
 DROP = re.compile(r"\bdrop\s+(table|view|schema|namespace|database|materialized\s+view)\b")
@@ -74,10 +86,11 @@ TRUNCATE = re.compile(r"\btruncate\s+(table\s+)?[a-z_\"][\w.\"]*")
 DELETE = re.compile(r"\bdelete\s+from\s+[\w.\"]+([^;]*)")
 # Moving the slot past records skips them for good; dropping it forces a new initial snapshot.
 SLOT_SKIP = re.compile(r"\bpg_(replication_slot_advance|drop_replication_slot)\b")
+# A file named `.env`, not any `*.env`: docker/airflow/airflow.env is no secret file.
 SHELL_WRITE_ENV = re.compile(
-    r"(>>?|\btee\b(\s+-a)?)\s*[\"']?[^\s;|&]*\.env\b(?!\.example)"
-    r"|\bsed\b[^\n;|&]*\s-i\S*[^\n;|&]*\.env\b(?!\.example)"
-    r"|\b(cp|mv|install|ln)\b[^\n;|&]*\s[\"']?[^\s;|&]*\.env(\.(?!example\b)[^\s;|&\"']*)?[\"']?"
+    r"(>>?|\btee\b(\s+-a)?)\s*[\"']?([^\s;|&]*/)?\.env\b(?!\.example)"
+    r"|\bsed\b[^\n;|&]*\s-i\S*[^\n;|&]*(?<![\w.-])\.env\b(?!\.example)"
+    r"|\b(cp|mv|install|ln)\b[^\n;|&]*\s[\"']?([^\s;|&]*/)?\.env(\.(?!example\b)[^\s;|&\"']*)?[\"']?"
     r"(\s+[12]?>>?\s*\S+)*\s*($|[;&|\n])"
 )
 # Pg_logical_emit_message lands in topic oltp.message and stopped CDC once (ADR-023).
@@ -98,7 +111,9 @@ IN_REPO = r"(?:^|(?<=[\s\"'=>])|" + re.escape(str(ROOT)) + r"/)(?:\./)?"
 
 
 def shell_write(target: str) -> re.Pattern[str]:
-    """A shell command that writes, moves or removes a file of this repository matching target."""
+    """A shell command that writes, moves or removes a file of this repository matching target.
+    `open(path)` counts only with a mode that writes (a `w`, `a`, `x` or `+` in the mode, given
+    second or as `mode=`): a read of the file is no edit."""
     path = IN_REPO + target
     return re.compile(
         r"(>>?|\btee\b(\s+-a)?)\s*[\"']?"
@@ -112,6 +127,7 @@ def shell_write(target: str) -> re.Pattern[str]:
         + r"[^\s;|&\"']*[\"']?(\s+[12]?>>?\s*\S+)*\s*($|[;&|\n])"
         + r"|\bopen\([^)]*"
         + path
+        + r"[^)]*(?:,\s*[\"'][^\"')]*[wax+]|\bmode\s*=\s*[\"'][^\"')]*[wax+])"
     )
 
 
@@ -120,83 +136,49 @@ SHELL_WRITE_RULES = shell_write(
     r"(\.claude/(agents|skills)/|AGENTS\.md|CLAUDE\.md|docs/agent-rules\.md"
     r"|docs/planning/13-harness\.md|scripts/agent_state\.py)"
 )
-# A gate stamp named by a command that is not a plain read, the stamp code run directly, or inline
-# Python that names the module: every form of writing a stamp that the command text shows.
+# A gate stamp named by a command that is not a read, the stamp code run directly, or Python that
+# names the module and one of the functions that write a stamp.
 STAMP_NAME = re.compile(r"\.(verify|check|review)-stamp\b")
 STAMP_CLI = re.compile(r"\bagent_state(\.py)?[\"']?\s+[\"']?(stamp|check)\b")
-# The rest of one simple command, up to a separator outside quotes: the value of an option such as
-# `-X 'a;b'` may hold one. The plain run is tried first; the quoted run is the way out when a
-# separator in quotes ends it too early.
-SEGMENT = r"(?:[^\n;|&]*|(?:[^\n;|&'\"\\]|\\.|'[^']*'|\"[^\"]*\")*)"
+STAMP_WRITERS = re.compile(r"\b(write_stamp|record_review|_store|run_check)\b")
+PYTHON = re.compile(r"\b(python|pypy)[\d.]*\b")
 # A backslash right before a newline joins the two lines (an even run of backslashes does not).
 LINE_CONTINUATION = re.compile(r"(?<!\\)((?:\\\\)*)\\\n")
-# What a pipe may put between itself and the interpreter that reads the piped text as its code: a
-# group bracket, a variable, a wrapper with its options (`nice -n 5`, `timeout 60`, `sudo -u x`).
-# A word of digits with an optional unit (`5`, `60s`), a wrapper name (`env`, `uv run`) and an
-# assignment (`A=1`) are items of their own, never the value of an option (`-a 5`, `-a env`,
-# `-a A=1 nice`), so there is one way to split a run of such pairs and a mismatch costs one pass,
-# not 2^n (`nice` and 22 pairs of `-a 5` took seconds). A value that only looks like a number
-# (`0.5`, `1.5s`, `5x`) is still a value. The pattern was compared with the one before on
-# generated forms: none that was denied or asked for before passes now.
-WRAPPER_NAMES = r"env|sudo|time|exec|nohup|nice|command|xargs|timeout|stdbuf|setsid|ionice"
-WRAPPER_ITEM = r"(?:(?:\d+[smhd]?|" + WRAPPER_NAMES + r"|(?:uv|poetry)\s+run)(?:\s|$))"
-WRAPPER_VALUE = r"(?!" + WRAPPER_ITEM + r"|[A-Za-z_]\w*=)[^\s-]\S*"
-WRAPPER_ARGS = r"(?:\s+(?:-\S+(?:\s+" + WRAPPER_VALUE + r")?|\d+[smhd]?))*"
-CODE_RUNNERS = r"(?:python|pypy)[\d.]*|perl|ruby|node|bash|sh|zsh|dash|ksh"
-AFTER_PIPE = (
-    r"(?<!\|)\|(?!\|)&?\s*(?:[({]\s*)*"
-    r"(?:(?:(?:"
-    + WRAPPER_NAMES
-    + r"|uv\s+run|poetry\s+run|[A-Za-z_]\w*=\S*)"
-    + WRAPPER_ARGS
-    + r")\s+)*(?:[\w.-]*/)*"
+# A here-document: `<<` or `<<-` and its delimiter, quoted (`'EOF'`, `"EOF"`, `\EOF`) or not. The
+# lines up to the delimiter belong to the command that has the `<<`, not to a command of their
+# own. A quoted delimiter turns off expansion in the body, and the body of a `cat` that writes
+# to a file is then data; an unquoted one expands `$(...)` and backticks, which run. Only a
+# delimiter that is one word is read (`<<END-NOTES` is not), and a body counts as data only when
+# its delimiter line is found; otherwise the lines are checked as commands (stricter).
+HEREDOC = re.compile(r"(?<!<)<<(?!<)(-?)[ \t]*(?:'(\w+)'|\"(\w+)\"|(\\?)(\w+))(?=[\s;&|<>()]|$)")
+# Compound commands: the scan reads their words one command at a time and does not follow what
+# they group, so a text that has one takes no read as data.
+COMPOUND = {
+    "for", "while", "until", "if", "then", "else", "elif", "fi", "case", "esac", "select",
+    "function", "do", "done", "eval",
+}  # fmt: skip
+# The quoted message of `git commit -m` (several -m are several messages), and the message that
+# is `"$(cat <<'EOF' ... EOF)"`. Both are cut inside the one command they belong to.
+COMMIT_MESSAGE = re.compile(
+    r"(?P<head>\s(?:-[a-zA-Z]*m|--message)[\s=]*)(?P<message>\"(?:[^\"\\]|\\.)*\"|'[^']*')"
 )
-# The interpreter ends its command or goes on with options, a redirect or /dev/stdin: it has no
-# script file or module to run, so the piped text is its code (or `-c` takes it from stdin by
-# xargs). With a script file or `-m module` the piped text is only its data. `-X` and `-W` take
-# the next word as their value.
-READS_STDIN = (
-    r"(?=(?:\s+(?:-[XW]\s+\S+|-[^\s\-mc]\S*|--\S+))*\s*(?:$|[\n;&|)}]|\d*[<>])"
-    r"|\s+-(?:\s|$)|\s+-[a-zA-Z]*c\b|\s+/dev/(?:stdin|fd/0)\b)"
+CAT_MESSAGE = re.compile(
+    r"(?P<head>\s(?:-[a-zA-Z]*m|--message)[\s=]*)"
+    r"\"\$\(\s*cat\s*<<-?\s*(?P<quote>['\"]?)(?P<delimiter>\w+)(?P=quote)[ \t]*\n"
+    r"(?:.*?\n)?[ \t]*(?P=delimiter)[ \t]*\n?[ \t]*\)\"",
+    re.S,
 )
-INLINE_PYTHON = re.compile(
-    r"\bpython[\d.]*\b" + SEGMENT + r"(?:\s-[a-zA-Z]*c\b|<\s*<\()|<<|\bpython[\d.]*\s+-(\s|$)"
-    r"|" + AFTER_PIPE + r"python[\d.]*\b" + READS_STDIN
-)
-# make check stamps the tree it checked: a flag such as -i or -o, a variable, or a make or pytest
-# option variable anywhere in the command could make it stamp failing checks.
-MAKE_CHECK_ENV = re.compile(r"\b(PYTEST_ADDOPTS|MAKEFLAGS|MFLAGS|GNUMAKEFLAGS)\b")
-REDIRECT = re.compile(r"[012]?(>>?|<)&?\S*|&>>?\S*")
-
-
-def bends_make_check(command: str) -> bool:
-    for segment in re.split(r"&&|\|\||[;|&\n]", command):
-        words = segment.split()
-        if "make" not in words:
-            continue
-        at = words.index("make")
-        args = [word for word in words[at + 1 :] if not REDIRECT.fullmatch(word)]
-        if "check" in args and (
-            args != ["check"]
-            or any("=" in word for word in words[:at])
-            or MAKE_CHECK_ENV.search(command)
-        ):
-            return True
-    return False
-
-
-# The Debezium connector (8083) and the Lakekeeper catalog (8181) change by any HTTP write.
+# The Debezium connector (8083) and the Lakekeeper catalog (8181) change by any HTTP write, with
+# the address anywhere in the text (`C=...:8083/x; curl -X PUT $C/y`).
 HTTP_WRITE = r"(?=[^\n]*:(8083|8181)/)[^\n]*"
 COMMIT = re.compile(GIT + r"commit\b")
-# A full verify chained with && before the commit: the commit only runs if it passed.
-VERIFY_THEN_COMMIT = re.compile(r"\bmake\s+verify(\s[^;|\n]*?)?\s*&&[^;|\n]*" + GIT + r"commit\b")
 
 ASK = [
     (
         re.compile(
             r"\bmake\b[^;&|\n]*\s(replay-burst|replay-start|replay-live|replay-reset|replay-load|"
             r"silver|bootstrap|nuke|iceberg-demo|chaos-[\w-]+|cdc-snapshot|migrate|"
-            r"watermark-demo|watermark-live)(\s|$)"
+            r"watermark-demo|watermark-live)(?=[\s;&|<>()]|$)"
         ),
         "spends the replay budget or writes to the source, bronze, silver or the demo tables",
     ),
@@ -214,10 +196,12 @@ ASK = [
     (re.compile(GIT + r"commit\b[^\n;&|]*--amend\b"), "git commit --amend"),
     (re.compile(r"\bdocker\b[^\n;&|]*\bdown\b[^\n;&|]*\s(-v|--volumes)\b"), "removes volumes"),
     (re.compile(r"\bdocker\s+(volume\s+(rm|prune)|system\s+prune)\b"), "removes volumes"),
-    (re.compile(r"\brm\s+(-[a-z]*r|--recursive)"), "recursive delete"),
+    (re.compile(r"\brm\s+(-[a-z]*r|--recursive)|\bfind\b[^\n;&|]*\s-delete\b"), "recursive delete"),
     (
         re.compile(
-            GIT + r"(clean\b[^\n;&|]*\s-[a-z]*f|checkout\s+(--\s|\.(\s|$))|restore\b"
+            GIT + r"(clean\b[^\n;&|]*\s-[a-z]*f"
+            r"|checkout\b[^\n;&|]*\s(--|-f|--force|\.)(?=[\s;&|<>()]|$)|restore\b"
+            r"|switch\b[^\n;&|]*\s(-f|--force|--discard-changes)\b"
             r"|stash\s+(drop|clear)|branch\s+-d\b)"
         ),
         "discards uncommitted work or a branch",
@@ -263,19 +247,23 @@ ASK = [
         ),
         "removes images: the MinIO images exist only in the local store (review item 6)",
     ),
-    # `compose` also catches $COMPOSE, the Makefile's name for the compose command.
+    # `compose` also catches $COMPOSE, the Makefile's name for the compose command. The scheduler
+    # stop of the verify cycle is free only when the scheduler is the one target.
     (
         re.compile(
-            r"\b(docker|compose)\b[^\n;&|]*\s(down|rm|container\s+(rm|prune))\b"
+            r"\b(docker|compose)\b(?![^\n;&|]*\bexec\b)[^\n;&|]*\s(down|rm|container\s+(rm|prune))\b"
             r"|\b(docker|compose)\b(?![^\n;&|]*\bexec\b)[^\n;&|]*\s(stop|kill|restart|pause)\b"
-            r"(?![^\n;&|]*airflow-scheduler)"
+            r"(?!\s+airflow-scheduler\s*(?:$|[;&|\n]))"
         ),
         "stops or removes stack containers (the scheduler stop of the verify cycle is free)",
     ),
     # A changed image recreates spark-bronze, and its start sets the bronze metadata property.
     # `make down` runs `compose down`, which the rule above asks for by its own words.
     (
-        re.compile(r"\bmake\b[^;&|\n]*\s(start|up|down)(\s|$)|\bcompose\b[^\n;&|]*\sup(\s|$)"),
+        re.compile(
+            r"\bmake\b[^;&|\n]*\s(start|up|down)(?=[\s;&|<>()]|$)"
+            r"|\bcompose\b[^\n;&|]*\sup(?=[\s;&|<>()]|$)"
+        ),
         "make start and up may recreate spark-bronze or minio (ADR-025 bronze metadata property,"
         " MinIO image), make down removes the stack containers",
     ),
@@ -293,11 +281,7 @@ ASK = [
         "acts on GitHub or a registry, visible outside the laptop",
     ),
     (
-        re.compile(
-            HTTP_WRITE + r"(-x\s*|--request[\s=]*)(post|put|patch|delete)\b"
-            r"|" + HTTP_WRITE + r"\s(-d|--data(-raw|-binary|-urlencode)?|--json)[\s=]"
-            r"|scripts/lakekeeper/(protect|register|bootstrap)\.sh"
-        ),
+        re.compile(r"scripts/lakekeeper/(protect|register|bootstrap)\.sh|connect/register\.sh"),
         "changes the Debezium connector or the Lakekeeper catalog",
     ),
     (
@@ -311,10 +295,17 @@ ASK = [
         re.compile(
             r"\b(insert\s+into|update|copy)\s+\"?(shop|replay|cdc)\"?\."
             r"|\bdelete\s+from\s+\"?(shop|replay)\"?\."
-            r"|\b(create|alter)\s+(publication|subscription)\b|\balter\s+(role|database)\b"
+            r"|\b(create|alter|drop)\s+(publication|subscription)\b|\balter\s+(role|database)\b"
             r"|\bpg_(terminate_backend|create_logical_replication_slot)\b"
         ),
         "writes to the source database or its replication setup",
+    ),
+    (
+        re.compile(
+            r"\b(insert\s+into|update|delete\s+from|merge\s+into)\s+\"?(lake\.)?\"?"
+            r"(bronze|silver|gold)\"?\."
+        ),
+        "writes to bronze, silver or gold by hand (silver only through make silver, gold only dbt)",
     ),
     (
         re.compile(
@@ -322,16 +313,23 @@ ASK = [
         ),
         "Windows and WSL settings are the owner's",
     ),
-    (
-        re.compile(r"connect/register\.sh|:8083/connectors\S*[^\n]*-x\s*(put|post|delete)"),
-        "changes the Debezium connector",
-    ),
-    (re.compile(r"-x\s*(put|post|delete)[^\n]*:8083/connectors"), "changes the Debezium connector"),
     (re.compile(r"\balter\s+system\b"), "changes Postgres settings"),
-    (re.compile(r"\b(alter|create)\s+(table|schema|view|namespace)\b"), "DDL outside migrations"),
+    # `show create table` reads the DDL; it does not write it.
+    (
+        re.compile(r"(?<!show )\b(alter|create)\s+(table|schema|view|namespace)\b"),
+        "DDL outside migrations",
+    ),
 ]
 
-READERS = {"cd", "ls", "cat", "head", "tail", "wc", "cut", "nl", "grep", "egrep", "fgrep", "rg"}
+HTTP_ASK = re.compile(
+    HTTP_WRITE + r"(-x\s*|--request[\s=]*)(post|put|patch|delete)\b"
+    r"|" + HTTP_WRITE + r"\s(-d|--data(-raw|-binary|-urlencode)?|--json)[\s=]"
+)
+
+READERS = {
+    "cd", "ls", "cat", "head", "tail", "wc", "cut", "nl", "grep", "egrep", "fgrep", "rg",
+    "echo", "printf", "stat", "test", "[", "file", "du", "diff", "pwd", "true", "realpath",
+}  # fmt: skip
 GIT_READERS = {
     "git log",
     "git show",
@@ -341,13 +339,15 @@ GIT_READERS = {
     "git status",
     "git check-ignore",
 }
-SEPARATORS = {"&&", "||", ";", "|"}
 NULL_REDIRECT = re.compile(r"[ \t]([12]?>[ \t]*/dev/null|2>&1)(?=[ \t]|$)")
-# Substitution, ANSI-C quoting shlex reads differently, a newline that hides a second command.
-RUNS_MORE = re.compile(r"\$[(\x27\"]|`|<\(|\n")
+# Substitution, ANSI-C quoting shlex reads differently: a command inside the text runs words that
+# no word split shows.
+RUNS_MORE = re.compile(r"\$[(\x27\"]|`|[<>]\(")
 # rg --pre and --hostname-bin, git grep -O / --open-files-in-pager (any prefix git accepts) run a
 # program; git log and diff --output write a file.
 RUNS_PROGRAM = re.compile(r"--pre|--hostname-bin|--op|--output|-[a-zA-Z]*O")
+OPERATORS = set("();<>|&")
+LONE_PIPE = re.compile(r"(?<!\|)\|(?!\|)")
 
 # Showing a secret: a read of .env, the compose file with the values of .env filled in, the Env of
 # a container. Checked on the words of each command: `--env-file .env` hands the file to compose
@@ -356,14 +356,10 @@ ENV_FILE = re.compile(r"(^|/)\.env(\.(?!example$)[^/]*)?$")
 ENV_TEXT = re.compile(r"(?:^|[\s\"'=/(])\.env(?:\.(?!example\b)\w+)?(?![\w.-])")
 # `--env-file .env` hands the file to compose; the command does not read it.
 ENV_FILE_OPTION = re.compile(r"--env-file[=\s]+\S+")
-INTERPRETERS = r"python[\d.]*|perl|ruby|node"
-# The code is an argument (`-c`, `-e`), a here-document or here-string, `-` for stdin, a process
-# substitution on stdin, or the text of an earlier command of the pipeline. A shell counts only
-# when it reads its stdin: `bash -c` is read word by word below.
-INLINE_CODE = re.compile(
-    r"\b(" + INTERPRETERS + r")\b" + SEGMENT + r"(\s-[a-zA-Z]*[ce]\b|<<|\s-(\s|$)|<\s*<\()"
-    r"|(?<![\w.-])(bash|sh|zsh|dash|ksh)\b(?:\s+-\S+)*\s*<<"
-    r"|" + AFTER_PIPE + r"(" + INTERPRETERS + r"|bash|sh|zsh|dash|ksh)\b" + READS_STDIN
+# An interpreter, a shell or `eval` in the same text as the name .env: it may read the file by a
+# name the words do not show (a variable, a pipe, a path built in code).
+INTERPRETER = re.compile(
+    r"(?<![\w./-])(?:[\w.-]*/)*(python|pypy|perl|ruby|node|bash|sh|zsh|dash|ksh|eval)[\d.]*(?![\w.-])"
 )
 # The text of $(...) and of a backtick pair, which a quoted word hides from the word split.
 SUBSTITUTION = re.compile(r"\$\(([^()]*)\)|`([^`]*)`")
@@ -460,61 +456,257 @@ def ask(reason: str) -> NoReturn:
     raise VerdictError("ask", reason)
 
 
-def reads_only(command: str) -> bool:
-    """A pipeline of searches and reads: the words in it are data, nothing runs them."""
-    if RUNS_MORE.search(command):
-        return False
-    command = NULL_REDIRECT.sub(" ", command)
-    lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
-    lexer.whitespace_split = True
-    lexer.commenters = ""  # bash reads `#` inside a word as text, shlex as a comment
-    try:
-        tokens = list(lexer)
-    except ValueError:  # unbalanced quotes
-        return False
-    segments: list[list[str]] = [[]]
-    for token in tokens:
-        if token in SEPARATORS:
-            segments.append([])
-        elif set(token) <= set("();<>|&") or RUNS_PROGRAM.match(token):
-            return False  # a redirect, a subshell, a background job or a program to run
-        else:
-            segments[-1].append(token)
-    return all(
-        segment and (segment[0] in READERS or " ".join(segment[:2]) in GIT_READERS)
-        for segment in segments
+PIPES = ("|", "|&")
+
+
+class Command(NamedTuple):
+    text: str  # as written, with the comments and the message of a commit gone
+    words: list[str]
+    piped: bool  # a pipe follows: the next command reads its output
+    read: bool  # a search or a read whose words nothing runs
+    end: str  # the operator after it: `;`, `&&`, `|`, a newline, a bracket, empty at the end
+
+
+def is_read(words: list[str]) -> bool:
+    """A search or a read: no redirect, subshell or program to run."""
+    return (words[0] in READERS or " ".join(words[:2]) in GIT_READERS) and not any(
+        set(word) <= OPERATORS or RUNS_PROGRAM.match(word) for word in words
     )
 
 
-def shell_words(command: str) -> tuple[list[list[str]], list[str]] | None:
-    """The words of each simple command in the text, and the files a `<` redirect reads. A
-    separator, a subshell, a substitution, a backtick or a newline starts a new command. None when
-    the quotes do not balance."""
-    lexer = shlex.shlex(
-        command.replace("\n", " ; ").replace("`", " ( "), posix=True, punctuation_chars=True
-    )
-    lexer.whitespace_split = True
-    lexer.commenters = ""  # bash reads `#` inside a word as text, shlex as a comment
-    try:
-        tokens = list(lexer)
-    except ValueError:
+def heredoc_end(text: str, start: int, delimiter: str) -> tuple[int, int]:
+    """Where the body of a here-document that starts at `start` ends: the start of the delimiter
+    line, and the end of that line (the end of the text when there is none)."""
+    line_start = start
+    while line_start < len(text):
+        line_end = text.find("\n", line_start)
+        line_end = len(text) if line_end < 0 else line_end
+        if text[line_start:line_end].strip() == delimiter:
+            return line_start, line_end
+        line_start = line_end + 1
+    return len(text), len(text)
+
+
+def scan(text: str) -> list[tuple[str, str]] | None:
+    """The text cut into commands, each with the operator that ends it: `;`, `&&`, `||`, `|`,
+    `|&`, `&`, a bracket, a backtick or a newline, outside quotes. A comment (a word that starts
+    with `#`, outside quotes) runs to the line break and is dropped. A backslash before a line
+    break joins the lines. The lines of a here-document, up to its delimiter, stay in the command
+    that has the `<<` (not in the last command of the line): no comment is dropped in them and no
+    quote counts; the body is cut only when that command is a `cat` that writes a file (the `>`
+    in the same command), the body is data (a quoted delimiter, or no substitution in it) and
+    the text is that one command: no command before it, one here-document, nothing after it.
+    None when the quotes do not balance."""
+    parts: list[tuple[str, str]] = []
+    current: list[str] = []
+    # Here-documents whose body starts at the next newline: delimiter, quoted, and the number of
+    # the command that has the `<<` (the commands cut so far).
+    pending: list[tuple[str, bool, int]] = []
+    quote = ""
+    at = 0
+    while at < len(text):
+        char = text[at]
+        last = current[-1][-1:] if current else ""
+        if quote:
+            if char == "\\" and quote == '"':
+                current.append(text[at : at + 2])
+                at += 2
+                continue
+            quote = "" if char == quote else quote
+        elif char == "\\":
+            current.append(" " if text[at + 1 : at + 2] == "\n" else text[at : at + 2])
+            at += 2
+            continue
+        elif char in "'\"":
+            quote = char
+        elif char == "#" and (not last or last in " \t\n;|&()<>`"):
+            line_end = text.find("\n", at)
+            at = len(text) if line_end < 0 else line_end
+            continue
+        elif char == "<" and last != "<" and (heredoc := HEREDOC.match(text, at)):
+            pending.append(
+                (
+                    heredoc[2] or heredoc[3] or heredoc[5],
+                    bool(heredoc[2] or heredoc[3] or heredoc[4]),
+                    len(parts),
+                )
+            )
+            current.append(heredoc[0])
+            at = heredoc.end()
+            continue
+        elif char == "\n" and pending:
+            line = "".join(current)
+            body_start = at + 1
+            for delimiter, quoted, owner in pending:
+                body_end, after = heredoc_end(text, body_start, delimiter)
+                body = text[body_start:body_end]
+                own = line if owner == len(parts) else ""  # still the command with the `<<`
+                writes_file = re.match(r"\s*cat\b", own) and ">" in own
+                # Data only when the text is that one command and nothing else.
+                alone = not parts and len(pending) == 1 and not text[after:].strip()
+                found = body_end < len(text)  # the delimiter line exists
+                data = found and alone and writes_file and (quoted or not RUNS_MORE.search(body))
+                piece = "\n" + ("" if data else body) + text[body_end:after]
+                if owner == len(parts):
+                    current.append(piece)
+                else:  # the body belongs to an earlier command of the line
+                    parts[owner] = (parts[owner][0] + piece, parts[owner][1])
+                body_start = after + 1
+            pending = []
+            at = after  # the newline after the delimiter ends the command
+            continue
+        elif char in ";\n()`" or char in "|&":  # an operator; a quoted `f(x)` is a word
+            if char == "&" and ((last and last in "<>") or text[at + 1 : at + 2] == ">"):
+                current.append(char)  # the `&` of `2>&1` and `&>`
+                at += 1
+                continue
+            pair = text[at : at + 2]
+            operator = pair if pair in ("&&", "||", "|&") else char
+            parts.append(("".join(current), operator))
+            current = []
+            at += len(operator)
+            continue
+        current.append(char)
+        at += 1
+    if quote:  # unbalanced quotes: the commands are unknown, the caller reads the whole text
         return None
-    segments: list[list[str]] = [[]]
+    parts.append(("".join(current), ""))
+    return parts
+
+
+def words_of(text: str) -> list[str]:
+    lexer = shlex.shlex(NULL_REDIRECT.sub(" ", text), posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    lexer.commenters = ""  # bash reads `#` inside a word as text, shlex as a comment
+    try:
+        return list(lexer)
+    except ValueError:
+        return text.split()
+
+
+def without_message(text: str, alone: bool = False) -> str:
+    """The command of one `git commit` without its messages: the quoted text after `-m` or
+    `--message`, and, when the text is that one command (`alone`), the message that is
+    `"$(cat <<'EOF' ... EOF)"`. A message with another substitution runs it and stays."""
+    if not COMMIT.search(text.lower()):  # `git -C dir commit`: the pattern reads lower case
+        return text
+
+    def cat_message(found: re.Match[str]) -> str:
+        expands = not found["quote"] and RUNS_MORE.search(found[0][len(found["head"]) + 3 :])
+        return found[0] if expands or not alone else found["head"] + '""'
+
+    text = CAT_MESSAGE.sub(cat_message, text)
+
+    def cut(found: re.Match[str]) -> str:
+        message = found["message"]
+        return found[0] if "$(" in message or "`" in message else found["head"] + '""'
+
+    return COMMIT_MESSAGE.sub(cut, text)
+
+
+def commands(command: str) -> list[Command] | None:
+    """The simple commands of the text. A separator, a bracket, a backtick or a newline outside
+    quotes starts a new one (a newline in quotes does not); a redirect stays in its command with
+    its target. Every command of a group `( ... )` or `{ ...; }` that a pipe follows feeds that
+    pipe. Where the scan is not sure what it read, nothing counts as a read (the whole text is
+    then the text that runs, as before the reads were data): a substitution, a process
+    substitution, a compound command (`for`, `while`, `if`, `case`, `eval`...), a here-document of
+    a command other than `cat`, a redirect between the bracket of a group and the pipe after it.
+    None when the quotes do not balance."""
+    parts = scan(command)
+    if parts is None:
+        return None
+    items: list[tuple[str, list[str], str]] = []
+    piped: set[int] = set()
+    parens: list[int] = []
+    braces: list[int] = []
+    group: tuple[int, int] | None = None  # the commands of a group that just closed
+    unsure = False
+    alone = sum(1 for part, _ in parts if part.strip()) == 1  # the text is one command
+    for text, end in parts:
+        if text.strip():
+            at = len(items)
+            words = words_of(text) or text.split()
+            kept = without_message(text, alone)
+            if words[0] == "{":
+                braces.append(at)
+            unsure = (
+                unsure or words[0] in COMPOUND or bool(HEREDOC.search(kept) and words[0] != "cat")
+            )
+            unsure = unsure or bool(group and re.match(r"\s*\d*[<>&]", text))
+            if words[0] == "}" and braces:
+                start = braces.pop()
+                unsure = unsure or len(words) > 1  # a redirect after the brace
+                if end in PIPES:
+                    piped.update(range(start, at))
+            items.append((kept, words, end))
+            if end in PIPES:
+                piped.add(at)
+        elif end in PIPES and group:  # a pipe after the bracket that closed a group
+            piped.update(range(*group))
+        if end == "(":
+            parens.append(len(items))
+        group = (parens.pop() if parens else len(items), len(items)) if end == ")" else None
+    trusted = not unsure and not RUNS_MORE.search("".join(text + end for text, _, end in items))
+    return [
+        Command(text, words, at in piped, trusted and is_read(words), end)
+        for at, (text, words, end) in enumerate(items)
+    ]
+
+
+def joined(found: list[Command]) -> str:
+    return "".join(item.text + item.end for item in found)
+
+
+def arguments(words: list[str]) -> tuple[list[str], list[str]]:
+    """The words of a command without its redirects, and the files a `<` redirect reads."""
+    args: list[str] = []
     stdin_files: list[str] = []
     redirect = ""
-    for token in tokens:
+    for word in words:
         if redirect:  # the word after a redirect operator is its target, not an argument
             if redirect == "<":
-                stdin_files.append(token)
+                stdin_files.append(word)
             redirect = ""
-        elif token and set(token) <= set("();<>|&"):  # an operator; a quoted `f(x)` is a word
-            if set(token) <= set("<>&") and set(token) & set("<>"):
-                redirect = token
-            else:
-                segments.append([])
+        elif set(word) <= set("<>&") and set(word) & set("<>"):
+            redirect = word
         else:
-            segments[-1].append(token)
-    return segments, stdin_files
+            args.append(word)
+    return args, stdin_files
+
+
+def running(found: list[Command]) -> list[Command]:
+    """The commands that run something: those that are no read, and a read that feeds a command
+    after it in its pipeline (`echo "drop table t" | psql`)."""
+    kept: list[Command] = []
+    feeds_a_run = False
+    for item in reversed(found):
+        if not item.piped:  # the last command of its pipeline
+            feeds_a_run = False
+        if not item.read:
+            feeds_a_run = True
+        if feeds_a_run:
+            kept.append(item)
+    return kept[::-1]
+
+
+def verified_before_commit(found: list[Command]) -> bool:
+    """Every command that commits has a `make verify` chained with && before it: the commit only
+    runs if the verify passed. A second commit with no verify of its own is not covered by the
+    verify of the first."""
+    commits = 0
+    for at, item in enumerate(found):
+        if item.read or not COMMIT.search(item.text.lower()):
+            continue
+        commits += 1
+        before = at - 1
+        while before >= 0 and found[before].end == "&&":
+            if found[before].words[:2] == ["make", "verify"]:
+                break
+            before -= 1
+        else:
+            return False
+    return commits > 0
 
 
 def subcommand(args: list[str], value_options: set[str]) -> int | None:
@@ -631,281 +823,45 @@ def compose_secret(args: list[str]) -> str | None:
     return None
 
 
-# The token scan below finds the inline code the regexes above cannot: it reads the words of each
-# simple command, so an option with a value, `--`, `-s`, a group after a pipe and a process
-# substitution are told from a script file. It only adds to the regexes.
-PUNCTUATION = re.compile(r"\|&|\|\||&&|;;|<<<|<<|<\(|>\(|&>>?|>>|>&|<&|>\||[();<>|&]")
-REDIRECTS = {"<", "<<", "<<<", ">", ">>", ">&", "<&", "&>", "&>>", ">|"}
-PIPE_TOKENS = {"|", "|&"}
-PROCESS_SUBSTITUTION = "\0<("
-STDIN_FILES = {"/dev/stdin", "/dev/fd/0", "/proc/self/fd/0"}
-RUNNER_WRAPPERS = WRAPPERS | {"timeout", "stdbuf", "setsid", "ionice"}
-WRAPPER_VALUE_WORD = re.compile(r"(?:[\w.-]*/)*(?:" + CODE_RUNNERS + r")\b")
-
-
-class Flavor:
-    """What the options of one kind of interpreter mean for the text on its stdin."""
-
-    def __init__(
-        self,
-        code: str = "",
-        module: str = "",
-        value: str = "",
-        long_code: tuple[str, ...] = (),
-        long_value: tuple[str, ...] = (),
-    ) -> None:
-        # code: flag letters whose command takes the code, module: flag letters that run a module
-        # (stdin stays data), value: flag letters that take a value (glued or the next word),
-        # long_code and long_value: the same for the `--name` options.
-        self.code, self.module, self.value = code, module, value
-        self.long_code, self.long_value = long_code, long_value
-
-
-FLAVORS = {
-    "python": Flavor(code="c", module="m", value="XW", long_value=("--check-hash-based-pycs",)),
-    "node": Flavor(
-        code="pe",
-        value="rC",
-        long_code=("--eval", "--print"),
-        long_value=("--require", "--import", "--loader", "--experimental-loader", "--conditions"),
-    ),
-    "perl": Flavor(code="eE", value="I"),
-    "ruby": Flavor(code="e", value="rICEF"),
-    "shell": Flavor(long_value=("--rcfile", "--init-file")),
-}
-
-
-def runner_flavor(name: str) -> str | None:
-    base = name.rsplit("/", 1)[-1]
-    if re.fullmatch(r"(?:python|pypy)[\d.]*", base):
-        return "python"
-    if base in ("node", "perl", "ruby"):
-        return base
-    return "shell" if base in SHELLS else None
-
-
-def command_start(words: list[str]) -> int | None:
-    """Index of the command word: past assignments, keywords, wrappers and their options."""
-    at, wrapped = 0, False
-    while at < len(words):
-        word = words[at]
-        if word in RUNNER_WRAPPERS or (
-            word in ("uv", "poetry") and words[at + 1 : at + 2] == ["run"]
-        ):
-            wrapped, at = True, at + (2 if word in ("uv", "poetry") else 1)
-        elif (
-            word in KEYWORDS
-            or ASSIGNMENT.match(word)
-            or (wrapped and re.fullmatch(r"\d+[smhd]?", word))
-        ):
-            at += 1
-        elif wrapped and word.startswith("-") and word != "-":
-            at += 1
-            nxt = words[at] if at < len(words) else "-"
-            if (
-                "=" not in word
-                and not nxt.startswith("-")
-                and nxt not in RUNNER_WRAPPERS | {"uv", "poetry"}
-                and not WRAPPER_VALUE_WORD.match(nxt)
-            ):
-                at += 1
-        else:
-            return at
-    return None
-
-
-def reads_code_from_stdin(flavor: str, args: list[str], stdin_open: bool) -> bool:
-    """The words after an interpreter: does its code come from stdin (or from a process
-    substitution), with no script file or module before it? stdin_open: a pipe or a here-document
-    feeds it. An option that takes a value, `--`, a glued option cluster such as `-euo` are read as
-    the interpreter reads them."""
-    rules = FLAVORS[flavor]
-    shell = flavor == "shell"
-    at = 0
-    while at < len(args):
-        word = args[at]
-        at += 1
-        if word == PROCESS_SUBSTITUTION or word == "-":
-            return True
-        if word == "--":
-            if at == len(args):
-                return stdin_open
-            return args[at] in ("-", PROCESS_SUBSTITUTION)
-        if word.startswith("--"):
-            name, glued, _ = word.partition("=")
-            if name in rules.long_code:
-                return True
-            if name in rules.long_value and not glued:
-                at += 1
-            continue
-        if word[:1] == "-" or (shell and word[:1] == "+" and len(word) > 1):
-            for place, letter in enumerate(word[1:], 1):
-                if letter in rules.code:
-                    return True
-                if letter in rules.module or (shell and letter == "c"):
-                    return False
-                if shell and letter == "s":
-                    return stdin_open
-                if shell and letter in "oO":
-                    at += 1
-                elif letter in rules.value:
-                    if place + 1 == len(word):  # the value is the next word
-                        at += 1
-                    break
-            continue
-        return stdin_open and word in STDIN_FILES
-    return stdin_open
-
-
-def strip_comments(command: str) -> str:
-    """The text without its comments: an unquoted word that starts with `#` runs to the next line
-    break, which stays (`;`, `|` and `&` do not end it). A `#` in a word or in quotes is text."""
-    out: list[str] = []
-    quote = ""
-    at = 0
-    while at < len(command):
-        char = command[at]
-        if char == "\\" and quote != "'":
-            out.append(command[at : at + 2])
-            at += 2
-            continue
-        if quote:
-            quote = "" if char == quote else quote
-        elif char in "'\"":
-            quote = char
-        elif char == "#" and (not out or out[-1][-1] in " \t\n;&|()<>"):
-            while at < len(command) and command[at] != "\n":
-                at += 1
-            continue
-        out.append(char)
-        at += 1
-    return "".join(out)
-
-
-def scan_commands(command: str) -> list[tuple[list[str], bool, bool]] | None:
-    """Each simple command of the text as (words, fed by a pipe or a group after one, has a
-    here-document, here-string or `< <(...)`). None when the quotes do not balance. A group, a
-    subshell, a substitution and a backtick pair are scanned as commands of their own; the
-    commands of a group that follows a pipe, and of `>(...)`, count as fed by it."""
-    backticks = 0
-
-    def swap(_: re.Match[str]) -> str:
-        nonlocal backticks
-        backticks += 1
-        return " ( " if backticks % 2 else " ) "
-
-    lexer = shlex.shlex(
-        re.sub("`", swap, strip_comments(command).replace("\n", " ; ")),
-        posix=True,
-        punctuation_chars=True,
-    )
-    lexer.whitespace_split = True
-    lexer.commenters = ""
-    try:
-        tokens = list(lexer)
-    except ValueError:
-        return None
-    items: list[tuple[bool, str]] = []
-    for token in tokens:
-        if set(token) <= set("();<>|&"):
-            items.extend((True, operator) for operator in PUNCTUATION.findall(token))
-        else:
-            items.append((False, token))
-    found: list[tuple[list[str], bool, bool]] = []
-    # What a group or a substitution suspends while its own commands are scanned.
-    frames: list[tuple[list[str], bool, bool, bool]] = []
-    words: list[str] = []
-    piped = group_piped = heredoc = False
-    redirect = ""
-
-    def finish() -> None:
-        if words:
-            found.append((list(words), piped, heredoc))
-
-    for is_operator, text in items:
-        previous, redirect = redirect, ""
-        if not is_operator or (previous and text not in ("<(", ">(")):
-            if previous:  # the target of a redirect is not an argument
-                continue
-            if text == "{" and not words:
-                frames.append((words, heredoc, piped, group_piped))
-                words, heredoc, group_piped = [], False, piped
-            elif text == "}" and not words and frames:
-                words, heredoc, piped, group_piped = frames.pop()
-            else:
-                words.append(text)
-        elif text in REDIRECTS:
-            if words and words[-1].isdigit():
-                words.pop()  # the file descriptor of `2>&1`
-            heredoc = heredoc or text in ("<<", "<<<")
-            redirect = text
-        elif text in ("<(", ">(", "("):
-            if text == "<(" and previous == "<":
-                heredoc = True
-            elif text == "<(":
-                words.append(PROCESS_SUBSTITUTION)
-            frames.append((words, heredoc, piped, group_piped))
-            fed = {"<(": False, ">(": True, "(": piped}[text]
-            words, heredoc, piped, group_piped = [], False, fed, fed
-        elif text == ")":
-            finish()
-            if frames:
-                words, heredoc, piped, group_piped = frames.pop()
-            else:
-                words, heredoc, piped = [], False, group_piped
-        else:
-            finish()
-            words, heredoc = [], False
-            piped = text in PIPE_TOKENS or group_piped
-    finish()
-    return found
-
-
-def stdin_code_runners(command: str) -> set[str]:
-    """The interpreters (python, node, perl, ruby, shell) that run the text they read from stdin
-    or from a process substitution as code, in the commands of this text."""
-    commands = scan_commands(command)
-    if commands is None:  # the quotes do not balance: any such name counts
-        names = re.finditer(r"\b(?:" + CODE_RUNNERS + r")\b", command)
-        return {runner_flavor(found[0]) or "shell" for found in names}
-    kinds: set[str] = set()
-    for words, piped, heredoc in commands:
-        at = command_start(words)
-        if at is None:
-            continue
-        flavor = runner_flavor(words[at])
-        if flavor and reads_code_from_stdin(flavor, words[at + 1 :], piped or heredoc):
-            kinds.add(flavor)
-    return kinds
-
-
 def secret_shown(command: str) -> str | None:
     """Why the command shows a secret (the reason for the owner), None when it does not."""
     if PROC_ENVIRON.search(command):
         return SECRET_ENVIRON
     text = ENV_FILE_OPTION.sub(" ", command)
-    if ENV_TEXT.search(text) and (INLINE_CODE.search(text) or stdin_code_runners(text)):
+    if ENV_TEXT.search(text) and INTERPRETER.search(text):
         return SECRET_ENV
     for found in SUBSTITUTION.finditer(command):
         reason = secret_shown(found[1] or found[2] or "")
         if reason:
             return reason
-    parsed = shell_words(command)
+    parsed = commands(command)
     if parsed is None:
         return SECRET_ENV if ENV_TEXT.search(text) else None
-    segments, stdin_files = parsed
-    if any(ENV_FILE.search(file) for file in stdin_files):
-        return SECRET_ENV
-    for segment in segments:
-        reason = secret_in_segment(segment)
+    for item in parsed:
+        args, stdin_files = arguments(item.words)
+        if any(ENV_FILE.search(file) for file in stdin_files):
+            return SECRET_ENV
+        reason = secret_in_segment(args)
         if reason:
             return reason
     return None
 
 
-def commit_gap(low: str) -> list[str]:
+def writes_stamp(run: str, whole: str) -> bool:
+    """A stamp named in the commands that run something (the text of a read that feeds none is
+    no write), the stamp code run directly, or Python that names agent_state and one of its
+    writers (`agent_state.py tree` and `show` only read). The last two read the whole text."""
+    return bool(
+        STAMP_CLI.search(whole)
+        or ("agent_state" in whole and PYTHON.search(whole) and STAMP_WRITERS.search(whole))
+        or STAMP_NAME.search(run)
+    )
+
+
+def commit_gap(chained: bool) -> list[str]:
     """What a `git commit` still lacks on this working tree, empty when it may go ahead: a full
-    verify always, and for changed code also a check and a reviewer verdict that is not `return`."""
+    verify always (chained: a `make verify &&` runs right before it), and for changed code also a
+    check and a reviewer verdict that is not `return`."""
     from scripts.agent_state import (
         ACCEPTED,
         Stamp,
@@ -929,9 +885,7 @@ def commit_gap(low: str) -> list[str]:
 
     missing = []
     verify = read_stamp(ROOT, "verify", current)
-    if not VERIFY_THEN_COMMIT.search(low) and not (
-        verify is not None and verify.mode == "full" and covers(verify)
-    ):
+    if not chained and not (verify is not None and verify.mode == "full" and covers(verify)):
         missing.append("a full make verify")
     if not code_changes(ROOT):
         return missing
@@ -997,13 +951,18 @@ def check(event: dict[str, Any]) -> None:
 
 
 def check_bash(command: str) -> None:
-    if reads_only(command):
-        # The one read that is not free: its words are data, but the file it opens is a secret.
-        secret = secret_shown(command)
-        if secret:
-            ask(secret)
-        return
-    low = command.lower()
+    found = commands(command)
+    # The whole text: the command less its comments, the message of a commit and the data body of
+    # a `cat` that writes a file. The word rules read the commands that run something: a pattern
+    # of grep is no action, and a command of only reads runs nothing. Where the scan is not sure
+    # (quotes that do not balance, a substitution, a compound command) every command counts as
+    # running, so the whole text is read. The one read that is not free is the one that opens a
+    # secret: that check looks at the whole command as it was typed.
+    whole = command if found is None else joined(found)
+    run = whole if found is None else joined(running(found))
+    something_runs = found is None or any(not item.read for item in found)
+    writes = whole if something_runs else ""
+    low = run.lower()
     if FORCE_PUSH.search(low):
         deny("force push")
     if DROP.search(low):
@@ -1017,32 +976,23 @@ def check_bash(command: str) -> None:
     for match in DELETE.finditer(low):
         if not re.search(r"\bwhere\b", match.group(1)):
             deny("DELETE without WHERE")
-    if SHELL_WRITE_ENV.search(command):
+    if SHELL_WRITE_ENV.search(writes):
         deny("shell write to .env")
-    if SHELL_WRITE_HARNESS.search(command):
+    if SHELL_WRITE_HARNESS.search(writes):
         deny(
             "shell write to the agent hooks or settings",
             "prepare a copy in the scratchpad, the owner applies it with cp",
         )
-    if (
-        STAMP_NAME.search(command)
-        or STAMP_CLI.search(command)
-        or (
-            "agent_state" in command
-            and (INLINE_PYTHON.search(command) or "python" in stdin_code_runners(command))
-        )
-    ):
+    if writes_stamp(run, writes):
         deny("writes a gate stamp by hand", STAMP_FIX)
-    if bends_make_check(command):
-        deny("runs make check in a form that can stamp failing checks", "run plain make check")
     if COMMIT.search(low):
-        missing = commit_gap(low)
+        missing = commit_gap(found is not None and verified_before_commit(found))
         if missing:
             deny(
                 f"git commit without {listed(missing)} on this working tree",
                 "see docs/planning/13-harness.md, section 5",
             )
-    if SHELL_WRITE_RULES.search(command):
+    if SHELL_WRITE_RULES.search(writes):
         ask("edits the agent roles or rules")
     secret = secret_shown(command)
     if secret:
@@ -1050,6 +1000,8 @@ def check_bash(command: str) -> None:
     for pattern, reason in ASK:
         if pattern.search(low):
             ask(reason)
+    if run and HTTP_ASK.search(whole.lower()):
+        ask("changes the Debezium connector or the Lakekeeper catalog")
 
 
 def main() -> None:
