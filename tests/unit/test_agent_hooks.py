@@ -2883,6 +2883,83 @@ def test_settings_wire_the_review_hook_and_make_the_guard_fail_closed() -> None:
     assert (HOOKS / "review_stamp.py").exists()
 
 
+def test_settings_give_the_guard_a_timeout_and_a_second_layer() -> None:
+    settings = json.loads((REPO / ".claude" / "settings.json").read_text())
+    guards = [
+        h
+        for group in settings["hooks"]["PreToolUse"]
+        for h in group["hooks"]
+        if "guard.py" in h["command"]
+    ]
+    assert guards
+    for handler in guards:
+        assert handler["timeout"] == 30
+        assert handler["onFailure"] == "block"
+
+    deny = settings["permissions"]["deny"]
+    ask = settings["permissions"]["ask"]
+    assert set(deny) == {
+        "Edit(/.claude/hooks/**)",
+        "Edit(/.claude/settings.json)",
+        "Edit(/.claude/settings.local.json)",
+        "Edit(/.verify-stamp)",
+        "Edit(/.check-stamp)",
+        "Edit(/.review-stamp)",
+        "Edit(.env)",
+        "Edit(**/*.pem)",
+        "Edit(**/*.key)",
+        "Read(./.env)",
+        "Read(**/*.pem)",
+        "Read(**/*.key)",
+    }
+    assert set(ask) == {
+        "Edit(/AGENTS.md)",
+        "Edit(/CLAUDE.md)",
+        "Edit(/docs/agent-rules.md)",
+        "Edit(/docs/planning/13-harness.md)",
+        "Edit(/scripts/agent_state.py)",
+        "Edit(/.claude/agents/**)",
+        "Edit(/.claude/skills/**)",
+        "Bash(git push *)",
+        "Bash(git rebase *)",
+        "Bash(git reset --hard*)",
+        "Bash(make silver*)",
+        "Bash(make nuke*)",
+        "Bash(make bootstrap*)",
+        # The targets that spend the replay budget; `make replay-status` only reads.
+        "Bash(make replay-burst*)",
+        "Bash(make replay-start*)",
+        "Bash(make replay-live*)",
+        "Bash(make replay-reset*)",
+        "Bash(make replay-load*)",
+        "Bash(make chaos-*)",
+        "Bash(make iceberg-demo*)",
+        "Bash(make cdc-snapshot*)",
+        "Bash(make migrate*)",
+        "Bash(make watermark-*)",
+        "Bash(make start*)",
+        "Bash(make up*)",
+        "Bash(make down*)",
+        # The project runs compose with options before the subcommand.
+        "Bash(docker compose down*)",
+        "Bash(docker compose * down*)",
+        "Bash(gh pr create*)",
+        "Bash(gh workflow run*)",
+        "Bash(docker push*)",
+    }
+    assert len(ask) == len(set(ask)) and len(deny) == len(set(deny))
+    # The guard sees every tool that runs a command or writes a file.
+    assert [
+        g["matcher"]
+        for g in settings["hooks"]["PreToolUse"]
+        if any("guard.py" in h["command"] for h in g["hooks"])
+    ] == ["Bash|Write|Edit|NotebookEdit"]
+    # "/x" is anchored at the directory the session started in, the repository root for project
+    # settings; "./x" is relative to the current directory.
+    new_rules = [r for r in deny + ask if r not in {"Read(./.env)"}]
+    assert not [r for r in new_rules if r.partition("(")[2].startswith("./")]
+
+
 def test_a_failure_in_one_text_of_the_command_does_not_lower_a_deny_in_the_other(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

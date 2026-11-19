@@ -21,7 +21,46 @@
       "Edit(**/*.key)",
       "Read(./.env)",
       "Read(**/*.pem)",
-      "Read(**/*.key)"
+      "Read(**/*.key)",
+      "Edit(/.claude/hooks/**)",
+      "Edit(/.claude/settings.json)",
+      "Edit(/.claude/settings.local.json)",
+      "Edit(/.verify-stamp)",
+      "Edit(/.check-stamp)",
+      "Edit(/.review-stamp)"
+    ],
+    "ask": [
+      "Edit(/AGENTS.md)",
+      "Edit(/CLAUDE.md)",
+      "Edit(/docs/agent-rules.md)",
+      "Edit(/docs/planning/13-harness.md)",
+      "Edit(/scripts/agent_state.py)",
+      "Edit(/.claude/agents/**)",
+      "Edit(/.claude/skills/**)",
+      "Bash(git push *)",
+      "Bash(git rebase *)",
+      "Bash(git reset --hard*)",
+      "Bash(make silver*)",
+      "Bash(make nuke*)",
+      "Bash(make bootstrap*)",
+      "Bash(make replay-burst*)",
+      "Bash(make replay-start*)",
+      "Bash(make replay-live*)",
+      "Bash(make replay-reset*)",
+      "Bash(make replay-load*)",
+      "Bash(make chaos-*)",
+      "Bash(make iceberg-demo*)",
+      "Bash(make cdc-snapshot*)",
+      "Bash(make migrate*)",
+      "Bash(make watermark-*)",
+      "Bash(make start*)",
+      "Bash(make up*)",
+      "Bash(make down*)",
+      "Bash(docker compose down*)",
+      "Bash(docker compose * down*)",
+      "Bash(gh pr create*)",
+      "Bash(gh workflow run*)",
+      "Bash(docker push*)"
     ]
   },
   "hooks": {
@@ -32,6 +71,7 @@
           {
             "type": "command",
             "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/guard.py\"",
+            "timeout": 30,
             "onFailure": "block"
           }
         ]
