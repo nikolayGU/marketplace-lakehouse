@@ -1,6 +1,6 @@
 # P06. Путь данных: слой отката JDBC, мёртвый код, лог merge, Java 17 в Spark-тестах
 
-Статус: не начат. Opus, `/task docs/planning/21-final-audit-2026-11-13/P06-data-path.md`.
+Статус: исполнен 20.11.2026, `b18aefe`, `6020b64`. Opus, `/task docs/planning/21-final-audit-2026-11-13/P06-data-path.md`.
 
 ## Цель
 
@@ -253,4 +253,57 @@ Airflow; снять мёртвый код streaming; починить лог mer
 
 ## Итог
 
-(заполняет исполнитель по разделу 6 `13-harness.md`)
+Исполнено 20.11.2026 одной сессией на Opus (оркестратор). Коммиты: `b18aefe` (строка ADR-005 и
+индекс, «ок» владельца на текст), `6020b64` (шаги 2-8 и правки по ревью, 35 файлов). Решения:
+рутина сессии «да», В-03 «да», `iceberg_maintenance` не паузить, `airflow/dags` править вне окна
+03:00-04:00 UTC (аргумент `/task`); шаг 9 по «ок» на точный текст. Код и тесты: `implementer`
+(4 брифа: А слой JDBC и DP-05, В Java 17, QA-07, DP-04, DP-06, Б шаги 4, 5, 5а, круг ревью);
+документы: `docs-writer`; ревью: `reviewer`, два круга; `git mv` ранбука, Markdown, живой стек:
+оркестратор.
+
+| Критерий | Проверка | Результат |
+|---|---|---|
+| Вход | grep «Входа» 1, цитаты 2-8, живые пробы | 106 строк в 15 файлах; цитаты на месте, compose сдвинут на +1; у Trino 4 ключа `^(CATALOG_\|META_)`, не 3 (см. отклонения) |
+| grep «Входа» 1 без DECISIONS | `git grep -n -E "$PAT" -- ':!docs/planning' ':!docs/HANDOFF.md' ':!docs/NEXT_SESSION.md' ':!DECISIONS.md'` | 4 строки `tests/unit/test_spark_settings.py:9-16`: тесты на отказ шага 2 (см. отклонения) |
+| Тесты пакета | `uv run pytest tests/unit/test_{compose,spark_settings,dags,airflow_env,contracts}.py tests/unit/test_{maintenance,spark_jvm}.py -q` | `346 passed, 10 skipped` (ревью, круг 2) |
+| Тесты на отказ | красные до правки | test_compose `4 failed`, test_spark_settings `2 failed`, test_maintenance `6 failed`, test_silver_upsert `2 failed` (лог merge и пустой снапшот; оркестратор повторил на копии с `silver_upsert.py` из HEAD: красные и по `-k`, и в полном файле), test_spark_jvm ошибка сбора; мутации: без `dropTempView` `['opm_batch_0', 'opm_batch_1']`, без `"unavailable"` и без `shop.reviews` тесты контрактов красные, `check (price >= 0)` -> `assert 3 == 4`, `type X = int` в conftest -> ruff |
+| grep мёртвого кода | `git grep -n -E 'opm_starting_offsets\|noqa: UP017' -- ':!docs/planning'` | пусто (без исключения совпадает только текст пакета и отчёта DP) |
+| ADR в отказе | `grep -c 'ADR-021, ADR-005' streaming/spark_jobs/maintenance.py`; `grep -c 'ADR-025' tests/unit/test_maintenance.py` | `0`; `2` |
+| `make check`, `make dags-check` | | `2117 passed, 149 skipped`; `5 dags import, timeouts, retry budget, force removal and the maintenance switch checked` |
+| `make test-spark` | до коммита и на новом образе | `249 passed`, 0 skipped (оба раза) |
+| compose | `config -q`; `config --hash '*'` до и после из корня репо | rc 0; другие ровно `airflow-api-server airflow-dag-processor airflow-scheduler oltp-replayer spark-bronze spark-orders-per-minute spark-silver trino` |
+| Ревью | `reviewer` | круг 1 «принять с замечаниями (2 средних, 5 низких)», круг 2 «принять с замечаниями (2 низких)» |
+| Verify | цикл §5 перед коммитом и в шаге 9 | `verify ok` оба раза, 7 таблиц `rows ok keys ok values ok` |
+| CI | `gh run list` | `b18aefe` и `6020b64` `success` |
+| Образ | `docker inspect -f '{{.Image}}'` bronze и opm против `docker image inspect -f '{{.Id}}' lakehouse/spark:dev` | оба `sha256:28604e90...`, равно Id тега (до `94bda0b9`, `9b41b55b`) |
+| env | `env \| cut -d= -f1 \| grep -c -E "^(CATALOG_(TYPE\|JDBC_\|DB\|WAREHOUSE)\|META_)"` у bronze, opm, trino, scheduler | `0 0 0 0` (до `5 5 3 5`); по шаблону пакета `0 0 1 0`: `CATALOG_MANAGEMENT` из образа Trino |
+| jar | `ls /opt/spark/jars \| grep -c postgresql` в bronze | `0` (до `1`) |
+| Свойства | `$properties` bronze и 9 таблиц silver до и после в scratchpad | 83 строки, `diff` пуст (с `current-snapshot-id` тоже) |
+| Стек после | `make connector-status`; `docker ps`; лог opm | `RUNNING` у коннектора и задачи; все `(healthy)`; `StateSchemaNotCompatible` 0; Trino `-J-Xmx2g`; `silver_upsert` 19:02 и `dq_checks` 19:01 `success` на новом env |
+| Алерты | `curl -s 127.0.0.1:9090/api/v1/alerts` | 19:02 шесть `ContainerRestarting` от пересоздания; 19:18:15 UTC `firing` 0, 20 контейнеров `(healthy)` |
+
+Отклонения от пакета:
+- grep «Входа» 1 не пуст: шаг 2 требует тест `"catalog_type" not in Settings.model_fields` и тест с
+  `CATALOG_TYPE=jdbc` в env, они совпадают с шаблоном. Ревью: приемлемо.
+- Шаблон env «Готово, когда» ловит `CATALOG_MANAGEMENT` из образа Trino (было 4, а не 3): после
+  правки `1`. Проверено суженным шаблоном (строка таблицы), `0` четыре раза.
+- «Через 5 минут 0 firing» недостижимо: `ContainerRestarting` смотрит `changes(...[15m])`, и каждое
+  пересоздание и стоп scheduler в цикле verify зажигают его на 15 минут. Проверка через 16 минут.
+- `make start` пересобрал образ (`--build`) уже собранным кэшем: `Created` тот же
+  (18:53:48 UTC), Id сменился (`281e2183` -> `28604e90`, хранилище containerd, ловушка из
+  «Открыто» HANDOFF); `make test-spark` шёл на `281e2183` той же сборки.
+- `silver_upsert`: MERGE при `valid == 0` пропускается, потому что тест показал пустой снапшот на
+  батче из одних битых событий (условие шага 5).
+- Тест `tests/unit/test_dags.py` (`test_bronze_orphans_always_go_to_the_metadata_location`) ждал
+  `ADR-021` в том же отказе, что шаг 5а: ожидание сменено на `ADR-025` (не назван в пакете).
+- Снятие пауз в порядке `dbt_build dq_checks silver_upsert` (§5), а не как в тексте шага 9.
+- Сверх пакета по ревью: `tests/unit/conftest.py` в `per-file-target-version` (образ грузит его на
+  3.10); `java_binary` берёт `$JAVA_HOME/bin/java`, как `spark-class`; тест «каждый CHECK
+  миграций разобран».
+
+Риски и что осталось (ревью, не исправлено):
+- Подсчёт CHECK ищет `check (` с пробелом: `check(x >= 0)` без пробела тест не видит (низкое,
+  после второго круга; правка `r"check\s*\("`).
+- `DECISIONS.md:196` длиной 114 символов: исторический абзац ADR-005, заменён только путь ранбука.
+- Владельцу руками: `sudo rmdir docker/data` (пустой каталог root от снятого mount); строки
+  `CATALOG_TYPE`, `CATALOG_DB` в `.env` ничем не читаются, удалить по желанию.
