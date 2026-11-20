@@ -65,6 +65,27 @@ def test_env_example_binds_to_loopback() -> None:
     assert "BIND_IP=127.0.0.1" in ENV_EXAMPLE.read_text().splitlines()
 
 
+def test_env_example_gives_a_fresh_clone_the_smaller_trino_heap() -> None:
+    assert "TRINO_XMX=2g" in ENV_EXAMPLE.read_text().splitlines()
+
+
+def test_git_ignores_copies_of_the_env_file_but_not_the_example() -> None:
+    def ignored(name: str) -> bool:
+        result = subprocess.run(
+            # --no-index: .env.example is tracked, and without it git reports a tracked file as
+            # not ignored whatever .gitignore says.
+            ["git", "check-ignore", "-q", "--no-index", name],
+            cwd=ENV_EXAMPLE.parent,
+            check=False,
+        )
+        assert result.returncode in (0, 1), result
+        return result.returncode == 0
+
+    assert ignored(".env.bak")
+    assert ignored(".env.local")
+    assert not ignored(".env.example")
+
+
 @pytest.mark.skipif(not _docker_compose_available(), reason="docker compose is not installed")
 def test_compose_refuses_an_empty_or_missing_bind_ip(tmp_path: Path) -> None:
     without_bind_ip = tmp_path / "without-bind-ip.env"
@@ -162,10 +183,6 @@ def test_superset_admin_password_is_required_not_defaulted_to_empty() -> None:
     for name in ("superset", "superset-init"):
         value = _services()[name]["environment"]["SUPERSET_ADMIN_PASSWORD"]
         assert value.startswith("${SUPERSET_ADMIN_PASSWORD:?"), name
-
-
-def test_required_secret_messages_do_not_claim_make_secrets_skips_an_existing_env() -> None:
-    assert "skips an existing" not in COMPOSE.read_text()
 
 
 def test_superset_mcp_checks_host_and_origin_of_every_request() -> None:

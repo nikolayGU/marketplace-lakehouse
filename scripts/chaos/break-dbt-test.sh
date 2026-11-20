@@ -21,7 +21,7 @@ run=chaos9-$(date -u +%Y%m%dT%H%M%S)
 
 before=$(snapshots)
 run_dag dbt_build "$run-broken" '{"dbt_vars": "{chaos_break_test: true}"}' || true
-state=$(dag_run_state dbt_build "$run-broken")
+state=$(dag_run_state dbt_build "$run-broken") || state=unknown
 after=$(snapshots)
 echo "dbt_build $run-broken: $state; mart_daily_sales snapshots before $before, after $after"
 if [ "$state" != failed ]; then

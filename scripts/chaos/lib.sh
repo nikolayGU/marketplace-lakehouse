@@ -48,9 +48,9 @@ _probe() {
 # (2026-11-04). What it shows: MinIO answers from the host of Trino by the endpoint of its
 # catalog. What it does not: credentials, permissions, that the bucket or the files of a table
 # exist. It needs curl in the trino image (without it the refusal reads "object store (MinIO)
-# fails: ...curl: not found"). curl gets the same limit (-m, passed as $1), since timeout ends
-# the exec on the host and not curl in the container. $S3_ENDPOINT stays literal here, the shell
-# in the container expands it.
+# fails: ...curl: command not found"). curl gets the same limit (-m, passed as $1), since timeout
+# ends the exec on the host and not curl in the container. $S3_ENDPOINT stays literal here, the
+# shell in the container expands it.
 # On failure the reason is left in trino_up_err (not on stderr: no redirect is then open when a
 # trap fires) and the status is 1. Call it directly, not inside $(...), so that a trap runs
 # between the probes.
@@ -148,6 +148,21 @@ merge_silver() {
   fi
 }
 
+# fail <message...>: the message after FAIL: on stderr, then exit 1.
+fail() { echo "FAIL: $*" >&2; exit 1; }
+
+# container_of <service>: the id of the running container of a compose service, found through
+# compose so it works under any COMPOSE_PROJECT_NAME. Returns 1 with the service name on stderr
+# when none runs (ps -q lists running containers only; a stopped one needs `docker start`).
+container_of() {
+  local id
+  id=$("${COMPOSE[@]}" --profile '*' ps -q "$1") && [ -n "$id" ] || {
+    echo "no running container for service $1" >&2
+    return 1
+  }
+  printf '%s\n' "$id"
+}
+
 healthy() { [ "$(docker inspect -f '{{.State.Health.Status}}' "$1" 2>/dev/null)" = healthy ]; }
 
 # service_healthy <service>: the container of a compose service reports healthy. Looked up by id,
@@ -191,8 +206,8 @@ no_other_replayer() {
   fi
 }
 
-# Every record of the CDC topics is in bronze: the end offset of each non-empty partition equals
-# bronze's highest offset there plus one. A failed or empty Kafka listing counts as not caught up.
+# Bronze has caught up with Kafka: the end offset of each non-empty partition equals bronze's
+# highest offset there plus one. A failed or empty Kafka listing counts as not caught up.
 kafka_ends() {
   kafka kafka-get-offsets.sh --topic 'oltp\.shop\..*' --time -1 | awk -F: '$3 > 0' | sort
 }
@@ -314,7 +329,7 @@ run_dag() {
     return 1
   }
   while :; do
-    state=$(dag_run_state "$dag" "$run")
+    state=$(dag_run_state "$dag" "$run") || state=unknown
     case $state in
       success) return 0 ;;
       failed)
@@ -330,13 +345,18 @@ run_dag() {
   done
 }
 
-# task_log <dag_id> <run_id> <task_id> [try]: the task's log lines through the REST API of the
-# api-server, as the UI shows them. No login (D12): /auth/token hands out a token.
-task_log() {
+# airflow_api_get <path>: GET <path> under /api/v2 of the api-server. No login: /auth/token hands
+# out a token.
+airflow_api_get() {
   local api="http://${BIND_IP:-127.0.0.1}:8090" token
-  token=$(curl -sf "$api/auth/token" | python3 -c 'import json, sys; print(json.load(sys.stdin)["access_token"])')
-  curl -sf -H "Authorization: Bearer $token" -H 'Accept: application/json' \
-    "$api/api/v2/dags/$1/dagRuns/$2/taskInstances/$3/logs/${4:-1}" | python3 -c '
+  token=$(curl -sf "$api/auth/token" | python3 -c 'import json, sys; print(json.load(sys.stdin)["access_token"])') || return 1
+  curl -sf -H "Authorization: Bearer $token" -H 'Accept: application/json' "$api/api/v2/$1"
+}
+
+# task_log <dag_id> <run_id> <task_id> [try]: the task's log lines through the REST API of the
+# api-server, as the UI shows them.
+task_log() {
+  airflow_api_get "dags/$1/dagRuns/$2/taskInstances/$3/logs/${4:-1}" | python3 -c '
 import json, sys
 for entry in json.load(sys.stdin).get("content") or []:
     print(entry.get("event", "") if isinstance(entry, dict) else entry)'

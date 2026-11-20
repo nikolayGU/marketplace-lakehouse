@@ -1,4 +1,6 @@
+import shutil
 import socketserver
+import tempfile
 import threading
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler
@@ -258,14 +260,17 @@ class FakeDockerHandler(BaseHTTPRequestHandler):
 
 
 @pytest.fixture
-def docker_socket(tmp_path: Path) -> Iterator[str]:
-    path = str(tmp_path / "docker.sock")
+def docker_socket() -> Iterator[str]:
+    # A unix socket path is limited to about 107 bytes: pytest's tmp_path can exceed it.
+    directory = tempfile.mkdtemp(dir="/tmp")
+    path = str(Path(directory) / "docker.sock")
     server = socketserver.ThreadingUnixStreamServer(path, FakeDockerHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     yield path
     server.shutdown()
     server.server_close()
+    shutil.rmtree(directory, ignore_errors=True)
 
 
 def test_socket_api_returns_parsed_json(docker_socket: str) -> None:

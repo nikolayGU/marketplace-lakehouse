@@ -6,11 +6,12 @@
 . "$(dirname "$0")/lib.sh"
 
 mode=${MODE:-restart}
-container=lakehouse-kafka-connect-1
+service=kafka-connect
 case "$mode" in
   restart | kill) ;;
   *) echo "MODE must be restart or kill" >&2; exit 2 ;;
 esac
+container=$(container_of "$service")
 t0=$(date -u +'%Y-%m-%d %H:%M:%S')
 
 no_other_replayer
@@ -38,7 +39,7 @@ else
   docker start "$container" >/dev/null
   trap stop_burst EXIT
 fi
-echo "$mode of $container at ${t1#* }, running again at $(date -u +%T)"
+echo "$mode of $service at ${t1#* }, running again at $(date -u +%T)"
 wait_until 180 "connector and task RUNNING" connector_running
 wait_until 180 "shop_slot streaming to a new walsender" slot_reattached "$pid0"
 wait "$burst"

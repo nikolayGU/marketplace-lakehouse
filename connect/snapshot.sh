@@ -30,4 +30,4 @@ IFS=$'\t' read -r table id data <<<"$signal"
 insert into :table (id, type, data) values (:'id', 'execute-snapshot', :'data');
 EOSQL
 echo "signal $id sent: $data"
-echo "progress: docker logs lakehouse-kafka-connect-1 2>&1 | grep -i 'incremental snapshot'"
+echo "progress: make logs S=kafka-connect | grep -i 'incremental snapshot'"

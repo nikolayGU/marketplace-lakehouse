@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# make verify: data went through the whole stack. Bronze holds every Kafka record exactly once,
-# silver matches Postgres on row count, key set, decimal sums and a fingerprint of every column
-# (`make reconcile`), all seven source tables reached bronze. Ends with
+# make verify: data went through the whole stack. Bronze has caught up with Kafka's end offsets
+# and holds no Kafka offset twice and no gap between the lowest and the highest offset of each
+# partition (the start of a partition, which retention may have removed before bronze read it, is
+# not checked), silver matches Postgres on row count, key set, decimal sums and a fingerprint of
+# every column (`make reconcile`), all seven source tables reached bronze. Ends with
 # `verify ok` or the reason and a non-zero exit code. It runs one silver merge, so it refuses
 # while Airflow may run another (two writers on one checkpoint) and while a replayer plays
 # (reconcile would compare a moving source), and when Trino does not answer `select 1` or its
@@ -15,6 +17,7 @@
 # started (a file edited during the run is not covered). A stamp that fails (no git, no .venv) is
 # reported on stderr and does not fail verify: the data checks passed, and the commit gate stays
 # closed without the stamp.
+# shellcheck source-path=SCRIPTDIR source=chaos/lib.sh
 . "$(dirname "$0")/chaos/lib.sh"
 
 # bash runs a trap once the foreground command ends: a Ctrl+C that only the script gets (the Trino

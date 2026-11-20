@@ -3,7 +3,8 @@
 # holds every Kafka offset exactly once (OPERATIONS.md, scenario 1).
 . "$(dirname "$0")/lib.sh"
 
-container=lakehouse-spark-bronze-1
+service=spark-bronze
+container=$(container_of "$service")
 ui=http://127.0.0.1:4040/api/v1/applications
 running_job() {
   local app
@@ -27,13 +28,13 @@ kill -0 "$burst" 2>/dev/null ||
 # docker kill counts as a manual stop: restart: unless-stopped will not bring it back.
 trap 'stop_burst; docker start "$container" >/dev/null' EXIT
 docker kill "$container" >/dev/null
-echo "killed $container at $(date -u +%T) after the Spark UI reported a running job"
+echo "killed $service at $(date -u +%T) after the Spark UI reported a running job"
 sleep 5
 docker start "$container" >/dev/null
 trap stop_burst EXIT
 started=$(docker inspect -f '{{.State.StartedAt}}' "$container")
-wait_until 300 "$container to turn healthy" healthy "$container"
-echo "started $container at ${started:11:8}, healthy at $(date -u +%T)"
+wait_until 300 "$service to turn healthy" healthy "$container"
+echo "started $service at ${started:11:8}, healthy at $(date -u +%T)"
 
 # Spark logs "Resuming at batch N" on every start. Only a batch that was planned and never
 # committed resumes with committed offsets (end of N-1) different from available ones (end of N).
@@ -66,15 +67,8 @@ trino "with s as (
          and epoch between $batch - 1 and $batch + 1
        order by committed_at"
 
-bad=$(trino_value "select count(*) from (
-                     select topic, kafka_partition from bronze.cdc_events group by 1, 2
-                     having count(*) > count(distinct kafka_offset)
-                       or max(kafka_offset) - min(kafka_offset) + 1
-                         > count(distinct kafka_offset))")
-if [ "$bad" != 0 ]; then
-  echo "FAIL: $bad topic partitions with duplicate or missing offsets" >&2
-  exit 1
-fi
+bronze_offsets_ok ||
+  fail "bronze has a topic partition with a duplicate or missing offset, or the check query failed"
 # Grouped by query id: a new checkpoint starts a new query whose epochs count from 0 again.
 repeated=$(trino_value "select count(*) from (
                           select 1 from bronze.\"cdc_events\$snapshots\"

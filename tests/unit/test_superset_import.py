@@ -7,6 +7,8 @@ never import superset.
 """
 
 import ast
+import copy
+import importlib.util
 from pathlib import Path
 from typing import Any
 
@@ -66,7 +68,6 @@ def test_each_import_gets_its_own_metadata_type() -> None:
         model_type = argument.args[1]
         assert isinstance(model_type, ast.Constant), name
         assert model_type.value == expected[name], name
-    assert "metadata.yaml" in SCRIPT.read_text()
 
 
 def test_import_failure_exits_non_zero() -> None:
@@ -123,3 +124,29 @@ def test_commands_are_imported_inside_the_app_context() -> None:
     assert "superset" in within and "superset.utils.core" in within
     for command in ("dataset", "chart", "dashboard"):
         assert f"superset.commands.{command}.importers.v1" in within
+
+
+def test_with_type_sets_only_the_type_and_keeps_the_timestamp_and_other_files() -> None:
+    spec = importlib.util.spec_from_file_location("import_bundle", SCRIPT)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    files = {
+        "metadata.yaml": yaml.safe_dump(
+            {"version": "1.0.0", "type": "Dashboard", "timestamp": "2024-01-02T03:04:05+00:00"}
+        ),
+        "databases/trino.yaml": "database_name: trino\n",
+        "charts/a.yaml": "slice_name: a\n",
+    }
+    original = copy.deepcopy(files)
+
+    for model_type in ("SqlaTable", "Slice", "Dashboard"):
+        typed = module._with_type(files, model_type)
+
+        metadata = yaml.safe_load(typed["metadata.yaml"])
+        assert metadata["type"] == model_type
+        assert metadata["timestamp"] == "2024-01-02T03:04:05+00:00"
+        assert {k: v for k, v in typed.items() if k != "metadata.yaml"} == {
+            k: v for k, v in original.items() if k != "metadata.yaml"
+        }
+        assert files == original

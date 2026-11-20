@@ -7,7 +7,7 @@ comma := ,
 PROFILE_FLAGS = $(foreach p,$(subst $(comma), ,$(PROFILE)),--profile $(p))
 
 help: ## list targets
-	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-24s %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z_%-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-24s %s\n", $$1, $$2}'
 
 # ---------------------------------------------------------------- setup
 secrets: ## create .env from .env.example with generated passwords; an existing .env only gets the missing keys appended
@@ -135,9 +135,10 @@ chaos-%: ## run a failure scenario: make chaos-spark-kill
 	bash scripts/chaos/$*.sh
 
 # ---------------------------------------------------------------- quality
-lint: ## ruff, mypy, yamllint, sqlfluff, compose config, bash -n on the shell scripts
+lint: ## ruff, mypy, yamllint, sqlfluff, compose config, bash -n and shellcheck on the shell scripts
 	uv run ruff check . && uv run ruff format --check .
 	for script in $$(git ls-files '*.sh'); do bash -n "$$script" || exit 1; done
+	uv run shellcheck -x -S warning $$(git ls-files '*.sh')
 	uv run mypy
 	uv run yamllint -c .yamllint docker observability airflow .github
 	uv run sqlfluff lint oltp/migrations

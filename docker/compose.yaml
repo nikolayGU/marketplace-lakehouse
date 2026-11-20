@@ -18,6 +18,25 @@ x-logging: &logging
 x-common: &common
   restart: unless-stopped
   logging: *logging
+  networks: [lake]
+
+# Shared by the three Spark services; SPARK_DRIVER_MEMORY differs (orders-per-minute runs on 1g)
+# and the rest of the environment stays with each service.
+x-spark-env: &spark-env
+  SPARK_MASTER: ${SPARK_MASTER}
+  CHECKPOINT_ROOT: s3a://${S3_BUCKET}/checkpoints
+  LAKEKEEPER_URI: ${LAKEKEEPER_URI}
+  LAKEKEEPER_WAREHOUSE: ${LAKEKEEPER_WAREHOUSE}
+  S3_ENDPOINT: ${S3_ENDPOINT}
+  S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+  S3_SECRET_KEY: ${S3_SECRET_KEY}
+
+# Shared by superset, superset-init and superset-mcp; the admin password and the data anchor are
+# set only where they are read.
+x-superset-env: &superset-env
+  SUPERSET_SECRET_KEY: ${SUPERSET_SECRET_KEY}
+  SUPERSET_DATABASE_URI: postgresql+psycopg2://${META_USER}:${META_PASSWORD}@postgres-meta:5432/${SUPERSET_DB}
+  SUPERSET_CONFIG_PATH: /app/superset_config.py
 
 networks:
   lake:
@@ -62,7 +81,6 @@ services:
       resources:
         limits:
           memory: 768M
-    networks: [lake]
 
   kafka:
     <<: *common
@@ -100,7 +118,6 @@ services:
       resources:
         limits:
           memory: 1280M
-    networks: [lake]
 
   kafka-connect:
     <<: *common
@@ -147,7 +164,6 @@ services:
         limits:
           # Heap from CONNECT_HEAP plus about 0.4 GiB of native JVM memory; test_compose holds the gap.
           memory: 1792M
-    networks: [lake]
 
   minio:
     <<: *common
@@ -179,7 +195,6 @@ services:
       resources:
         limits:
           memory: 512M
-    networks: [lake]
 
   minio-init:
     # Creates the bucket and the warehouse prefix; built with minio from the same Dockerfile (ADR-026).
@@ -251,7 +266,6 @@ services:
       resources:
         limits:
           memory: 256M
-    networks: [lake]
 
   # One-shot: bootstrap the server and create the warehouse; a re-run changes nothing. Spark and
   # Trino wait for it, so it runs on every `up` of them; `make lakekeeper-bootstrap` runs it alone.
@@ -303,15 +317,9 @@ services:
         condition: service_completed_successfully
     command: ["bronze_cdc_ingest"]   # run-job.sh spark-submits spark_jobs/<name>.py
     environment:
-      SPARK_MASTER: ${SPARK_MASTER}
+      <<: *spark-env
       SPARK_DRIVER_MEMORY: ${SPARK_DRIVER_MEMORY}
       KAFKA_BOOTSTRAP: kafka:9092
-      CHECKPOINT_ROOT: s3a://${S3_BUCKET}/checkpoints
-      LAKEKEEPER_URI: ${LAKEKEEPER_URI}
-      LAKEKEEPER_WAREHOUSE: ${LAKEKEEPER_WAREHOUSE}
-      S3_ENDPOINT: ${S3_ENDPOINT}
-      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
-      S3_SECRET_KEY: ${S3_SECRET_KEY}
       BRONZE_TRIGGER_SECONDS: ${BRONZE_TRIGGER_SECONDS}
       BRONZE_MAX_OFFSETS_PER_TRIGGER: ${BRONZE_MAX_OFFSETS_PER_TRIGGER}
       METRICS_PORT: "4041"
@@ -334,7 +342,6 @@ services:
       resources:
         limits:
           memory: 2560M
-    networks: [lake]
 
   # Stateful job (W5-T01b, ADR-024): distinct new orders per minute with a 5 minute watermark, from
   # Kafka into silver.orders_per_minute. A service of its own so that its failure or OOM kill does
@@ -357,15 +364,9 @@ services:
         required: false
     command: ["orders_per_minute"]
     environment:
-      SPARK_MASTER: ${SPARK_MASTER}
+      <<: *spark-env
       SPARK_DRIVER_MEMORY: 1g
       KAFKA_BOOTSTRAP: kafka:9092
-      CHECKPOINT_ROOT: s3a://${S3_BUCKET}/checkpoints
-      LAKEKEEPER_URI: ${LAKEKEEPER_URI}
-      LAKEKEEPER_WAREHOUSE: ${LAKEKEEPER_WAREHOUSE}
-      S3_ENDPOINT: ${S3_ENDPOINT}
-      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
-      S3_SECRET_KEY: ${S3_SECRET_KEY}
       BRONZE_MAX_OFFSETS_PER_TRIGGER: ${BRONZE_MAX_OFFSETS_PER_TRIGGER}
       OPM_WATERMARK: ${OPM_WATERMARK:-5 minutes}
       OPM_TRIGGER_SECONDS: ${OPM_TRIGGER_SECONDS:-20}
@@ -387,7 +388,6 @@ services:
       resources:
         limits:
           memory: 1792M
-    networks: [lake]
 
   # One-shot: AvailableNow reads what bronze committed since the last run, merges it, exits.
   # `make silver` runs it by hand; Airflow schedules it from week 3. The exit code is the health
@@ -407,14 +407,8 @@ services:
         required: false
     command: ["silver_upsert"]
     environment:
-      SPARK_MASTER: ${SPARK_MASTER}
+      <<: *spark-env
       SPARK_DRIVER_MEMORY: ${SPARK_DRIVER_MEMORY}
-      CHECKPOINT_ROOT: s3a://${S3_BUCKET}/checkpoints
-      LAKEKEEPER_URI: ${LAKEKEEPER_URI}
-      LAKEKEEPER_WAREHOUSE: ${LAKEKEEPER_WAREHOUSE}
-      S3_ENDPOINT: ${S3_ENDPOINT}
-      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
-      S3_SECRET_KEY: ${S3_SECRET_KEY}
     ports:
       - "${BIND_IP:?set BIND_IP in .env}:4042:4040"   # Spark UI while the run lasts
     restart: "no"
@@ -458,7 +452,6 @@ services:
       resources:
         limits:
           memory: 256M
-    networks: [lake]
 
   # ---------------------------------------------------------------- query
   trino:
@@ -500,7 +493,6 @@ services:
       resources:
         limits:
           memory: 3584M
-    networks: [lake]
 
   # ---------------------------------------------------------------- orchestrate
   # postgres-meta belongs to core: the databases of Lakekeeper, Airflow and Superset.
@@ -527,7 +519,6 @@ services:
       resources:
         limits:
           memory: 512M
-    networks: [lake]
 
   airflow-api-server:
     <<: *common
@@ -561,7 +552,6 @@ services:
       resources:
         limits:
           memory: 700M
-    networks: [lake]
 
   airflow-scheduler:
     <<: *common
@@ -591,7 +581,6 @@ services:
       resources:
         limits:
           memory: 900M
-    networks: [lake]
 
   airflow-dag-processor:
     <<: *common
@@ -615,7 +604,6 @@ services:
       resources:
         limits:
           memory: 500M
-    networks: [lake]
 
   # ---------------------------------------------------------------- obs
   prometheus:
@@ -639,7 +627,6 @@ services:
       resources:
         limits:
           memory: 300M
-    networks: [lake]
 
   grafana:
     <<: *common
@@ -672,7 +659,6 @@ services:
           # Grafana runs every datasource plugin as its own process, about 320M of anonymous memory;
           # 512M keeps them out of swap.
           memory: 512M
-    networks: [lake]
 
   kafka-exporter:
     <<: *common
@@ -696,7 +682,6 @@ services:
       resources:
         limits:
           memory: 64M
-    networks: [lake]
 
   postgres-exporter:
     <<: *common
@@ -722,7 +707,6 @@ services:
       resources:
         limits:
           memory: 64M
-    networks: [lake]
 
   statsd-exporter:
     <<: *common
@@ -741,7 +725,6 @@ services:
       resources:
         limits:
           memory: 64M
-    networks: [lake]
 
   # cAdvisor cannot name containers on Docker Desktop with the containerd image store (2026-10-19,
   # v0.52.1 and v0.55.1): this reads the Docker API instead (ADR-023).
@@ -768,7 +751,6 @@ services:
         limits:
           # Every /metrics call walks the Docker API for all containers.
           memory: 128M
-    networks: [lake]
 
   # ---------------------------------------------------------------- bi
   superset:
@@ -789,10 +771,8 @@ services:
         condition: service_healthy
         required: false   # profile query: without Trino the charts are empty, the UI still works
     environment:
-      SUPERSET_SECRET_KEY: ${SUPERSET_SECRET_KEY}
-      SUPERSET_DATABASE_URI: postgresql+psycopg2://${META_USER}:${META_PASSWORD}@postgres-meta:5432/${SUPERSET_DB}
+      <<: *superset-env
       SUPERSET_ADMIN_PASSWORD: ${SUPERSET_ADMIN_PASSWORD:?run make secrets, it appends the missing key}   # read by superset/check.py
-      SUPERSET_CONFIG_PATH: /app/superset_config.py
       SUPERSET_DATA_ANCHOR: ${SUPERSET_DATA_ANCHOR:-2026-07-01}
     volumes:
       - ./superset/superset_config.py:/app/superset_config.py:ro
@@ -810,7 +790,6 @@ services:
       resources:
         limits:
           memory: 1280M
-    networks: [lake]
 
   # One-shot setup, safe to repeat: metadata migration, admin user, roles, Marketplace bundle.
   superset-init:
@@ -827,10 +806,8 @@ services:
     restart: "no"
     command: ["bash", "/init/init.sh"]
     environment:
-      SUPERSET_SECRET_KEY: ${SUPERSET_SECRET_KEY}
-      SUPERSET_DATABASE_URI: postgresql+psycopg2://${META_USER}:${META_PASSWORD}@postgres-meta:5432/${SUPERSET_DB}
+      <<: *superset-env
       SUPERSET_ADMIN_PASSWORD: ${SUPERSET_ADMIN_PASSWORD:?run make secrets, it appends the missing key}
-      SUPERSET_CONFIG_PATH: /app/superset_config.py
     volumes:
       - ./superset/superset_config.py:/app/superset_config.py:ro
       - ./superset/init.sh:/init/init.sh:ro
@@ -868,9 +845,7 @@ services:
         condition: service_completed_successfully
     command: ["superset", "mcp", "run", "--host", "0.0.0.0", "--port", "5008"]
     environment:
-      SUPERSET_SECRET_KEY: ${SUPERSET_SECRET_KEY}
-      SUPERSET_DATABASE_URI: postgresql+psycopg2://${META_USER}:${META_PASSWORD}@postgres-meta:5432/${SUPERSET_DB}
-      SUPERSET_CONFIG_PATH: /app/superset_config.py
+      <<: *superset-env
       SUPERSET_DATA_ANCHOR: ${SUPERSET_DATA_ANCHOR:-2026-07-01}
       FASTMCP_HTTP_HOST_ORIGIN_PROTECTION: "true"
       FASTMCP_HTTP_ALLOWED_HOSTS: '["127.0.0.1", "localhost", "::1"]'
@@ -888,7 +863,6 @@ services:
       resources:
         limits:
           memory: 512M
-    networks: [lake]
 
   # ---------------------------------------------------------------- tools
   kafka-ui:
@@ -906,4 +880,3 @@ services:
       resources:
         limits:
           memory: 400M
-    networks: [lake]

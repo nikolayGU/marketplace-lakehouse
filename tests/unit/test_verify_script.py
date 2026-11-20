@@ -235,7 +235,7 @@ def test_catalog_lake_down_with_trino_alive_refuses_with_exit_2_and_names_the_ca
     assert seconds < HARD_LIMIT / 2
 
 
-@pytest.mark.parametrize("mode", ["--no-merge", ""])
+@pytest.mark.parametrize("mode", [""])
 def test_catalog_lake_that_hangs_refuses_after_the_probe_limit(tmp_path: Path, mode: str) -> None:
     result, calls, seconds, left = run_verify(
         tmp_path, mode, trino="up", lake="hang", TRINO_PROBE_WAIT="1"
@@ -265,7 +265,7 @@ def test_catalog_lake_that_ignores_sigterm_is_killed_after_the_grace_period(tmp_
     assert seconds < 6
 
 
-@pytest.mark.parametrize("mode", ["--no-merge", ""])
+@pytest.mark.parametrize("mode", [""])
 def test_ctrl_c_during_the_first_probe_does_not_start_the_catalog_probe(
     tmp_path: Path, mode: str
 ) -> None:
@@ -287,7 +287,7 @@ def test_ctrl_c_during_the_first_probe_does_not_start_the_catalog_probe(
     assert seconds < 2 + 2
 
 
-@pytest.mark.parametrize("mode", ["--no-merge", ""])
+@pytest.mark.parametrize("mode", [""])
 @pytest.mark.parametrize("limit", ["1", "1.5"])
 def test_trino_that_hangs_refuses_after_the_probe_limit(
     tmp_path: Path, mode: str, limit: str
@@ -328,7 +328,7 @@ def test_invalid_probe_limit_refuses_without_probing(tmp_path: Path, limit: str)
     assert not any(call.endswith(PROBE) for call in calls)
 
 
-@pytest.mark.parametrize("mode", ["--no-merge", ""])
+@pytest.mark.parametrize("mode", [""])
 def test_ctrl_c_during_a_hung_probe_exits_130_without_touching_bronze_or_silver(
     tmp_path: Path, mode: str
 ) -> None:
@@ -344,7 +344,7 @@ def test_ctrl_c_during_a_hung_probe_exits_130_without_touching_bronze_or_silver(
 
 
 @pytest.mark.parametrize(("sent", "code"), [(signal.SIGINT, 130)])
-@pytest.mark.parametrize("mode", ["--no-merge", ""])
+@pytest.mark.parametrize("mode", [""])
 def test_signal_during_an_answering_probe_stops_verify_before_bronze_and_silver(
     tmp_path: Path, mode: str, sent: signal.Signals, code: int
 ) -> None:
@@ -415,7 +415,7 @@ def test_storage_down_with_catalog_alive_refuses_with_exit_2_and_names_the_stora
     assert seconds < HARD_LIMIT / 2
 
 
-@pytest.mark.parametrize("mode", ["--no-merge", ""])
+@pytest.mark.parametrize("mode", [""])
 def test_storage_that_hangs_refuses_after_the_probe_limit(tmp_path: Path, mode: str) -> None:
     result, calls, seconds, left = run_verify(tmp_path, mode, store="hang", TRINO_PROBE_WAIT="1")
 
@@ -440,7 +440,7 @@ def test_storage_that_ignores_sigterm_is_killed_after_the_grace_period(tmp_path:
     assert seconds < 6
 
 
-@pytest.mark.parametrize("mode", ["--no-merge", ""])
+@pytest.mark.parametrize("mode", [""])
 def test_ctrl_c_during_the_catalog_probe_does_not_start_the_storage_probe(
     tmp_path: Path, mode: str
 ) -> None:

@@ -4,8 +4,6 @@
 # runbook (OPERATIONS.md, scenario 5; docs/runbooks/connector-failed.md).
 . "$(dirname "$0")/lib.sh"
 
-fail() { echo "FAIL: $*" >&2; exit 1; }
-
 no_other_replayer
 connector_running || fail "the connector is not RUNNING before the restart"
 bronze_caught_up || fail "bronze has not caught up with Kafka before the restart"

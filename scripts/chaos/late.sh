@@ -11,8 +11,8 @@ if ! connector_running; then
   echo "shop-connector or its task is not RUNNING; see docs/runbooks/connector-failed.md" >&2
   exit 1
 fi
-if ! healthy lakehouse-spark-bronze-1; then
-  echo "lakehouse-spark-bronze-1 is not healthy; see docs/runbooks/spark-stalled.md" >&2
+if ! service_healthy spark-bronze; then
+  echo "service spark-bronze is not healthy; see docs/runbooks/spark-stalled.md" >&2
   exit 1
 fi
 

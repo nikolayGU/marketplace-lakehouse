@@ -273,3 +273,11 @@ def test_every_test_file_that_needs_spark_runs_in_test_spark() -> None:
     assert listed
     assert all((tests / name).is_file() for name in listed)
     assert needing <= listed
+
+
+def test_help_lists_the_pattern_targets() -> None:
+    # A target name with % (chaos-%) must not drop out of the list of targets.
+    result = make("help")
+
+    assert result.returncode == 0
+    assert "chaos-%" in result.stdout

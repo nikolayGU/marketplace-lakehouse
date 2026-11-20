@@ -187,6 +187,7 @@ def test_lint_and_test_runs_every_check_it_claims() -> None:
         assert command in runs, command
     for command in (
         "for script in $(git ls-files '*.sh'); do bash -n \"$script\" || exit 1; done",
+        "uv run shellcheck -x -S warning $(git ls-files '*.sh')",
         "uv run yamllint -c .yamllint docker observability airflow .github",
     ):
         assert command in runs, command

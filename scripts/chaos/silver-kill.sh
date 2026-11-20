@@ -9,8 +9,6 @@
 # behind by the kill is never removed here: that is the owner's call.
 . "$(dirname "$0")/lib.sh"
 
-fail() { echo "FAIL: $*" >&2; exit 1; }
-
 merge=lakehouse-silver-merge
 burst_seconds=${SILVER_KILL_BURST:-30}
 dags=(silver_upsert dbt_build dq_checks)
@@ -20,22 +18,17 @@ burst=""
 merge_container() { docker ps -a --filter "name=^/$merge\$" -q; }
 # Airflow 3 prints the pause flag of `dags list -o json` as the string "True" or "False".
 # Attempts of a task are not in the CLI (`tasks states-for-dag-run` has no try_number), so the
-# retry is proved through the REST API of the api-server, as task_log in lib.sh does: no login
-# (D12), /auth/token hands out a token, the task instance carries state and try_number.
-api_get() {
-  local api="http://${BIND_IP:-127.0.0.1}:8090" token
-  token=$(curl -sf "$api/auth/token" | python3 -c 'import json, sys; print(json.load(sys.stdin)["access_token"])') || return 1
-  curl -sf -H "Authorization: Bearer $token" "$api/api/v2/$1"
-}
+# retry is proved through the REST API of the api-server (airflow_api_get in lib.sh): the task
+# instance carries state and try_number.
 # "<run_id> <state>" per running or queued run of silver_upsert, through the REST API.
 active_runs() {
-  api_get "dags/silver_upsert/dagRuns?state=running&state=queued&limit=50" | python3 -c '
+  airflow_api_get "dags/silver_upsert/dagRuns?state=running&state=queued&limit=50" | python3 -c '
 import json, sys
 for r in json.load(sys.stdin)["dag_runs"]:
     print(r["dag_run_id"], r["state"])'
 }
 merge_task_instance() {
-  api_get "dags/silver_upsert/dagRuns/$1/taskInstances/merge" | python3 -c '
+  airflow_api_get "dags/silver_upsert/dagRuns/$1/taskInstances/merge" | python3 -c '
 import json, sys
 t = json.load(sys.stdin)
 print(t["state"], t["try_number"])'

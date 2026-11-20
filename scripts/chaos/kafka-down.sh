@@ -4,7 +4,6 @@
 # check; which alerts fired is recorded, not asserted (OPERATIONS.md, scenario 8).
 . "$(dirname "$0")/lib.sh"
 
-fail() { echo "FAIL: $*" >&2; exit 1; }
 down=${KAFKA_DOWN:-360}
 
 no_other_replayer

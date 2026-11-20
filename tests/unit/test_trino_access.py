@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml
 
 REPO = Path(__file__).parents[2]
 ETC = REPO / "docker" / "trino" / "etc"
@@ -119,8 +120,8 @@ def test_properties_name_the_file_plugin_and_an_existing_rules_file() -> None:
 
 
 def test_etc_is_mounted_whole_so_no_compose_change_is_needed() -> None:
-    compose = (REPO / "docker" / "compose.yaml").read_text()
-    assert "- ./trino/etc:/etc/trino:ro" in compose
+    compose = yaml.safe_load((REPO / "docker" / "compose.yaml").read_text())
+    assert "./trino/etc:/etc/trino:ro" in compose["services"]["trino"]["volumes"]
 
 
 def test_rules_file_sections_are_the_known_ones() -> None:

@@ -216,8 +216,17 @@ def test_trino_query_raises_on_a_query_error(monkeypatch) -> None:  # type: igno
 def test_trino_query_stops_at_the_deadline_when_the_query_never_finishes(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     clock = iter([0.0, 1.0, 50.0, 200.0, 300.0])
     pages = {"nextUri": "http://127.0.0.1:8080/v1/s/1"}
+    polls = 0
+
+    def urlopen(request, timeout):  # type: ignore[no-untyped-def]
+        nonlocal polls
+        polls += 1
+        if polls > 10:
+            raise AssertionError("trino_query polls past its deadline")
+        return _Response(pages)
+
     monkeypatch.setattr("scripts.obs.check_dashboards.monotonic", lambda: next(clock))
-    monkeypatch.setattr(urllib.request, "urlopen", lambda request, timeout: _Response(pages))
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
 
     try:
         check_dashboards.trino_query("select 1")

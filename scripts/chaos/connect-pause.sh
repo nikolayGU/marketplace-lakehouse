@@ -5,7 +5,6 @@
 # stays active and SlotWalRetainedHigh (inactive slot over 64 MiB) cannot fire (W4-D11).
 . "$(dirname "$0")/lib.sh"
 
-fail() { echo "FAIL: $*" >&2; exit 1; }
 hold=${HOLD:-1800}
 connect=http://127.0.0.1:8083/connectors/shop-connector
 

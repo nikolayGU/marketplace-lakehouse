@@ -12,8 +12,6 @@
 # the topic that bronze reads and `reconcile` compares is not touched.
 . "$(dirname "$0")/../chaos/lib.sh"
 
-fail() { echo "FAIL: $*" >&2; exit 1; }
-
 # `live`: the same two cases on the running service (W5-T01b). Two real inserts are sent again to
 # oltp.shop.orders: the oldest one far behind the watermark (it must be dropped, once) and the
 # newest one (inside the watermark, already counted, so nothing changes). Both also reach bronze
