@@ -1,5 +1,5 @@
 # P09. Наблюдаемость: правила алертов, annotations, ранбуки, горящие алерты на дашборде
-Статус: не начат. Оркестратор Opus по `13-harness.md`: `/task docs/planning/21-final-audit-2026-11-13/P09-observability.md`.
+Статус: исполнен 20.11.2026, `78b3754`; HUP (В-06) ждёт «ок». Оркестратор Opus по `13-harness.md`: `/task docs/planning/21-final-audit-2026-11-13/P09-observability.md`.
 
 ## Цель
 
@@ -240,3 +240,64 @@
 - `make alerts-test`, `make check` не запускались (бриф); строгость annotations проверяет шаг 1.
 
 ## Итог
+
+Исполнено 20.11.2026 (UTC) одной сессией на Opus (оркестратор), коммит `78b3754` (16 файлов).
+Решения из аргумента `/task`: рутина сессии «да», В-06 «да» (команда HUP на «ок»). Код и тесты:
+`implementer`, 2 брифа параллельно (А `alerts.yml`, `alerts_test.yml`, `test_alerts.py`; Б
+дашборды, `test_check_dashboards.py`, комментарии `mapping.yml`, `queries.yaml`, `trino.yml`);
+ранбуки и строки OPERATIONS: `docs-writer`; шаг 1, правки по ревью (до 20 строк в файле),
+формулировки ранбуков и живые шаги: оркестратор; ревью `reviewer`, два круга.
+
+| Критерий | Проверка | Результат |
+|---|---|---|
+| Вход | чтение, grep цитат, GET Prometheus | подтверждено, кроме трёх пунктов (ниже «Расхождения со входом»); номера OPERATIONS сдвинуты: Alerts `:822-836`, 10b `:1729`, Runbooks `:1754` |
+| Шаг 1, строгость promtool | `annotations` только у `ScrapeTargetDown` в копии, `promtool test rules` | `FAILED ... exp: Annotations:{} got: Annotations:{runbook_url="docs/runbooks/containers.md", summary="Prometheus cannot scrape postgres-exporter"}`: сравнение строгое, `exp_annotations` у всех 37 `exp_labels` |
+| Тесты на отказ | правила HEAD | `test_alerts.py` `34 failed, 34 passed`; promtool FAILED `AirflowDagFailed` 55m, `SparkNoBatch5m` 41m, `SparkRestartLoop` 5m (a), `ContainerRestarting` 3m (b) и 7m (c); (d), 14-7.19 и OB-07 43m зелёные; дашборды `3 failed, 34 passed` |
+| Мутации | копии в scratchpad | `>= 240` FAILED 50m; `>= 190` FAILED 49m15s; `for: 0m` у stuck FAILED 41m; без `offset 30m` у `up` FAILED 55m; без `name=~".+-[0-9]+"` FAILED 7m; без фильтра имени `SparkRestartLoop` FAILED 10m (кейс (c) усилен по ревью до четырёх стартов) |
+| Тесты пакета | `uv run pytest tests/unit/test_alerts.py tests/unit/test_check_dashboards.py -q` | `105 passed` |
+| `make alerts-test` | | `SUCCESS: 16 rules found`, `SUCCESS` |
+| Дашборды | `uv run --no-sync python scripts/obs/check_dashboards.py` | `queries ok: 33`, те же 7 строк `empty:`, rc 1 (на HEAD `queries ok: 32`, те же 7 `empty:`, rc 1: нет батча с данными больше 7 дней; пункт «7 `idle:`, rc 0» на стенде не достижим без реплея) |
+| grep | `lakehouse-` в правилах и дашбордах; шаблон `r66_pattern.txt` по `observability/` | пусто; пусто |
+| `make check` | после круга 2 | `2215 passed, 149 skipped`, exit 0 |
+| Ревью | `reviewer` | круг 1 «принять с замечаниями» (1 среднее: фильтр имени `SparkRestartLoop` не закреплён кейсом; 4 низких: два неверных комментария про merge и `run`, цитата лога в `dq-checks.md`, пулы `iceberg_*`); все исправлены; круг 2 «принять» |
+| Verify | цикл §5 перед коммитом | `verify ok`, full-отметка дерева `bc8574e0` |
+| CI | `gh run watch 44815798932 --exit-status` | exit 0, `success` на `78b3754`, 12 job `success` |
+| Паузы | `silver_upsert`, `dbt_build`, `dq_checks` на время цикла verify | сняты после коммита в порядке §5; silver без новых данных, `dbt_build` не запускался вручную |
+| HUP (В-06) | `docker exec lakehouse-prometheus-1 kill -HUP 1` | ждёт «ок» владельца на точный текст; до HUP живой Prometheus работает по старым правилам: `/api/v1/rules` 16 правил, `annotations` у 0 |
+
+Расхождения со входом:
+- `docs/runbooks/catalog-cutover.md` в дереве нет (удалён с откатом на JDBC в P06): строки в
+  таблице «Runbooks» для него нет.
+- `check_dashboards.py` на HEAD: 7 `empty:` и rc 1, а не 7 `idle:` и rc 0 (условие данных, не
+  кода). Критерий проверен как «33 запроса, те же 7 строк, ни одной новой».
+- Номера строк OPERATIONS сдвинуты (см. таблицу). Живой `ContainerRestarting` в момент входа
+  горел на `lakehouse-airflow-scheduler-1`: плановый стоп scheduler в цикле verify P08.
+
+Отклонения от пакета:
+- Новые кейсы promtool стоят в конце `alerts_test.yml` блоком, а не рядом со старыми кейсами.
+- Таблица «Firing alerts» с трансформацией `organize` (скрыт `Time`, `Value` -> `count`);
+  при пустом наборе одна строка с 0 без имени (так и написано в описании панели).
+- В шапке `alerts.yml` «No Alertmanager» ссылается на ADR-015 и ADR-023 вместо `W4-D6`.
+- `freshness.md`, шаг 6: что делать с пропавшей Variable, источники не говорят; фраза не
+  написана.
+
+Ссылки ранбуков на OPERATIONS, которые P11 заменит текстом:
+- `docs/runbooks/airflow-dag-failed.md`: `../../OPERATIONS.md#airflow` на абзацы «Host sleep
+  pauses the Docker VM», «Timeouts», «A red `dq_checks` task».
+- `docs/runbooks/dq-checks.md`: `../../OPERATIONS.md#airflow`, абзац о красной задаче
+  `dq_checks`.
+- `docs/runbooks/containers.md`: `../../OPERATIONS.md#observability`, заметки экспортеров
+  (`DOCKER_GID`, `COMPOSE_PROJECT_NAME`, healthcheck).
+
+Не проверено: вид таблицы «Firing alerts» в Grafana (владелец глазами); пункты после HUP
+(`16 16`, `reloadConfigSuccess`, `health: ok`) до «ок» на HUP; кейсы containers.md шаги 3-4
+(старт `kafka-exporter` и `lakekeeper` раньше зависимостей, stateful job после сна) взяты из
+отчётов аудита, живьём не воспроизводились.
+
+Замечено вне пакета: строки `SilverGoldNotCompared` и `GoldStaleAtRest` таблицы Alerts
+OPERATIONS говорят про удалённый заказ и `B6` (P11, «Не входит»); в `infra.json` наложение
+панелей (h 9 при шаге y 7), было до пакета.
+
+Риски: первая ошибка DAG в первые 30 минут после старта Prometheus или после сна молчит (видна в
+Airflow и на панели «Failed Airflow DAG runs»); `infra.json` без фильтра показывает и
+одноразовые контейнеры `make test-spark`, `dags-check`.

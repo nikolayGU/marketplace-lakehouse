@@ -4,20 +4,24 @@
 Новый раздел пишется сверху. Тест держит файл в 20 480 байт: прежние разделы уходят дословно в
 `docs/planning/archive/` (раздел «История»), «Итог» пакетов остаётся в их файлах.
 
-## Состояние на 20.11.2026: P08 исполнен, gold и BI
+## Состояние на 20.11.2026: P09 исполнен, наблюдаемость
 
-Пакет `docs/planning/21-final-audit-2026-11-13/P08-gold-bi.md` закрыт коммитом `580e608`:
-- формулы метрик Superset под тестом и сверены с `GMV_EXCLUDED_STATUSES`; 6 мутаций красные;
-- AOV по D8 (В-24): делитель только заказы с живой позицией, на стенде 135.304237 -> 135.310630;
-- глоссарий dbt 13 блоков, у каждой метрики графиков `doc()`; exposures Superset и Grafana;
-- числа описаний сняты 20.11 (297; 793 = 751 + 42; 13 113 797.93); колонки-ловушки описаны,
-  заголовок «States with the lowest on-time share»; комментарии Trino называют `superset`.
-Проверки: `make check` `2144 passed, 149 skipped`; `make dbt-build` `ERROR=0 WARN=4`; `reviewer`
-два круга, «принять с замечаниями»; импорт бандла (В-05) `ExitCode 0`, `check.py` 13 графиков;
-цикл verify `verify ok`; CI `success`. Детали: «Итог» пакета.
+Пакет `docs/planning/21-final-audit-2026-11-13/P09-observability.md` закрыт коммитом `78b3754`:
+- `AirflowDagFailed` не горит после дыры скрейпа (`and on (instance) up offset 30m`);
+- `SparkRestartLoop`, `ContainerRestarting` и 7 панелей Infra без имени проекта; merge и
+  `run`-контейнеры не считаются; stuck `SparkNoBatch5m` с `for: 1m`;
+- `summary` и `runbook_url` у всех 16 правил; ранбуки `airflow-dag-failed`, `dq-checks`,
+  `containers`; таблица «Runbooks» по строке на алерт; порог 200 точек закреплён с двух сторон;
+- Pipeline health: первым рядом таблица «Firing alerts» и stat «Targets down».
+Проверки: `make alerts-test` `SUCCESS: 16 rules found`; `make check` `2215 passed, 149 skipped`;
+`check_dashboards.py` `queries ok: 33`; `reviewer` два круга, «принять»; цикл verify `verify ok`;
+CI `success`. Детали: «Итог» пакета.
 
-Стенд и бэклог: P01-P08 исполнены, следующий P09 (наблюдаемость, В-06); бэклог только
-`docs/planning/21-final-audit-2026-11-13/README.md`, раздел 4. Реплей на 10.11: `virtual_now`
+Ждёт «ок» владельца: `docker exec lakehouse-prometheus-1 kill -HUP 1` (В-06). До него живой
+Prometheus работает по старым правилам (16 правил, `annotations` у 0).
+
+Стенд и бэклог: P01-P09 исполнены, следующий P10 (ID карточек в коде); бэклог только
+`docs/planning/21-final-audit-2026-11-13/README.md`, раздел 4. Реплей на 20.11: `virtual_now`
 2026-07-18 06:02:03, осталось 21 701 событие, любая порция только по «ок» на точный текст.
 Bronze без коммитов с 06.11.
 
@@ -44,6 +48,8 @@ Bronze без коммитов с 06.11.
 
 | Дата UTC | Действие | Кто дал | Где видно |
 |---|---|---|---|
+| 20.11 ~21:00 | P09: цикл verify (паузы `silver_upsert`, `dbt_build`, `dq_checks`, стоп scheduler, `verify ok`), коммит `78b3754`, снятие пауз, push `7c50671..78b3754` | рутина сессии | `git log`, «Итог» P09 |
+| 20.11 ~20:35 | P09: рутина сессии «да», В-06 «да» (команда HUP на «ок») | владелец, аргумент `/task` | «Итог» P09 |
 | 20.11 ~20:28 | P08: цикл verify (паузы `silver_upsert`, `dbt_build`, `dq_checks`, стоп scheduler, `verify ok`), коммит `580e608`, снятие пауз, `airflow dags trigger dbt_build` один раз после паузы с начала сессии, push `d82d40a..580e608` | рутина сессии | `git log`, «Итог» P08 |
 | 20.11 ~20:25 | P08, В-05: `docker compose --env-file .env -f docker/compose.yaml --profile bi up -d --force-recreate --no-deps superset-init` | владелец, «ок» на точный текст | «Итог» P08 |
 | 20.11 ~19:55 | P08: рутина сессии «да», В-24 «да», В-05 «да» (команда импорта на «ок») | владелец, аргумент `/task` | «Итог» P08 |
