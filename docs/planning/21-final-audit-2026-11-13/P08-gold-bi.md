@@ -1,6 +1,6 @@
 # P08. Gold и BI: формулы KPI под тестом, глоссарий метрик, числа описаний, exposures
 
-Статус: не начат. Сессия на Opus: `/task docs/planning/21-final-audit-2026-11-13/P08-gold-bi.md`.
+Статус: исполнен 20.11.2026, `580e608`. Сессия на Opus: `/task docs/planning/21-final-audit-2026-11-13/P08-gold-bi.md`.
 
 ## Цель
 
@@ -239,4 +239,48 @@ uv run python -c "import json;print(len(json.load(open('dbt/target/manifest.json
 
 ## Итог
 
-Заполняет исполнитель по разделу 6 `13-harness.md`.
+Исполнено 20.11.2026 (UTC) одной сессией на Opus (оркестратор), коммит `580e608` (15 файлов,
++296 -26). Решения из аргумента `/task`: рутина сессии «да», В-24 «да», В-05 «да»; импорт бандла
+по «ок» на точный текст. Код и тесты: `implementer`, 3 брифа (А шаги 1, 3 AOV, 5 в бандле и
+`test_superset_bundle.py`; Б шаги 2, 3 в `dbt/` и `test_dbt_exposures.py`; В исправления круга 1
+ревью); шаги 4, 6, переносы длинных строк и живые шаги: оркестратор; ревью `reviewer`, два круга.
+
+| Критерий | Проверка | Результат |
+|---|---|---|
+| Вход | чтение и grep цитат, MCP, Trino | все 9 пунктов подтверждены; номера сдвинуты: тест метрик `:132`, а не `:173`; `reconcile.py:337`, а не `:343`; тест плиток `:265`; файлы `work/` лежат в папке аудита |
+| Тесты пакета | `uv run pytest tests/unit/test_superset_bundle.py tests/unit/test_dbt_exposures.py tests/unit/test_trino_access.py -q` | `165 passed` |
+| Мутации | копия в scratchpad, `.venv/bin/python -m pytest tests/unit/test_superset_bundle.py -q -p no:cacheprovider` | база `47 passed`; B2, B3, M3 по 2 failed (`test_saved_metrics_have_the_expected_expressions[fct_orders]` и `test_paid_metrics_exclude_the_statuses_of_reconcile[fct_orders-gmv\|paid_orders\|freight_share]`); B4, M1 `[fct_orders]`, M2 `[mart_delivery_sla]` по 1 failed; имя метрики в diff словаря (`{'cancellation_rate': ...}`); ревьюер добавил красные T1-T7 (описания ловушек, ref exposures, `doc()`, `sliceName`, статусы `in_transit_orders`) |
+| Тесты на отказ | до правки | бандл: `5 failed, 42 passed` (`aov`, 3 ловушки, заголовок); exposures и глоссарий `3 failed` (нет файла, 5 блоков); ловушки после ревью `1 failed` на описании «Orders.» |
+| dbt | `make dbt-parse`; `EXPOSURES` | exit 0; `2` |
+| Глоссарий и числа | `grep -c "{% docs" dbt/models/docs.md`; grep `287 orders\|765 orders\|12 894` | `13`; пусто |
+| Числа описаний | запрос шага 4 в Trino | `297`, `793` = `751` + 42 (все `canceled`), mart = silver = `13113797.93` |
+| `make dbt-build` | пауза `dbt_build`, ничего в полёте | `PASS=79 WARN=4 ERROR=0 SKIP=0 NO-OP=2 TOTAL=85` |
+| grep бандла и Trino | `most late deliveries`; `W6-D17`; `superset` в `lake_ro.properties` | пусто; пусто; строка 2 |
+| `make check` | после круга 1 | `2144 passed, 149 skipped` |
+| Ревью | `reviewer` | круг 1 «принять с замечаниями» (1 среднее: тест ловушек проверял только непустое описание; 3 низких); круг 2 «принять с замечаниями» (1 низкое, ниже) |
+| В-05 | `--profile bi up -d --force-recreate --no-deps superset-init` 20:25Z | `ExitCode 0`; `check.py` 13 строк `rows`, exit 0; MCP: график id 3 «States with the lowest on-time share»; «Average order value» `aov__inherit` 135.304237 -> `135.310630`; `mart_daily_sales` описания `orders_count`, `canceled_orders` |
+| Verify | цикл §5 перед коммитом | `verify ok`, full-отметка дерева `63ea9f6b` |
+| CI | `gh run watch 44811320997 --exit-status` | exit 0, `success` на `580e608`, 13 job `success` |
+| Пауза | `dbt_build` с начала сессии | снята последней; `airflow dags trigger dbt_build` один раз, run `success` |
+
+Отклонения от пакета:
+- Тест глоссария лежит в `tests/unit/test_dbt_exposures.py` (пакет файл не называл): он читает
+  и бандл, и dbt.
+- Тест ловушек по ревью требует фраз (`do not sum`, `fct_orders`; `do not average`,
+  `on_time_rate`), а не только непустого описания.
+- В exposure `maturity: medium`; подписи перед `doc()` убраны (блоки начинаются своей
+  подписью), заголовок «Dashboard metrics defined on the datasets».
+- `cancellation_rate` дополнен знаменателем продавца («orders with any item of the seller,
+  deleted items included»); в `name_scopes` «can exceed», а не «exceeds».
+- Описания колонок `mart_daily_sales` начинаются с сути колонки; строки > 100 перенесены, в том
+  числе комментарий `lake_ro.properties`.
+
+Не проверено: страница lineage в `dbt docs` (`dbt docs generate` не запускался; exposures есть в
+manifest); вид дашборда глазами после импорта (проверены `check.py` и MCP).
+
+Замечено вне пакета: `tests/unit/test_marketplace_dashboard.py:3` пишет `(W6-D17)` (P10);
+`lake_ro.properties:5` 104 символа, было до пакета.
+
+Риски: числа 297, 793/751/42 и 13 113 797.93 по шагу 4 стоят без даты замера и устареют после
+следующего реплея молча (низкое замечание ревью); AOV прошлого квартала на плитке 135.30 ->
+135.31.

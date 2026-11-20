@@ -1,20 +1,22 @@
 # HANDOFF
 
-Состояние для следующей сессии: верхний раздел «Состояние», «Открыто», журнал «ок» с 06.11.
+Состояние для следующей сессии: верхний раздел «Состояние», «Открыто», журнал «ок» с 10.11.
 Новый раздел пишется сверху. Тест держит файл в 20 480 байт: прежние разделы уходят дословно в
 `docs/planning/archive/` (раздел «История»), «Итог» пакетов остаётся в их файлах.
 
-## Состояние на 20.11.2026: P07 исполнен, скрипты и набор тестов
+## Состояние на 20.11.2026: P08 исполнен, gold и BI
 
-Пакет `docs/planning/21-final-audit-2026-11-13/P07-infra-scripts.md` закрыт коммитом `4ef3c49`:
-- SQL offsets bronze под тестом на sqlite; chaos-помощники в `lib.sh`, без имён контейнеров;
-- shellcheck 0.11.0 в `make lint` и CI; якоря compose, хэши 27 сервисов равны;
-- `make help`, `.gitignore` `.env.*`, `TRINO_XMX=2g` в примере, шапка `verify.sh`;
-- тесты поведения вместо подстрочных; две медленные выборки 118 -> 76 с.
-Проверки: `make check` `2128 passed, 149 skipped`; `reviewer` два круга, «принять с
-замечаниями»; цикл verify `verify ok`; CI `success`. Детали: «Итог» пакета.
+Пакет `docs/planning/21-final-audit-2026-11-13/P08-gold-bi.md` закрыт коммитом `580e608`:
+- формулы метрик Superset под тестом и сверены с `GMV_EXCLUDED_STATUSES`; 6 мутаций красные;
+- AOV по D8 (В-24): делитель только заказы с живой позицией, на стенде 135.304237 -> 135.310630;
+- глоссарий dbt 13 блоков, у каждой метрики графиков `doc()`; exposures Superset и Grafana;
+- числа описаний сняты 20.11 (297; 793 = 751 + 42; 13 113 797.93); колонки-ловушки описаны,
+  заголовок «States with the lowest on-time share»; комментарии Trino называют `superset`.
+Проверки: `make check` `2144 passed, 149 skipped`; `make dbt-build` `ERROR=0 WARN=4`; `reviewer`
+два круга, «принять с замечаниями»; импорт бандла (В-05) `ExitCode 0`, `check.py` 13 графиков;
+цикл verify `verify ok`; CI `success`. Детали: «Итог» пакета.
 
-Стенд и бэклог: P01-P07 исполнены, следующий P08 (gold и BI); бэклог только
+Стенд и бэклог: P01-P08 исполнены, следующий P09 (наблюдаемость, В-06); бэклог только
 `docs/planning/21-final-audit-2026-11-13/README.md`, раздел 4. Реплей на 10.11: `virtual_now`
 2026-07-18 06:02:03, осталось 21 701 событие, любая порция только по «ок» на точный текст.
 Bronze без коммитов с 06.11.
@@ -42,6 +44,9 @@ Bronze без коммитов с 06.11.
 
 | Дата UTC | Действие | Кто дал | Где видно |
 |---|---|---|---|
+| 20.11 ~20:28 | P08: цикл verify (паузы `silver_upsert`, `dbt_build`, `dq_checks`, стоп scheduler, `verify ok`), коммит `580e608`, снятие пауз, `airflow dags trigger dbt_build` один раз после паузы с начала сессии, push `d82d40a..580e608` | рутина сессии | `git log`, «Итог» P08 |
+| 20.11 ~20:25 | P08, В-05: `docker compose --env-file .env -f docker/compose.yaml --profile bi up -d --force-recreate --no-deps superset-init` | владелец, «ок» на точный текст | «Итог» P08 |
+| 20.11 ~19:55 | P08: рутина сессии «да», В-24 «да», В-05 «да» (команда импорта на «ок») | владелец, аргумент `/task` | «Итог» P08 |
 | 20.11 ~20:00 | P07: цикл verify (паузы `silver_upsert`, `dbt_build`, `dq_checks`, стоп scheduler, `verify ok`), коммит `4ef3c49`, снятие пауз, push `0817f73..4ef3c49` | рутина сессии | `git log`, «Итог» P07 |
 | 20.11 ~19:25 | P07: `uv add --group dev shellcheck-py==0.11.0.1` | владелец, «ок» на точный текст | «Итог» P07 |
 | 20.11 ~19:20 | P07: рутина сессии «да», В-12 «да» (команда на «ок»), оба сокращения набора тестов «да» | владелец, аргумент `/task` | «Итог» P07 |
@@ -83,24 +88,11 @@ Bronze без коммитов с 06.11.
 | 10.11 ~15:30 | «а вообще ок сделай сам, я держатель» на три точные команды: `docker compose --env-file .env -f docker/compose.yaml --profile orchestrate up -d --no-deps airflow-api-server`; `... --profile core build spark-bronze`; `... --profile stateful up -d --no-deps --force-recreate spark-orders-per-minute`; держатель прав MIT: владелец (записан логин `nikolayGU`); docs-коммит и push по рутине сессии | владелец в Claude Code | этот раздел, таблица выше |
 | 10.11 14:28 | PF-01: `docker exec lakehouse-prometheus-1 kill -HUP 1`; `/api/v1/rules` 16 с `GoldStaleAtRest` | вопрос с вариантами 10.11 ~14:27, текст команды в варианте «Defects and protection» | файл 18, «Обновление 10.11» |
 | 10.11 ~14:27 | Рутина сессии: циклы verify (пауза трёх DAG, stop и start scheduler, `make verify`), docs-коммиты (п. 11, файл 19, HANDOFF, NEXT_SESSION, индекс), `git push origin main` без force вместе с `fa29b74`; в работу только Д1; лицензия MIT; дашборд сначала макетом | владелец в Claude Code, вопрос с вариантами | `docs/planning/19-review-2026-11-10.md`, раздел 3 |
-| 06.11 ~18:34 | «ок и заканчиваем»: один docs-коммит файла 18 и записей в индексе, HANDOFF и NEXT_SESSION; push не входит | владелец в Claude Code | `git log` |
-| 06.11 ~18:15 | «пометь всё что можно отправить исправить пока не будем но пометим на будущее в репозитории»: бэклог PF-01..PF-65 в `docs/planning/18-postfix-audit-2026-11-06.md`, строки в индексе планов, HANDOFF и NEXT_SESSION; исправлений нет | владелец в Claude Code | `docs/planning/18-postfix-audit-2026-11-06.md` |
-| 06.11 ~16:40 | «делай пуш»: `git push origin main` без force (`f7eede8..` итоговый docs-коммит этой записи, 6 коммитов), затем CI | владелец в Claude Code | `git status -sb`, `gh run list` |
-| 06.11 ~15:04 | «mcp ставим официальный в claude code в репозиторий не постим его настройки»: `.mcp.json` удалён и в `.gitignore`; `claude mcp add --transport http --scope local superset http://127.0.0.1:5008/mcp` (локальный конфиг, 15:05) | владелец в Claude Code | `docs/planning/17-audit-fixes.md` |
-| 06.11 ~14:30 | «настрой и подключи MCP для Superset»: встроенный MCP-сервис Superset 6.1 (`superset-mcp`, порт 5008, `MCP_DEV_USERNAME=admin`), в карточке К2 | владелец в Claude Code | `docs/planning/17-audit-fixes.md` |
-| 06.11 ~14:15 | «да ок на всё начни вносить правки необходимы и подключай mcp superset если необходимо» на четыре пункта аудита 06.11: оживить Superset (F-02); класс C из P1: пересоздание `kafka` и `minio`, `make up PROFILE=stateful`, `make up PROFILE=bi`; `make replay-burst SECONDS=30` для живого E2E; строка аудита в индексе планов и коммиты. Push не входит. MCP Superset признан ненужным (`docs/planning/17-audit-fixes.md`) | владелец в Claude Code | `docs/planning/17-audit-fixes.md` |
-| 06.11 12:21-12:22 | `git push origin main` (`0395bcf..bccd194`), снятие пауз трёх DAG, `gh workflow run smoke.yml --ref main` (run 42216951898, success) | рутина закрытия 06.11 ~12:01 | `gh run list`, `git log` |
-| 06.11 12:51 | `kafka-configs.sh --describe --entity-name oltp.message` (только чтение, повтор W6-T08 по ревью): `segment.ms=3600000` | не нужно (класс A) | «Итог» W6-T08 |
-| 06.11 12:17-12:19 | Цикл verify: пауза трёх DAG, `stop airflow-scheduler`, `make verify` verify ok 7 из 7 (full 12:18:29Z), `make dbt-build` `PASS=79 WARN=4 ERROR=0`, `start airflow-scheduler` | рутина закрытия 06.11 ~12:01 | этот раздел |
-| 06.11 12:05-12:12 | Б10 живьём: `timeout -s TERM 2100 make chaos-silver-kill` по точному тексту вопроса (с ожиданием окна */5), код 0, `silver-kill ok`; burst 30 с из W6-D13 (5 ч 53 мин виртуальных) | владелец в Claude Code, вопрос с вариантами, 06.11 ~12:01 | аудит, раздел 10, «Итог» Б10 |
-| 06.11 ~12:01 | Удаление трёх неотслеживаемых патчей (`15-audit-b10-silver-kill.patch`, `15-audit-b10-rel07-test.patch`, `15-audit-p5-harness-wip.patch`): «да, удалить»; выполнено `rm` 12:04 | владелец в Claude Code, вопрос с вариантами | `git status` |
-| 06.11 ~12:01 | Гейты владельца (`LEARNING.md`, п. 8 раздела 6 спеки 14): «отложить с записью»; `LEARNING.md:4` («task the AI») остаётся исключением гигиены, файл владельца | владелец в Claude Code, вопрос с вариантами | спека 14, «Итог» W6-T10 |
-| 06.11 ~12:01 | Рутина закрытия на сессию: циклы verify, коммиты docs и ops после verify, `git push origin main` без force, `gh workflow run smoke.yml --ref main` на итоговом HEAD, `make dbt-build` при паузе `dbt_build` | владелец в Claude Code, вопрос с вариантами | этот раздел |
 
 ## История
 
-- 13.11-19.11.2026 (Д2.5, финальный аудит, пакеты P01-P04):
+- 13.11-20.11.2026 (Д2.5, финальный аудит, пакеты P01-P07):
   `docs/planning/archive/HANDOFF-2026-11-13-to-2026-11-19.md`.
 - 27.10-10.11.2026 (закрытие проекта, аудиты 30.10 и 06.11, ревью 10.11, «Действия владельца»,
-  журнал «ок» до 06.11): `docs/planning/archive/HANDOFF-2026-10-27-to-2026-11-10.md`.
+  журнал «ок» по 06.11 включительно): `docs/planning/archive/HANDOFF-2026-10-27-to-2026-11-10.md`.
 - 08.10-24.10.2026: `docs/planning/archive/HANDOFF-2026-10-24-and-earlier.md`.

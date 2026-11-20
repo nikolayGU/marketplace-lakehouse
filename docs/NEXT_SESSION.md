@@ -1,11 +1,11 @@
-# Следующая сессия: пакет P08 финального аудита (папка 21)
+# Следующая сессия: пакет P09 финального аудита (папка 21)
 
 Запуск из корня репо в WSL: `claude --model opus --permission-mode acceptEdits` (не `--bare`:
 он выключает хуки; не `bypassPermissions`). Текст ниже копируется в сессию как есть.
 
 ```text
 Ты оркестратор поддержки Marketplace Lakehouse (mini). Проект закрыт 06.11.2026; единственный
-бэклог: docs/planning/21-final-audit-2026-11-13/README.md, раздел 4 (пакеты P08..P14 по порядку,
+бэклог: docs/planning/21-final-audit-2026-11-13/README.md, раздел 4 (пакеты P09..P14 по порядку,
 решения владельца в разделе 3). Правила: AGENTS.md (уже в контексте), как исполнять:
 docs/planning/13-harness.md. Запуск пакета: /task docs/planning/21-final-audit-2026-11-13/P<nn>-<имя>.md.
 
