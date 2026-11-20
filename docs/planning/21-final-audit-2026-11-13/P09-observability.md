@@ -1,5 +1,5 @@
 # P09. Наблюдаемость: правила алертов, annotations, ранбуки, горящие алерты на дашборде
-Статус: исполнен 20.11.2026, `78b3754`; HUP (В-06) ждёт «ок». Оркестратор Opus по `13-harness.md`: `/task docs/planning/21-final-audit-2026-11-13/P09-observability.md`.
+Статус: исполнен 20.11.2026, `78b3754`; HUP (В-06) 21:02Z по «ок». Оркестратор Opus по `13-harness.md`: `/task docs/planning/21-final-audit-2026-11-13/P09-observability.md`.
 
 ## Цель
 
@@ -263,7 +263,7 @@
 | Verify | цикл §5 перед коммитом | `verify ok`, full-отметка дерева `bc8574e0` |
 | CI | `gh run watch 44815798932 --exit-status` | exit 0, `success` на `78b3754`, 12 job `success` |
 | Паузы | `silver_upsert`, `dbt_build`, `dq_checks` на время цикла verify | сняты после коммита в порядке §5; silver без новых данных, `dbt_build` не запускался вручную |
-| HUP (В-06) | `docker exec lakehouse-prometheus-1 kill -HUP 1` | ждёт «ок» владельца на точный текст; до HUP живой Prometheus работает по старым правилам: `/api/v1/rules` 16 правил, `annotations` у 0 |
+| HUP (В-06) | `docker exec lakehouse-prometheus-1 kill -HUP 1` 2026-11-20T21:02:44Z по «ок» владельца | rc 0; до: 16 правил, `annotations` у 0, `lastConfigTime` 2026-11-18T06:21:48Z; после: скрипт «Готово, когда» `16 16`, `reloadConfigSuccess` true, `lastConfigTime` 2026-11-20T21:02:44Z, все правила `health: ok` без `lastError`, `offset 30m` в 1 правиле; горит `ContainerRestarting` на `lakehouse-airflow-scheduler-1` с новым `summary` (плановый стоп scheduler в цикле verify) |
 
 Расхождения со входом:
 - `docs/runbooks/catalog-cutover.md` в дереве нет (удалён с откатом на JDBC в P06): строки в
@@ -289,8 +289,7 @@
 - `docs/runbooks/containers.md`: `../../OPERATIONS.md#observability`, заметки экспортеров
   (`DOCKER_GID`, `COMPOSE_PROJECT_NAME`, healthcheck).
 
-Не проверено: вид таблицы «Firing alerts» в Grafana (владелец глазами); пункты после HUP
-(`16 16`, `reloadConfigSuccess`, `health: ok`) до «ок» на HUP; кейсы containers.md шаги 3-4
+Не проверено: вид таблицы «Firing alerts» в Grafana (владелец глазами); кейсы containers.md шаги 3-4
 (старт `kafka-exporter` и `lakekeeper` раньше зависимостей, stateful job после сна) взяты из
 отчётов аудита, живьём не воспроизводились.
 

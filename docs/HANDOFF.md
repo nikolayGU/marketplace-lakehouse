@@ -17,8 +17,8 @@
 `check_dashboards.py` `queries ok: 33`; `reviewer` два круга, «принять»; цикл verify `verify ok`;
 CI `success`. Детали: «Итог» пакета.
 
-Ждёт «ок» владельца: `docker exec lakehouse-prometheus-1 kill -HUP 1` (В-06). До него живой
-Prometheus работает по старым правилам (16 правил, `annotations` у 0).
+HUP (В-06) по «ок» 21:02Z: живой Prometheus `16 16` правил с `runbook_url`, `reloadConfigSuccess`
+true, все `health: ok`. Вид таблицы «Firing alerts» в Grafana глазами не проверен.
 
 Стенд и бэклог: P01-P09 исполнены, следующий P10 (ID карточек в коде); бэклог только
 `docs/planning/21-final-audit-2026-11-13/README.md`, раздел 4. Реплей на 20.11: `virtual_now`
@@ -48,6 +48,7 @@ Bronze без коммитов с 06.11.
 
 | Дата UTC | Действие | Кто дал | Где видно |
 |---|---|---|---|
+| 20.11 21:02 | P09, В-06: `docker exec lakehouse-prometheus-1 kill -HUP 1`; коммит итога и push | владелец, «ок» на точный текст | «Итог» P09 |
 | 20.11 ~21:00 | P09: цикл verify (паузы `silver_upsert`, `dbt_build`, `dq_checks`, стоп scheduler, `verify ok`), коммит `78b3754`, снятие пауз, push `7c50671..78b3754` | рутина сессии | `git log`, «Итог» P09 |
 | 20.11 ~20:35 | P09: рутина сессии «да», В-06 «да» (команда HUP на «ок») | владелец, аргумент `/task` | «Итог» P09 |
 | 20.11 ~20:28 | P08: цикл verify (паузы `silver_upsert`, `dbt_build`, `dq_checks`, стоп scheduler, `verify ok`), коммит `580e608`, снятие пауз, `airflow dags trigger dbt_build` один раз после паузы с начала сессии, push `d82d40a..580e608` | рутина сессии | `git log`, «Итог» P08 |
