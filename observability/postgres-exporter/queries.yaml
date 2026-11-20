@@ -1,5 +1,5 @@
 # The built-in replication slot collector reports confirmed_flush_lsn only for active slots, so
-# retained WAL of a stopped consumer is computed here (W4-D3).
+# retained WAL of a stopped consumer is computed here.
 lakehouse_slot:
   master: true
   query: |

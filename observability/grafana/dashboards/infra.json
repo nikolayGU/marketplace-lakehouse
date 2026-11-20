@@ -40,7 +40,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "docker_container_memory_usage_bytes{name=~\"lakehouse-.+\"}",
+          "expr": "docker_container_memory_usage_bytes",
           "legendFormat": "{{service}}",
           "refId": "A"
         }
@@ -73,7 +73,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "docker_container_memory_usage_bytes{name=~\"lakehouse-.+\"} / (docker_container_memory_limit_bytes{name=~\"lakehouse-.+\"} > 0)",
+          "expr": "docker_container_memory_usage_bytes / (docker_container_memory_limit_bytes > 0)",
           "legendFormat": "{{service}}",
           "refId": "A"
         }
@@ -106,7 +106,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "rate(docker_container_cpu_usage_seconds_total{name=~\"lakehouse-.+\"}[5m])",
+          "expr": "rate(docker_container_cpu_usage_seconds_total[5m])",
           "legendFormat": "{{service}}",
           "refId": "A"
         }
@@ -139,7 +139,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "docker_container_start_time_seconds{name=~\"lakehouse-.+\"} * 1000",
+          "expr": "docker_container_start_time_seconds * 1000",
           "legendFormat": "{{service}}",
           "refId": "A"
         }
@@ -172,7 +172,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "docker_container_restart_count{name=~\"lakehouse-.+\"}",
+          "expr": "docker_container_restart_count",
           "legendFormat": "{{service}}",
           "refId": "A"
         }
@@ -205,7 +205,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "docker_container_oom_killed{name=~\"lakehouse-.+\"}",
+          "expr": "docker_container_oom_killed",
           "legendFormat": "{{service}}",
           "refId": "A"
         }
@@ -238,7 +238,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "docker_container_healthy{name=~\"lakehouse-.+\"}",
+          "expr": "docker_container_healthy",
           "legendFormat": "{{service}}",
           "refId": "A"
         }

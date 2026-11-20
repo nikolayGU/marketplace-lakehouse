@@ -1,7 +1,8 @@
-# Connector status FAILED
+# Connector not running or CDC stalled (ConnectorNotRunning, CdcStalledSourceWrites)
 
-Symptom: `make connector-status` shows FAILED for the connector or its task; bronze stops growing
-while the replayer writes.
+Symptom: alert `ConnectorNotRunning`: no task of `shop-connector` is `running` (also when Connect
+is down); `make connector-status` shows FAILED for the connector or its task; bronze stops growing
+while the replayer writes. Alert `CdcStalledSourceWrites`: see step 7.
 
 1. Read the trace: `curl -s 127.0.0.1:8083/connectors/shop-connector/status | python3 -m json.tool`.
 2. Postgres was restarted or unreachable: once `postgres-oltp` is healthy, restart the task with
@@ -26,3 +27,14 @@ while the replayer writes.
    sourced into your own shell, a DIFF from `reconcile` would close it.
 6. Never drop the replication slot or the `connect-offsets` topic to "fix" it: that forces a new
    initial snapshot and is on the blast-radius list.
+7. `CdcStalledSourceWrites` (warn): the source wrote and the replication slot confirmed nothing
+   for two `dq_checks` runs in a row (about 20 minutes). `dq_checks` stays green with `in flight`
+   meanwhile, and only the silver-gold pairs are compared. The task can be RUNNING with a blocked
+   producer (step 3), so check in this order: `make status` (Kafka healthy?), `make connector-status`,
+   `make logs S=kafka-connect`. Fix the cause with the steps above. Once the slot moves and bronze
+   catches up, the verdict returns and the alert resolves. A paused `dq_checks` leaves the last
+   value 1 until the statsd TTL (45 minutes); then this alert and `DqChecksStale` fire together
+   (`dq-checks.md`).
+
+Reproduce: `make chaos-connect-pause` (OPERATIONS.md, scenario 6): `ConnectorNotRunning` fired 95 s
+after the stop and `CdcStalledSourceWrites` 33 min after it (chaos 6, 2026-10-29).

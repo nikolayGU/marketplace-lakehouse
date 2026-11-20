@@ -14,6 +14,100 @@
   ],
   "panels": [
     {
+      "id": 26,
+      "title": "Firing alerts",
+      "type": "table",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Alerts firing now, one row per alert name and cause. When nothing fires, one row with count 0 and no name.",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 18,
+        "h": 7
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            },
+            "renameByName": {
+              "Value": "count"
+            }
+          }
+        }
+      ],
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "count by (alertname, severity, cause) (ALERTS{alertstate=\"firing\"}) or on() vector(0)",
+          "format": "table",
+          "instant": true,
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 27,
+      "title": "Targets down",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Scrape targets with up == 0.",
+      "gridPos": {
+        "x": 18,
+        "y": 0,
+        "w": 6,
+        "h": 7
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "count(up == 0) or vector(0)",
+          "legendFormat": "down",
+          "refId": "A"
+        }
+      ]
+    },
+    {
       "id": 1,
       "title": "Bronze Kafka lag by topic",
       "type": "timeseries",
@@ -24,7 +118,7 @@
       "description": "Spark listener: broker end minus last batch end (ADR-013). 0 at rest.",
       "gridPos": {
         "x": 0,
-        "y": 0,
+        "y": 7,
         "w": 12,
         "h": 7
       },
@@ -58,7 +152,7 @@
       "description": "",
       "gridPos": {
         "x": 12,
-        "y": 0,
+        "y": 7,
         "w": 12,
         "h": 7
       },
@@ -92,7 +186,7 @@
       "description": "",
       "gridPos": {
         "x": 0,
-        "y": 7,
+        "y": 14,
         "w": 12,
         "h": 7
       },
@@ -126,7 +220,7 @@
       "description": "Alert SparkNoBatch5m at 300 s. Idle events also move it.",
       "gridPos": {
         "x": 12,
-        "y": 7,
+        "y": 14,
         "w": 12,
         "h": 7
       },
@@ -159,7 +253,7 @@
       "description": "JMX agent in Connect: 1 for the current status.",
       "gridPos": {
         "x": 0,
-        "y": 14,
+        "y": 21,
         "w": 12,
         "h": 7
       },
@@ -192,7 +286,7 @@
       "description": "-1 until the first event after a start.",
       "gridPos": {
         "x": 12,
-        "y": 14,
+        "y": 21,
         "w": 12,
         "h": 7
       },
@@ -222,10 +316,10 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Alert SlotWalRetainedHigh: over 64 MiB with the slot inactive, or over 512 MiB.",
+      "description": "Alerts SlotWalRetainedHigh (over 64 MiB with the slot inactive, or over 512 MiB) and SlotWalHeldIdle (over 64 MiB for a whole hour with the slot active).",
       "gridPos": {
         "x": 0,
-        "y": 21,
+        "y": 28,
         "w": 12,
         "h": 7
       },
@@ -258,7 +352,7 @@
       "description": "1 while a walsender holds the slot.",
       "gridPos": {
         "x": 12,
-        "y": 21,
+        "y": 28,
         "w": 12,
         "h": 7
       },
@@ -291,7 +385,7 @@
       "description": "Alert FreshnessAbove15m at 900 s. 0 at rest.",
       "gridPos": {
         "x": 0,
-        "y": 28,
+        "y": 35,
         "w": 12,
         "h": 7
       },
@@ -324,7 +418,7 @@
       "description": "Grows between replay bursts: no traffic, not a fault. Steps every 15 min.",
       "gridPos": {
         "x": 12,
-        "y": 28,
+        "y": 35,
         "w": 12,
         "h": 7
       },
@@ -357,7 +451,7 @@
       "description": "",
       "gridPos": {
         "x": 0,
-        "y": 35,
+        "y": 42,
         "w": 12,
         "h": 7
       },
@@ -399,7 +493,7 @@
       "description": "",
       "gridPos": {
         "x": 12,
-        "y": 35,
+        "y": 42,
         "w": 12,
         "h": 7
       },
@@ -441,7 +535,7 @@
       "description": "",
       "gridPos": {
         "x": 0,
-        "y": 42,
+        "y": 49,
         "w": 12,
         "h": 7
       },
@@ -474,7 +568,7 @@
       "description": "",
       "gridPos": {
         "x": 12,
-        "y": 42,
+        "y": 49,
         "w": 12,
         "h": 7
       },
@@ -507,7 +601,7 @@
       "description": "Alert AirflowDagFailed.",
       "gridPos": {
         "x": 0,
-        "y": 49,
+        "y": 56,
         "w": 12,
         "h": 7
       },
@@ -540,7 +634,7 @@
       "description": "Open one-minute windows; grows with the watermark delay, evicted behind it.",
       "gridPos": {
         "x": 12,
-        "y": 49,
+        "y": 56,
         "w": 12,
         "h": 7
       },
@@ -574,7 +668,7 @@
       "description": "Event time of the data, not the clock: a date far from now is the replay's virtual time.",
       "gridPos": {
         "x": 0,
-        "y": 56,
+        "y": 63,
         "w": 12,
         "h": 7
       },
@@ -608,7 +702,7 @@
       "description": "",
       "gridPos": {
         "x": 12,
-        "y": 56,
+        "y": 63,
         "w": 12,
         "h": 7
       },
@@ -642,7 +736,7 @@
       "description": "",
       "gridPos": {
         "x": 0,
-        "y": 63,
+        "y": 70,
         "w": 12,
         "h": 7
       },
@@ -673,10 +767,10 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Source against silver and silver against gold, by row fingerprint, at rest only (W5-T04). 0 everywhere.",
+      "description": "Source against silver and silver against gold, by row fingerprint, at rest only. 0 everywhere.",
       "gridPos": {
         "x": 12,
-        "y": 63,
+        "y": 70,
         "w": 12,
         "h": 7
       },
@@ -709,7 +803,7 @@
       "description": "",
       "gridPos": {
         "x": 0,
-        "y": 70,
+        "y": 77,
         "w": 12,
         "h": 7
       },
@@ -742,7 +836,7 @@
       "description": "",
       "gridPos": {
         "x": 12,
-        "y": 70,
+        "y": 77,
         "w": 12,
         "h": 7
       },
@@ -775,7 +869,7 @@
       "description": "",
       "gridPos": {
         "x": 0,
-        "y": 77,
+        "y": 84,
         "w": 6,
         "h": 7
       },
@@ -808,7 +902,7 @@
       "description": "The gauges expire after 45 minutes; a verdict that keeps getting older means the check has been in flight for a long time.",
       "gridPos": {
         "x": 6,
-        "y": 77,
+        "y": 84,
         "w": 6,
         "h": 7
       },
@@ -826,39 +920,6 @@
           },
           "expr": "time() - lakehouse_dq_reconcile_verdict_timestamp_seconds",
           "legendFormat": "seconds",
-          "refId": "A"
-        }
-      ]
-    },
-    {
-      "id": 25,
-      "title": "Firing alerts",
-      "type": "stat",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "description": "",
-      "gridPos": {
-        "x": 12,
-        "y": 77,
-        "w": 12,
-        "h": 7
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "count(ALERTS{alertstate=\"firing\"}) or vector(0)",
-          "legendFormat": "firing",
           "refId": "A"
         }
       ]

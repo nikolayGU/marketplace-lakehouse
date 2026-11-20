@@ -1,9 +1,8 @@
-# The six alerts of week 4 (W4-T05), plus the alerts on a source that went silent (review of W4
-# and W5): a gauge that stops coming must not read as "all quiet". Week 6 adds SlotWalHeldIdle
-# (W6-T05) and SparkRestartLoop (W6-T06); the audit of 30.10 adds SilverGoldNotCompared (B3).
-# No Alertmanager (W4-D6): state is read from the Prometheus UI, /api/v1/alerts and the Pipeline
-# health dashboard. Tests: alerts_test.yml (make alerts-test); live proof per alert: OPERATIONS.md,
-# "Observability".
+# Alerts on the pipeline, and on a source that went silent: a gauge that stops coming must not
+# read as "all quiet". No Alertmanager (ADR-015, ADR-023): state is read from the Prometheus UI,
+# /api/v1/alerts and the Pipeline health dashboard. Every rule carries a summary and a runbook_url
+# (a path from the repository root); annotations use only static text and {{ $labels.<name> }}.
+# Tests: alerts_test.yml (make alerts-test); live proof per alert: OPERATIONS.md, "Observability".
 groups:
   - name: lakehouse
     rules:
@@ -13,9 +12,12 @@ groups:
         for: 1m
         labels:
           severity: page
+        annotations:
+          summary: 'Debezium task of shop-connector is not running: no CDC'
+          runbook_url: docs/runbooks/connector-failed.md
 
       # An inactive slot over 64 MiB is a consumer that is gone; any slot over 512 MiB fills the
-      # disk even with one (W4-D3). A live slot holds ~25 MB of WAL on an idle laptop.
+      # disk even with one. A live slot holds ~25 MB of WAL on an idle laptop.
       - alert: SlotWalRetainedHigh
         expr: >-
           (lakehouse_slot_retained_bytes{slot_name="shop_slot"} > 64 * 1024 * 1024
@@ -24,6 +26,9 @@ groups:
         for: 5m
         labels:
           severity: page
+        annotations:
+          summary: shop_slot retains over 64 MiB of WAL with no reader, or over 512 MiB
+          runbook_url: docs/runbooks/slot-wal-growth.md
 
       # An active slot above 64 MiB for a whole hour on an idle source: the slot moves only when
       # the source writes (a healthy one holds ~24 MB after a day idle), so traffic drops it under
@@ -37,13 +42,21 @@ groups:
           and on (slot_name) lakehouse_slot_retained_bytes{slot_name="shop_slot"} <= 512 * 1024 * 1024
         labels:
           severity: warn
+        annotations:
+          summary: shop_slot held over 64 MiB for an hour on an idle source
+          runbook_url: docs/runbooks/slot-wal-growth.md
 
-      # Idle events keep the timestamp moving, so only a stuck or dead query trips this.
+      # Idle events keep the timestamp moving, so only a stuck or dead query trips this. The 1m of
+      # `for` skips the one old sample a host that slept leaves before the current one arrives.
       - alert: SparkNoBatch5m
         expr: time() - spark_streaming_last_batch_timestamp{query="bronze_cdc_ingest"} > 300
+        for: 1m
         labels:
           severity: page
           cause: stuck
+        annotations:
+          summary: Bronze query made no progress for 5 minutes
+          runbook_url: docs/runbooks/spark-stalled.md
       # The driver died: its series is gone, and the rule above has nothing to compare.
       - alert: SparkNoBatch5m
         expr: absent(spark_streaming_last_batch_timestamp{query="bronze_cdc_ingest"})
@@ -51,15 +64,26 @@ groups:
         labels:
           severity: page
           cause: gone
+        annotations:
+          summary: 'Bronze driver metrics gone for 5 minutes: the driver is down'
+          runbook_url: docs/runbooks/spark-stalled.md
 
       # A driver that restarts every few seconds (Kafka stopped, OffsetOutOfRange) dies before its
       # first batch, so the rules above are still inside their 5 minutes: the restarts are the signal.
+      # Compose names a container <project>-<service>-<n>, so the project name is not in the rule.
+      # The one-off containers of the Spark image (the silver merge, make test-spark) carry the same
+      # image label but no numeric last segment, so the name filter leaves them out.
       - alert: SparkRestartLoop
-        expr: changes(docker_container_start_time_seconds{name="lakehouse-spark-bronze-1"}[10m]) > 2
+        expr: >-
+          changes(docker_container_start_time_seconds{service="spark-bronze",
+            name=~".+-spark-bronze-[0-9]+"}[10m]) > 2
         labels:
           severity: page
+        annotations:
+          summary: spark-bronze started more than twice in 10 minutes
+          runbook_url: docs/runbooks/spark-stalled.md
 
-      # The age of the oldest bronze snapshot silver has not merged (W4-D4); 0 at rest. Table
+      # The age of the oldest bronze snapshot silver has not merged; 0 at rest. Table
       # freshness is "no traffic" between replay bursts and does not alert.
       # last_over_time: the last value holds for an hour after statsd-exporter dropped the series
       # (TTL 45m), so this keeps firing until the absent() rule below takes over.
@@ -67,6 +91,9 @@ groups:
         expr: last_over_time(lakehouse_silver_lag_seconds[1h]) > 900
         labels:
           severity: warn
+        annotations:
+          summary: A bronze snapshot has waited over 15 minutes for the silver merge
+          runbook_url: docs/runbooks/freshness.md
       # dq_checks sends no lag when it cannot tell it (no Variable, the snapshot is gone), and
       # statsd-exporter drops a gauge 45 minutes after its last value: without the series the rule
       # above stays quiet whatever the lag.
@@ -76,6 +103,9 @@ groups:
         labels:
           severity: warn
           cause: unknown
+        annotations:
+          summary: Silver lag not reported for 15 minutes
+          runbook_url: docs/runbooks/freshness.md
 
       # dq_checks runs every 15 minutes and stamps the end of each run; a paused DAG, a stopped
       # scheduler or a failing task stops the stamp, and with it every lakehouse_dq_* gauge. The
@@ -86,15 +116,21 @@ groups:
         labels:
           severity: warn
           cause: stale
+        annotations:
+          summary: dq_checks has not finished a run for 30 minutes
+          runbook_url: docs/runbooks/dq-checks.md
       - alert: DqChecksStale
         expr: absent(lakehouse_dq_last_run_timestamp_seconds)
         for: 15m
         labels:
           severity: warn
           cause: gone
+        annotations:
+          summary: dq_checks metrics are gone
+          runbook_url: docs/runbooks/dq-checks.md
 
       # dq_checks sends 1 when the source wrote since its last run and the replication slot has
-      # confirmed nothing, and keeps sending 1 until the slot moves (W6-D9). The task stays green
+      # confirmed nothing, and keeps sending 1 until the slot moves. The task stays green
       # with "in flight"; this is the signal. 20 minutes of 1 mean two runs in a row (the gauge
       # comes every 15 minutes and holds its value between runs): one run, or a run that was late
       # and said 0, stays quiet. At least 70 samples (scrape 15 s) keep a series with a short
@@ -106,31 +142,40 @@ groups:
           and count_over_time(lakehouse_dq_cdc_stalled[20m]) >= 70
         labels:
           severity: warn
+        annotations:
+          summary: The source writes, the replication slot has not moved for two dq_checks runs
+          runbook_url: docs/runbooks/connector-failed.md
 
-      # dq_checks compares silver with gold only once bronze is in silver and gold has caught up with
-      # it (audit 30.10, DATA-02): a deleted order or payment leaves gold behind until the next
-      # change, and a continuous replay never rests. Every run counts the runs in a row that did not
-      # compare gold in the Airflow Variable dq_gold_not_compared_runs and sends the count; a
-      # comparison resets it to 0. 24 runs of 15 minutes are 6 hours of dq_checks work, so a host
-      # that sleeps does not count and a replay in bursts, which rests between them, resets it. A
-      # continuous 24 hour run (B6) raises it. No `for`: the count already is the wait.
-      # last_over_time holds the last count through a pause in the scrape, and for an hour after
-      # the series is gone; then a dq_checks that does not run is DqChecksStale's.
+      # dq_checks compares silver with gold at rest: once bronze is in silver and every gold table
+      # was rebuilt after the last data commit of silver (Iceberg snapshots). Every run counts the
+      # runs in a row that did not compare gold in the Airflow Variable dq_gold_not_compared_runs
+      # and sends the count; a comparison resets it to 0. 24 runs of 15 minutes are 6 hours of
+      # dq_checks work, so a host that sleeps does not count and a replay in bursts, which rests
+      # between them, resets it. A continuous 24 hour replay never rests and raises it. No `for`:
+      # the count already is the wait. last_over_time holds the last count through a pause in the
+      # scrape, and for an hour after the series is gone; then a dq_checks that does not run is
+      # DqChecksStale's.
       - alert: SilverGoldNotCompared
         expr: last_over_time(lakehouse_dq_gold_not_compared_runs[1h]) >= 24
         labels:
           severity: warn
+        annotations:
+          summary: Silver and gold not compared for 24 dq_checks runs (6 hours)
+          runbook_url: docs/runbooks/dq-checks.md
 
-      # Gold was not rebuilt after the last data commit of silver while the stand is at rest (audit
-      # F-01, F-03): dbt_build paused or red. By Iceberg snapshots, not by data, so a deleted order
-      # that keeps the watermarks of SilverGoldNotCompared apart does not fire it. dbt_build after
-      # a merge takes less than a minute and dq_checks runs every 15 minutes, so one run that sees
-      # it stale at rest can still be the build on its way; two in a row (30 minutes) are not.
-      # No `for`: the count already is the wait; last_over_time as in the rule above.
+      # Gold was not rebuilt after the last data commit of silver while the stand is at rest:
+      # dbt_build paused or red. Judged by Iceberg snapshots, not by data, as the comparison is.
+      # dbt_build after a merge takes less than a minute and dq_checks runs every 15 minutes, so
+      # one run that sees gold stale at rest can still be the build on its way; two in a row (30
+      # minutes) are not. No `for`: the count already is the wait; last_over_time as in the rule
+      # above.
       - alert: GoldStaleAtRest
         expr: last_over_time(lakehouse_dq_gold_stale_runs[1h]) >= 2
         labels:
           severity: warn
+        annotations:
+          summary: 'Gold not rebuilt after the last silver change: dbt_build paused or red'
+          runbook_url: docs/runbooks/dq-checks.md
 
       # A target Prometheus cannot scrape: its own alerts go quiet with it (ADR-023). The stateful
       # job runs only with PROFILE=stateful, so its target is down by design otherwise.
@@ -139,22 +184,40 @@ groups:
         for: 2m
         labels:
           severity: warn
+        annotations:
+          summary: 'Prometheus cannot scrape {{ $labels.job }}'
+          runbook_url: docs/runbooks/containers.md
 
       # increase() misses the first value of a new counter series, so the second half catches the
-      # first failure after statsd-exporter started.
+      # first failure after statsd-exporter started: a series born within the last 30 minutes (not
+      # there 30 minutes ago) counts only if statsd-exporter itself was up then. After a scrape gap
+      # of more than 5 minutes (a host that slept) the series comes back as new, but up was missing
+      # 30 minutes earlier, so it is not read as a failure. The price: a first failure in the first
+      # 30 minutes after Prometheus started is not caught (it shows in Airflow and on the Failed
+      # Airflow DAG runs panel).
       - alert: AirflowDagFailed
         expr: >-
           increase(airflow_dagrun_failed_seconds_count[30m]) > 0
-          or (airflow_dagrun_failed_seconds_count unless airflow_dagrun_failed_seconds_count offset 30m)
+          or ((airflow_dagrun_failed_seconds_count
+               unless airflow_dagrun_failed_seconds_count offset 30m)
+              and on (instance) up{job="statsd-exporter"} offset 30m)
         labels:
           severity: warn
+        annotations:
+          summary: 'DAG {{ $labels.dag_id }} has a failed run in the last 30 minutes'
+          runbook_url: docs/runbooks/airflow-dag-failed.md
 
       # docker restart moves the start time; RestartCount only follows the restart policy
-      # (ADR-023). One-shot containers run again on every make start.
+      # (ADR-023). Compose names a container <project>-<service>-<n>. The silver merge (one name
+      # for every run, it carries the Spark image label spark-bronze) and `run` containers have a
+      # last segment that is not a number and are left out.
+      # One-shot services start again on every make start and are excluded by the service label.
       - alert: ContainerRestarting
         expr: >-
-          changes(docker_container_start_time_seconds{
-            name=~"lakehouse-.+", name!~".*-init-.*", name!~".*-bootstrap-.*", name!~".*-migrate-.*"
-          }[15m]) > 0
+          changes(docker_container_start_time_seconds{name=~".+-[0-9]+",
+            service!~"minio-init|lakekeeper-migrate|lakekeeper-bootstrap|superset-init"}[15m]) > 0
         labels:
           severity: warn
+        annotations:
+          summary: 'Container {{ $labels.name }} started again in the last 15 minutes'
+          runbook_url: docs/runbooks/containers.md

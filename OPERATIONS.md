@@ -823,16 +823,16 @@ lists project containers that are down although their restart policy is `unless-
 |---|---|---|---|---|---|
 | `ConnectorNotRunning` | `absent(kafka_connect_connector_task_status{connector="shop-connector",status="running"} == 1)` | 1m | a task that is not `running` is no CDC; `absent` also covers a Connect that is down | scenario 6 | 95 s after `PUT /stop` |
 | `SlotWalRetainedHigh` | slot over 64 MiB and inactive, or over 512 MiB | 5m | an idle healthy slot holds about 25 MB; an inactive one grows without bound (`max_slot_wal_keep_size = -1`) | scenario 6 | 326 s after the stop (80 MB held) |
-| `SparkNoBatch5m` | `time() - last_batch_timestamp > 300`, and `absent(...)` for the dead driver | 0 / 5m | idle events keep the timestamp moving, so only a stuck or dead query trips it | stop `spark-bronze` | 315 s after the stop (`cause="gone"`) |
+| `SparkNoBatch5m` | `time() - last_batch_timestamp > 300`, and `absent(...)` for the dead driver | 1m / 5m | idle events keep the timestamp moving, so only a stuck or dead query trips it | stop `spark-bronze` | 315 s after the stop (`cause="gone"`) |
 | `FreshnessAbove15m` | `last_over_time(lakehouse_silver_lag_seconds[1h]) > 900` (the last value holds past the TTL drop) | 0 | age of the oldest bronze snapshot silver has not merged; table freshness grows between bursts and does not alert | pause `silver_upsert`, burst | 1561 s after bronze caught up (900 s plus up to 15 min until the next `dq_checks`) |
-| `AirflowDagFailed` | `increase(airflow_dagrun_failed_seconds_count[30m]) > 0` or a series new within 30 minutes | 0 | the second half catches the first failure after statsd-exporter started | scenario 9 | 17 s after the red run ended |
-| `ContainerRestarting` | `changes(docker_container_start_time_seconds{...}[15m]) > 0`, one-shot containers excluded | 0 | `docker restart` moves the start time; `RestartCount` follows only the restart policy | scenarios 5 and 8 | 15 s after the restart |
+| `AirflowDagFailed` | `increase(airflow_dagrun_failed_seconds_count[30m]) > 0` or a series new within 30 minutes while the `statsd-exporter` target was up 30 minutes earlier | 0 | the second half catches the first failure after statsd-exporter started; after a scrape gap (host sleep) old counters no longer fire. Cost: the first DAG failure in the 30 minutes after Prometheus starts (and after a sleep) is not caught; it shows in Airflow and on the "Failed Airflow DAG runs" panel | scenario 9 | 17 s after the red run ended |
+| `ContainerRestarting` | `changes(docker_container_start_time_seconds{...}[15m]) > 0`, for compose names `<project>-<service>-<n>` without the one-shot services | 0 | `docker restart` moves the start time; `RestartCount` follows only the restart policy; `lakehouse-silver-merge` and `run` containers do not end in a number and are not counted | scenarios 5 and 8 | 15 s after the restart |
 | `FreshnessAbove15m`, `cause="unknown"` | `absent(lakehouse_silver_lag_seconds)` | 15m | `dq_checks` sends no lag it cannot tell, and statsd-exporter drops a gauge 45 minutes after its last value: without this the lag alert goes quiet | promtool | |
 | `DqChecksStale` | `time() - last_over_time(lakehouse_dq_last_run_timestamp_seconds[1h]) > 1800` (`cause="stale"`), `absent(...)` (`cause="gone"`); no gap at the TTL drop (promtool case) | 0 / 15m | `dq_checks` runs every 15 minutes; a paused DAG, a stopped scheduler or a failing `report` stops every `lakehouse_dq_*` gauge | promtool | |
 | `CdcStalledSourceWrites` | `min_over_time(lakehouse_dq_cdc_stalled[20m]) == 1 and count_over_time(...[20m]) >= 70` | 0 | the source wrote and the slot confirmed nothing (Kafka or the connector down), and still nothing 20 minutes later, so two runs in a row; `dq_checks` stays green with `in flight` instead of a false `AirflowDagFailed`. One run or a late second run that says 0 stays quiet; 70 samples at 15 s keep a series with a short history from firing. A paused DAG leaves the last 1 until the statsd TTL (45 min), then this and `DqChecksStale` fire together | promtool (two runs, one run, short history); chaos 6, 2026-10-29 | 33 min after the stop (17:47:02 to 18:20:04): two `dq_checks` runs with stalled 1, then the 20 min window |
 | `ScrapeTargetDown` | `up{job!="spark-orders-per-minute"} == 0` | 2m | an exporter that is down silences its own alerts (ADR-023); the stateful job runs only with `PROFILE=stateful` | promtool | |
 | `SlotWalHeldIdle` | `min_over_time(lakehouse_slot_retained_bytes[1h])` over 64 MiB, slot active, now at most 512 MiB | 0 | an active slot moves only when the source writes (about 24 MB held after a day idle), so a whole hour above 64 MiB (at least 200 samples in the hour) means no traffic reached it; inactive or over 512 MiB is `SlotWalRetainedHigh` | promtool | |
-| `SparkRestartLoop` | `changes(docker_container_start_time_seconds{name="lakehouse-spark-bronze-1"}[10m]) > 2` | 0 | a driver that dies before its first batch keeps both `SparkNoBatch5m` rules inside their window; one planned restart stays under the threshold | chaos 8 data, TSDB replay | 51 s after the first restart (23.10 data, rule not loaded then) |
+| `SparkRestartLoop` | `changes(docker_container_start_time_seconds{service="spark-bronze", name=~".+-spark-bronze-[0-9]+"}[10m]) > 2` | 0 | a driver that dies before its first batch keeps both `SparkNoBatch5m` rules inside their window; one planned restart stays under the threshold | chaos 8 data, TSDB replay | 51 s after the first restart (23.10 data, rule not loaded then) |
 | `GoldStaleAtRest` | `last_over_time(lakehouse_dq_gold_stale_runs[1h]) >= 2`, severity `warn` | 0 | gold is older than silver while nothing is in flight: `dbt_build` paused or red, or its Asset event lost for a paused DAG (see "Airflow"). By Iceberg snapshots, not by data. One run that sees it stale can still be the build on its way (`dbt_build` takes under a minute, `dq_checks` runs every 15 minutes); two in a row (30 minutes) are not. Limits: it compares commit times, not the snapshot that dbt read; `expire_silver` after `optimize` can remove the newest data snapshot. Both only miss an alert, they do not raise a false one | promtool only | not shown live |
 | `SilverGoldNotCompared` | `last_over_time(lakehouse_dq_gold_not_compared_runs[1h]) >= 24` | 0 | `dq_checks` compares silver and gold only at rest; a continuous replay or a deleted order keeps it from comparing, silently. 24 runs of every 15 minutes are 6 hours of `dq_checks` working: counted in runs, so host sleep and scrape gaps do not reset or stall it, and the 60 s replay bursts leave rest between them; the 24 h run of B6 fires it by design. A dead `dq_checks` is `DqChecksStale`, not this | promtool only | not shown live |
 
@@ -1728,7 +1728,9 @@ What happened (2026-11-06): the script paused `silver_upsert`, `dbt_build` and `
 12:11:50 (REST; task `merge`, `try 2`, attempt 2 from 12:11:24 to 12:11:49 UTC).
 What monitoring shows: `ContainerRestarting` for `lakehouse-silver-merge`, `activeAt` 12:11:34 UTC:
 attempt 2 started a container with the same name, and the start time moved inside the 15 minute
-window of the rule. `AirflowDagFailed` did not fire, because the run ended `success`. The failed
+window of the rule. Since the rule was changed to compose names that end in a number, the merge no
+longer gives `ContainerRestarting`; the retry shows in Airflow as `try_number` 2.
+`AirflowDagFailed` did not fire, because the run ended `success`. The failed
 attempt is visible only in the task log and in the try number of the task.
 Data at risk: none. Right after the kill silver was partly merged: 3 tables differed from Postgres
 (`orders` 96258 against 96346, `payments` 100623 against 100715, `reviews` keys), `order_items` was
@@ -1753,12 +1755,15 @@ lifts its pause (`scripts/chaos/silver-kill.sh:46-59`).
 
 ## Runbooks
 
-| Symptom | Runbook |
+| Alert | Runbook |
 |---|---|
-| Connector status FAILED | `docs/runbooks/connector-failed.md` |
-| Retained WAL growing | `docs/runbooks/slot-wal-growth.md` |
-| Spark job no batch for 5 minutes | `docs/runbooks/spark-stalled.md` |
-| Freshness above 15 minutes | `docs/runbooks/freshness.md` |
+| `ConnectorNotRunning`, `CdcStalledSourceWrites` | `docs/runbooks/connector-failed.md` |
+| `SlotWalRetainedHigh`, `SlotWalHeldIdle` | `docs/runbooks/slot-wal-growth.md` |
+| `SparkNoBatch5m`, `SparkRestartLoop` | `docs/runbooks/spark-stalled.md` |
+| `FreshnessAbove15m` | `docs/runbooks/freshness.md` |
+| `DqChecksStale`, `SilverGoldNotCompared`, `GoldStaleAtRest` | `docs/runbooks/dq-checks.md` |
+| `ScrapeTargetDown`, `ContainerRestarting` | `docs/runbooks/containers.md` |
+| `AirflowDagFailed` | `docs/runbooks/airflow-dag-failed.md` |
 | Disk full | `docs/runbooks/disk-full.md` |
 | Reset everything | `make nuke` (asks for confirmation; deletes volumes, checkpoints, data) |
 

@@ -18,7 +18,12 @@ shows up to 15 minutes after the lag begins.
 5. Nothing is stuck but the Variable is behind: `airflow variables get silver_upsert_last_bronze_snapshot`
    against `select max_by(snapshot_id, committed_at) from lake.bronze."cdc_events$snapshots"`
    in Trino. A different id means the next run merges.
-6. Never run `make silver` by hand while the scheduler is up: two writers on one checkpoint.
+6. `cause="unknown"` (the second rule, 15 minutes): the series `lakehouse_silver_lag_seconds` is
+   absent. `dq_checks` sends no lag while the Variable `silver_upsert_last_bronze_snapshot` is
+   missing or names a snapshot bronze no longer has, and statsd-exporter drops a gauge 45 minutes
+   after its last value. Compare the Variable with the snapshots as in step 5. If `dq_checks` is
+   not running at all, the cause is `DqChecksStale` (`dq-checks.md`).
+7. Never run `make silver` by hand while the scheduler is up: two writers on one checkpoint.
    `make silver` refuses; trigger the DAG instead (`airflow dags trigger silver_upsert`).
 
 Reproduce: pause `silver_upsert`, `make replay-burst SECONDS=60`, wait (OPERATIONS.md,

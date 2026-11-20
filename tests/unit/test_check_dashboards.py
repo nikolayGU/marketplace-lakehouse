@@ -418,3 +418,35 @@ def test_pipeline_health_spark_panels_say_why_they_are_empty() -> None:
         assert ("Seconds since the last bronze batch" in text) == bronze, panel["title"]
     titles = [p["title"] for p in check_dashboards.panels(dashboard)]
     assert "Seconds since the last bronze batch" in titles
+
+
+def _pipeline_health_panels() -> list[dict[str, object]]:
+    dashboard = json.loads((check_dashboards.DASHBOARDS / "pipeline-health.json").read_text())
+    return list(check_dashboards.panels(dashboard))
+
+
+def _exprs(panel: Mapping[str, object]) -> list[str]:
+    targets = panel.get("targets", [])
+    assert isinstance(targets, list)
+    return [str(t.get("expr", "")) for t in targets]
+
+
+def test_pipeline_health_first_panel_shows_what_is_firing() -> None:
+    first = min(
+        _pipeline_health_panels(),
+        key=lambda p: (p["gridPos"]["y"], p["gridPos"]["x"]),  # type: ignore[index]
+    )
+
+    assert any("ALERTS" in expr for expr in _exprs(first)), first["title"]
+
+
+def test_pipeline_health_has_a_targets_down_panel() -> None:
+    exprs = [e for p in _pipeline_health_panels() for e in _exprs(p)]
+
+    assert any("up == 0" in expr for expr in exprs)
+
+
+def test_wal_slot_panel_names_the_idle_slot_alert() -> None:
+    panel = next(p for p in _pipeline_health_panels() if p["title"] == "WAL retained by the slot")
+
+    assert "SlotWalHeldIdle" in str(panel["description"])

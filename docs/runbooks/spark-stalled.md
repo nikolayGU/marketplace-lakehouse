@@ -12,7 +12,7 @@ is unhealthy, exited or restarting.
 1. State: `docker inspect -f '{{.State.Status}} {{.RestartCount}}' lakehouse-spark-bronze-1`.
    Exited after `docker kill` or `docker stop`: `docker start lakehouse-spark-bronze-1`. The
    restart policy does not cover manual stops.
-2. Alert `SparkRestartLoop` (more than two starts of `lakehouse-spark-bronze-1` in 10 minutes): the
+2. Alert `SparkRestartLoop` (more than two starts of the `spark-bronze` container in 10 minutes): the
    driver dies before its first batch, so `SparkNoBatch5m` stays quiet for the first 5 minutes.
    Read `make logs S=spark-bronze`. Kafka stopped (`make status`): start it and wait for `healthy`,
    the loop ends by itself. `OffsetOutOfRange` or "data loss" in the log: the job was down longer

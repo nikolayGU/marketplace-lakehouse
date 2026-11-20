@@ -34,6 +34,9 @@ tests:
           - exp_labels:
               severity: page
               slot_name: shop_slot
+            exp_annotations:
+              summary: shop_slot retains over 64 MiB of WAL with no reader, or over 512 MiB
+              runbook_url: docs/runbooks/slot-wal-growth.md
 
   # Even an active slot over 512 MiB fires.
   - interval: 1m
@@ -49,6 +52,9 @@ tests:
           - exp_labels:
               severity: page
               slot_name: shop_slot
+            exp_annotations:
+              summary: shop_slot retains over 64 MiB of WAL with no reader, or over 512 MiB
+              runbook_url: docs/runbooks/slot-wal-growth.md
 
   # An active slot on an idle source grows from 60 MiB and never drops: quiet until the whole hour
   # is above 64 MiB (the rise crosses it at minute 21), then it fires with no `for`.
@@ -71,6 +77,9 @@ tests:
           - exp_labels:
               severity: warn
               slot_name: shop_slot
+            exp_annotations:
+              summary: shop_slot held over 64 MiB for an hour on an idle source
+              runbook_url: docs/runbooks/slot-wal-growth.md
 
   # Traffic moves the slot: the retained bytes saw from 60 to 65 MiB every 15 minutes, so the
   # hourly minimum stays under 64 MiB even where the value is above 64 MiB (minutes 13, 73, 118).
@@ -152,22 +161,33 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: warn
+            exp_annotations:
+              summary: A bronze snapshot has waited over 15 minutes for the silver merge
+              runbook_url: docs/runbooks/freshness.md
 
   # The first failure after statsd-exporter started: the series is born with the value 1.
+  # statsd-exporter was up 30 minutes before, so the new series is a failure, not a scrape gap.
   - interval: 1m
     input_series:
-      - series: 'airflow_dagrun_failed_seconds_count{dag_id="dbt_build"}'
-        values: '_ _ _ _ _ 1 1 1 1 1'
+      - series: 'airflow_dagrun_failed_seconds_count{dag_id="dbt_build",instance="statsd-exporter:9102",job="statsd-exporter"}'
+        values: '_x30 1x10'
+      - series: 'up{instance="statsd-exporter:9102",job="statsd-exporter"}'
+        values: '1x40'
     alert_rule_test:
       - eval_time: 3m
         alertname: AirflowDagFailed
         exp_alerts: []
-      - eval_time: 8m
+      - eval_time: 33m
         alertname: AirflowDagFailed
         exp_alerts:
           - exp_labels:
               severity: warn
               dag_id: dbt_build
+              instance: statsd-exporter:9102
+              job: statsd-exporter
+            exp_annotations:
+              summary: DAG dbt_build has a failed run in the last 30 minutes
+              runbook_url: docs/runbooks/airflow-dag-failed.md
 
   # The driver died: the series goes stale and the absent() rule fires after its 5 minutes.
   - interval: 1m
@@ -185,20 +205,27 @@ tests:
               severity: page
               cause: gone
               query: bronze_cdc_ingest
+            exp_annotations:
+              summary: 'Bronze driver metrics gone for 5 minutes: the driver is down'
+              runbook_url: docs/runbooks/spark-stalled.md
 
-  # A query that is alive but stuck: the timestamp stays at 0, so time() is far past it.
+  # A query that is alive but stuck: the timestamp stays at 0, so time() is far past it (after
+  # the 1 minute of `for`).
   - interval: 1m
     input_series:
       - series: 'spark_streaming_last_batch_timestamp{query="bronze_cdc_ingest"}'
         values: '0+0x10'
     alert_rule_test:
-      - eval_time: 6m
+      - eval_time: 7m
         alertname: SparkNoBatch5m
         exp_alerts:
           - exp_labels:
               severity: page
               cause: stuck
               query: bronze_cdc_ingest
+            exp_annotations:
+              summary: Bronze query made no progress for 5 minutes
+              runbook_url: docs/runbooks/spark-stalled.md
 
   # A planned single restart is not a loop: SparkRestartLoop stays quiet (ContainerRestarting
   # still fires, as it should). Two restarts in 10 minutes are still under the threshold.
@@ -217,6 +244,9 @@ tests:
               severity: warn
               name: lakehouse-spark-bronze-1
               service: spark-bronze
+            exp_annotations:
+              summary: Container lakehouse-spark-bronze-1 started again in the last 15 minutes
+              runbook_url: docs/runbooks/containers.md
 
   - interval: 1m
     input_series:
@@ -241,6 +271,9 @@ tests:
               severity: page
               name: lakehouse-spark-bronze-1
               service: spark-bronze
+            exp_annotations:
+              summary: spark-bronze started more than twice in 10 minutes
+              runbook_url: docs/runbooks/spark-stalled.md
 
   # Kafka is down and the driver restarts every 20 seconds, 15 times in 5 minutes.
   - interval: 20s
@@ -255,6 +288,9 @@ tests:
               severity: page
               name: lakehouse-spark-bronze-1
               service: spark-bronze
+            exp_annotations:
+              summary: spark-bronze started more than twice in 10 minutes
+              runbook_url: docs/runbooks/spark-stalled.md
 
   # The same loop seen from the batch gauge: the driver's series goes stale at 130 s and never comes
   # back, because it dies before the first batch. At 420 s (4 min 50 s later) the `gone` rule is
@@ -276,13 +312,16 @@ tests:
               severity: page
               name: lakehouse-spark-bronze-1
               service: spark-bronze
+            exp_annotations:
+              summary: spark-bronze started more than twice in 10 minutes
+              runbook_url: docs/runbooks/spark-stalled.md
 
   # lakekeeper-bootstrap runs again on every make start: no alert. Kafka restarting: alert.
   - interval: 1m
     input_series:
-      - series: 'docker_container_start_time_seconds{name="lakehouse-lakekeeper-bootstrap-1"}'
+      - series: 'docker_container_start_time_seconds{name="lakehouse-lakekeeper-bootstrap-1",service="lakekeeper-bootstrap"}'
         values: '100 100 200 200'
-      - series: 'docker_container_start_time_seconds{name="lakehouse-kafka-1"}'
+      - series: 'docker_container_start_time_seconds{name="lakehouse-kafka-1",service="kafka"}'
         values: '100 100 200 200'
     alert_rule_test:
       - eval_time: 3m
@@ -291,6 +330,10 @@ tests:
           - exp_labels:
               severity: warn
               name: lakehouse-kafka-1
+              service: kafka
+            exp_annotations:
+              summary: Container lakehouse-kafka-1 started again in the last 15 minutes
+              runbook_url: docs/runbooks/containers.md
 
   # The connector task is running, then gone.
   - interval: 1m
@@ -306,6 +349,9 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: page
+            exp_annotations:
+              summary: 'Debezium task of shop-connector is not running: no CDC'
+              runbook_url: docs/runbooks/connector-failed.md
 
   # The lag is sent, then dq_checks stops sending it: the TTL drops the series, the alert fires
   # 15 minutes later.
@@ -323,6 +369,9 @@ tests:
           - exp_labels:
               severity: warn
               cause: unknown
+            exp_annotations:
+              summary: Silver lag not reported for 15 minutes
+              runbook_url: docs/runbooks/freshness.md
 
   # dq_checks stamped its run 10 minutes ago: quiet. 31 minutes ago: stale.
   - interval: 1m
@@ -340,6 +389,9 @@ tests:
               severity: warn
               cause: stale
               job: statsd-exporter
+            exp_annotations:
+              summary: dq_checks has not finished a run for 30 minutes
+              runbook_url: docs/runbooks/dq-checks.md
 
   # Scrape 15 s; the gauge comes every 15 minutes and holds its value between runs. Zero for 40
   # minutes, then 1 on two runs in a row (30 minutes of 1), then 0: quiet before the 20 minutes
@@ -358,12 +410,18 @@ tests:
           - exp_labels:
               severity: warn
               job: statsd-exporter
+            exp_annotations:
+              summary: The source writes, the replication slot has not moved for two dq_checks runs
+              runbook_url: docs/runbooks/connector-failed.md
       - eval_time: 69m
         alertname: CdcStalledSourceWrites
         exp_alerts:
           - exp_labels:
               severity: warn
               job: statsd-exporter
+            exp_annotations:
+              summary: The source writes, the replication slot has not moved for two dq_checks runs
+              runbook_url: docs/runbooks/connector-failed.md
       - eval_time: 72m
         alertname: CdcStalledSourceWrites
         exp_alerts: []
@@ -406,6 +464,9 @@ tests:
           - exp_labels:
               severity: warn
               job: statsd-exporter
+            exp_annotations:
+              summary: The source writes, the replication slot has not moved for two dq_checks runs
+              runbook_url: docs/runbooks/connector-failed.md
 
   # Always 0: nothing to say.
   - interval: 15s
@@ -436,6 +497,9 @@ tests:
           - exp_labels:
               severity: warn
               job: statsd-exporter
+            exp_annotations:
+              summary: Silver and gold not compared for 24 dq_checks runs (6 hours)
+              runbook_url: docs/runbooks/dq-checks.md
 
   # A host that sleeps leaves holes in the scrape, but not in the count: 30 runs, then a 40 minute
   # pause (samples missing, no stale marker, as after a sleep), then 30 again. Fires inside the
@@ -451,18 +515,27 @@ tests:
           - exp_labels:
               severity: warn
               job: statsd-exporter
+            exp_annotations:
+              summary: Silver and gold not compared for 24 dq_checks runs (6 hours)
+              runbook_url: docs/runbooks/dq-checks.md
       - eval_time: 30m
         alertname: SilverGoldNotCompared
         exp_alerts:
           - exp_labels:
               severity: warn
               job: statsd-exporter
+            exp_annotations:
+              summary: Silver and gold not compared for 24 dq_checks runs (6 hours)
+              runbook_url: docs/runbooks/dq-checks.md
       - eval_time: 55m
         alertname: SilverGoldNotCompared
         exp_alerts:
           - exp_labels:
               severity: warn
               job: statsd-exporter
+            exp_annotations:
+              summary: Silver and gold not compared for 24 dq_checks runs (6 hours)
+              runbook_url: docs/runbooks/dq-checks.md
 
   # The series is gone (dq_checks stopped, statsd-exporter dropped the gauge at the TTL): the last
   # count holds for an hour, as in the rules above, then this goes quiet and DqChecksStale (tested
@@ -479,12 +552,18 @@ tests:
           - exp_labels:
               severity: warn
               job: statsd-exporter
+            exp_annotations:
+              summary: Silver and gold not compared for 24 dq_checks runs (6 hours)
+              runbook_url: docs/runbooks/dq-checks.md
       - eval_time: 1h5m
         alertname: SilverGoldNotCompared
         exp_alerts:
           - exp_labels:
               severity: warn
               job: statsd-exporter
+            exp_annotations:
+              summary: Silver and gold not compared for 24 dq_checks runs (6 hours)
+              runbook_url: docs/runbooks/dq-checks.md
       - eval_time: 1h15m
         alertname: SilverGoldNotCompared
         exp_alerts: []
@@ -515,6 +594,9 @@ tests:
           - exp_labels:
               severity: warn
               job: statsd-exporter
+            exp_annotations:
+              summary: Silver and gold not compared for 24 dq_checks runs (6 hours)
+              runbook_url: docs/runbooks/dq-checks.md
       - eval_time: 16m
         alertname: SilverGoldNotCompared
         exp_alerts: []
@@ -534,6 +616,9 @@ tests:
           - exp_labels:
               severity: warn
               cause: gone
+            exp_annotations:
+              summary: dq_checks metrics are gone
+              runbook_url: docs/runbooks/dq-checks.md
 
   # A core target down for 3 minutes fires; the stateful job, off by default, does not.
   - interval: 1m
@@ -553,6 +638,9 @@ tests:
               severity: warn
               job: postgres-exporter
               instance: postgres-exporter:9187
+            exp_annotations:
+              summary: Prometheus cannot scrape postgres-exporter
+              runbook_url: docs/runbooks/containers.md
 
   # Across the TTL: the stamp stops at minute 0, statsd-exporter drops the series at minute 45.
   # The stale alert must not go quiet before the gone alert fires.
@@ -570,12 +658,18 @@ tests:
               severity: warn
               cause: stale
               job: statsd-exporter
+            exp_annotations:
+              summary: dq_checks has not finished a run for 30 minutes
+              runbook_url: docs/runbooks/dq-checks.md
       - eval_time: 52m
         alertname: FreshnessAbove15m
         exp_alerts:
           - exp_labels:
               severity: warn
               job: statsd-exporter
+            exp_annotations:
+              summary: A bronze snapshot has waited over 15 minutes for the silver merge
+              runbook_url: docs/runbooks/freshness.md
       - eval_time: 62m
         alertname: DqChecksStale
         exp_alerts:
@@ -583,9 +677,15 @@ tests:
               severity: warn
               cause: stale
               job: statsd-exporter
+            exp_annotations:
+              summary: dq_checks has not finished a run for 30 minutes
+              runbook_url: docs/runbooks/dq-checks.md
           - exp_labels:
               severity: warn
               cause: gone
+            exp_annotations:
+              summary: dq_checks metrics are gone
+              runbook_url: docs/runbooks/dq-checks.md
 
   # The lag came back to 0: the alert goes quiet with the next value, not an hour later.
   - interval: 1m
@@ -599,6 +699,9 @@ tests:
           - exp_labels:
               severity: warn
               job: statsd-exporter
+            exp_annotations:
+              summary: A bronze snapshot has waited over 15 minutes for the silver merge
+              runbook_url: docs/runbooks/freshness.md
       - eval_time: 8m
         alertname: FreshnessAbove15m
         exp_alerts: []
@@ -621,6 +724,9 @@ tests:
           - exp_labels:
               severity: warn
               job: statsd-exporter
+            exp_annotations:
+              summary: 'Gold not rebuilt after the last silver change: dbt_build paused or red'
+              runbook_url: docs/runbooks/dq-checks.md
 
   # A build brings the count back to 0: quiet again (the last value counts, not the maximum).
   - interval: 1m
@@ -634,6 +740,120 @@ tests:
           - exp_labels:
               severity: warn
               job: statsd-exporter
+            exp_annotations:
+              summary: 'Gold not rebuilt after the last silver change: dbt_build paused or red'
+              runbook_url: docs/runbooks/dq-checks.md
       - eval_time: 12m
         alertname: GoldStaleAtRest
+        exp_alerts: []
+
+  # A scrape gap longer than 5 minutes ends with the counter series back and no new failure: the
+  # series that was gone 30 minutes ago must not read as a first failure, because Prometheus was
+  # down, not the counter new. At 55m the counter is back since 51m, the gap began at minute 10.
+  - interval: 1m
+    input_series:
+      - series: 'airflow_dagrun_failed_seconds_count{dag_id="dq_checks",instance="statsd-exporter:9102",job="statsd-exporter"}'
+        values: '3x10 _x40 3x20'
+      - series: 'up{instance="statsd-exporter:9102",job="statsd-exporter"}'
+        values: '1x10 _x40 1x20'
+    alert_rule_test:
+      - eval_time: 55m
+        alertname: AirflowDagFailed
+        exp_alerts: []
+
+  # The slot threshold is pinned from above too: 198 samples in the hour are quiet, 201 fire.
+  - interval: 15s
+    input_series:
+      - series: 'lakehouse_slot_retained_bytes{slot_name="shop_slot"}'
+        values: '73400320+0x400'
+      - series: 'lakehouse_slot_active{slot_name="shop_slot"}'
+        values: '1+0x400'
+    alert_rule_test:
+      - eval_time: 49m15s
+        alertname: SlotWalHeldIdle
+        exp_alerts: []
+      - eval_time: 50m
+        alertname: SlotWalHeldIdle
+        exp_alerts:
+          - exp_labels:
+              severity: warn
+              slot_name: shop_slot
+            exp_annotations:
+              summary: shop_slot held over 64 MiB for an hour on an idle source
+              runbook_url: docs/runbooks/slot-wal-growth.md
+
+  # A host that slept leaves one sample with the old batch time, then the current one: the stuck
+  # rule needs its `for` to stay quiet on the single old point.
+  - interval: 1m
+    input_series:
+      - series: 'spark_streaming_last_batch_timestamp{query="bronze_cdc_ingest"}'
+        values: '0+60x10 _x30 600 2520+60x10'
+    alert_rule_test:
+      - eval_time: 41m
+        alertname: SparkNoBatch5m
+        exp_alerts: []
+      - eval_time: 43m
+        alertname: SparkNoBatch5m
+        exp_alerts: []
+
+  # Container names are <project>-<service>-<n>, whatever the project is called (a), (b).
+  - interval: 20s
+    input_series:
+      - series: 'docker_container_start_time_seconds{name="shop-spark-bronze-1",service="spark-bronze"}'
+        values: '1+1x15'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: SparkRestartLoop
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              name: shop-spark-bronze-1
+              service: spark-bronze
+            exp_annotations:
+              summary: spark-bronze started more than twice in 10 minutes
+              runbook_url: docs/runbooks/spark-stalled.md
+
+  - interval: 1m
+    input_series:
+      - series: 'docker_container_start_time_seconds{name="shop-kafka-1",service="kafka"}'
+        values: '100 100 200 200'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: ContainerRestarting
+        exp_alerts:
+          - exp_labels:
+              severity: warn
+              name: shop-kafka-1
+              service: kafka
+            exp_annotations:
+              summary: Container shop-kafka-1 started again in the last 15 minutes
+              runbook_url: docs/runbooks/containers.md
+
+  # (c) The silver merge keeps one name, lakehouse-silver-merge, and the Spark image label: four
+  # merges in 10 minutes move its start time three times. Its last segment is not a number, so the
+  # name filters leave it out and neither alert fires.
+  - interval: 1m
+    input_series:
+      - series: 'docker_container_start_time_seconds{name="lakehouse-silver-merge",service="spark-bronze"}'
+        values: '100 100 stale 200 200 stale 300 300 stale 400 400'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: SparkRestartLoop
+        exp_alerts: []
+      - eval_time: 7m
+        alertname: ContainerRestarting
+        exp_alerts: []
+
+  # (d) One-shot services start again on every make start: no alert.
+  - interval: 1m
+    input_series:
+      - series: 'docker_container_start_time_seconds{name="shop-minio-init-1",service="minio-init"}'
+        values: '100 100 200 200'
+      - series: 'docker_container_start_time_seconds{name="shop-lakekeeper-migrate-1",service="lakekeeper-migrate"}'
+        values: '100 100 200 200'
+      - series: 'docker_container_start_time_seconds{name="shop-superset-init-1",service="superset-init"}'
+        values: '100 100 200 200'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: ContainerRestarting
         exp_alerts: []
