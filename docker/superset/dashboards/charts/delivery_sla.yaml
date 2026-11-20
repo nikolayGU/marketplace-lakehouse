@@ -1,4 +1,4 @@
-slice_name: States with the most late deliveries
+slice_name: States with the lowest on-time share
 description: Customer states with at least 50 delivered orders, lowest on-time share first.
 certified_by: null
 certification_details: null

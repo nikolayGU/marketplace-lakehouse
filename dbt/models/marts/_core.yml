@@ -1,8 +1,8 @@
 models:
   - name: fct_orders
     description: >
-      One row per live order. 765 orders have no live item (2026-10-09): 735 never had one, 30
-      lost all of them when the order was canceled.
+      One row per live order. 793 orders have no live item: 751 never had one, 42 lost all of
+      them when the order was canceled.
     columns:
       - name: order_id
         description: Order identifier, the grain of the model.

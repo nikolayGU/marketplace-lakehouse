@@ -13,7 +13,7 @@ models:
       `select sum(i.price) from lake.silver.order_items i join lake.silver.orders o
       on i.order_id = o.order_id where not i._is_deleted and not o._is_deleted
       and o.order_status not in ('canceled', 'unavailable')` equals sum(gmv)
-      (12 894 209.50 on 2026-10-18).
+      (13 113 797.93).
     data_tests:
       - unique_combination:
           arguments:
@@ -57,11 +57,11 @@ models:
         description: State of the customer of the orders in the row.
         data_tests: [not_null]
       - name: delivered_orders
-        description: Orders with order_status delivered.
+        description: "{{ doc('delivered_orders') }}"
       - name: on_time_orders
         description: Delivered orders not later than the estimated date, by calendar date.
       - name: avg_delivery_days
-        description: Average of delivery_days over delivered orders.
+        description: "{{ doc('avg_delivery_days') }}"
       - name: on_time_rate
         description: "{{ doc('on_time_rate') }}"
       - name: p90_delivery_days
@@ -79,8 +79,16 @@ models:
         data_tests: [not_null]
       - name: purchase_month
         data_tests: [not_null]
+      - name: orders_count
+        description: >
+          Orders with any item of the seller in the month, deleted items included. Do not sum
+          across sellers: an order with items of several sellers counts for each.
       - name: gmv
         description: "{{ doc('gmv') }}"
+      - name: late_rate
+        description: >
+          Late delivered orders divided by delivered orders of the seller in the month. A delivered
+          order without a delivery date is neither late nor on time.
       - name: avg_review_score
         description: "{{ doc('review_score') }}"
       - name: cancellation_rate

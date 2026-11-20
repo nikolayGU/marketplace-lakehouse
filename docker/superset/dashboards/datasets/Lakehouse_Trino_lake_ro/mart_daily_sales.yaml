@@ -52,7 +52,9 @@ columns:
     groupby: true
     filterable: true
     expression: null
-    description: null
+    description: >-
+      Orders of the day per seller state. Do not sum across states: an order counts once per
+      seller state; count orders on fct_orders.
     python_date_format: null
   - column_name: canceled_orders
     verbose_name: null
@@ -62,7 +64,9 @@ columns:
     groupby: true
     filterable: true
     expression: null
-    description: null
+    description: >-
+      Canceled orders of the day per seller state. Do not sum across states: an order counts
+      once per seller state; count orders on fct_orders.
     python_date_format: null
   - column_name: items_count
     verbose_name: null

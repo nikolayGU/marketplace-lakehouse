@@ -5,8 +5,8 @@ data_tests:
       any row.
   - name: assert_payments_match_order_value
     description: >
-      Source anomaly. Payments differ from items plus freight by more than 0.01 for 287 orders
-      that are neither canceled nor unavailable (2026-10-09). warn above 0, error above
+      Source anomaly. Payments differ from items plus freight by more than 0.01 for 297 orders
+      that are neither canceled nor unavailable. warn above 0, error above
       var payments_mismatch_error_if (default 1000, about 1% of orders).
   - name: assert_delivered_not_before_carrier
     description: >

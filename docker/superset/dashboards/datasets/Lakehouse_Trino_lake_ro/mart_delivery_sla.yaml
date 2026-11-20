@@ -80,7 +80,7 @@ columns:
     groupby: true
     filterable: true
     expression: null
-    description: null
+    description: "Rate of one row; do not average it, use the metric on_time_rate."
     python_date_format: null
   - column_name: avg_delivery_days
     verbose_name: null

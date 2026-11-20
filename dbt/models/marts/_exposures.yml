@@ -1,0 +1,50 @@
+version: 2
+
+exposures:
+  - name: marketplace_superset
+    label: Marketplace dashboard in Superset
+    type: dashboard
+    maturity: medium
+    url: http://127.0.0.1:8088/superset/dashboard/marketplace/
+    owner:
+      name: Data platform
+    description: >
+      The Superset dashboard over the gold tables, read through the lake_ro catalog.
+
+
+      Dashboard metrics defined on the datasets.
+
+
+      {{ doc('orders') }}
+
+
+      {{ doc('aov') }}
+
+
+      {{ doc('freight_share') }}
+
+
+      {{ doc('late_orders') }}
+
+
+      {{ doc('cancellation_rate') }}
+
+
+      {{ doc('name_scopes') }}
+    depends_on:
+      - ref('fct_order_items')
+      - ref('fct_orders')
+      - ref('mart_daily_sales')
+      - ref('mart_delivery_sla')
+  - name: marketplace_grafana
+    label: Marketplace dashboard in Grafana
+    type: dashboard
+    maturity: medium
+    url: http://127.0.0.1:3000/d/marketplace
+    owner:
+      name: Data platform
+    description: The Grafana dashboard over the gold tables, read through the lake_ro catalog.
+    depends_on:
+      - ref('fct_order_items')
+      - ref('fct_orders')
+      - ref('mart_daily_sales')

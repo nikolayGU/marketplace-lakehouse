@@ -273,7 +273,7 @@ position:
       height: 50
       chartId: 11
       uuid: 203f021c-39d0-5703-baa6-abd82d61b845
-      sliceName: States with the most late deliveries
+      sliceName: States with the lowest on-time share
   HEADER-orders:
     type: HEADER
     id: HEADER-orders

@@ -17,6 +17,7 @@ from urllib.parse import urlsplit
 import pytest
 import yaml
 from dbt_sql import output_columns
+from lakehouse import reconcile
 
 BUNDLE = Path(__file__).parents[2] / "docker" / "superset" / "dashboards"
 DBT_MODELS = Path(__file__).parents[2] / "dbt" / "models"
@@ -145,6 +146,104 @@ def test_category_chart_counts_live_items_of_paid_orders() -> None:
         assert chart["params"]["metrics"] == ["gmv"], chart["slice_name"]
 
 
+PAID = "order_status NOT IN ('canceled', 'unavailable')"
+GMV_ITEMS = f"SUM(CASE WHEN {PAID} THEN items_value END)"
+EXPECTED_METRICS = {
+    "fct_orders": {
+        "count": "COUNT(*)",
+        "gmv": GMV_ITEMS,
+        "orders": "COUNT(*)",
+        "paid_orders": f"COUNT_IF({PAID})",
+        "aov": f"{GMV_ITEMS} / NULLIF(COUNT_IF({PAID} AND items_count > 0), 0)",
+        "freight_share": (f"SUM(CASE WHEN {PAID} THEN freight_value END) / NULLIF({GMV_ITEMS}, 0)"),
+        "on_time_rate": (
+            "1.0 * COUNT_IF(is_delivered AND NOT is_late) / NULLIF(COUNT_IF(is_delivered), 0)"
+        ),
+        "cancellation_rate": "1.0 * COUNT_IF(order_status = 'canceled') / NULLIF(COUNT(*), 0)",
+        "delivered_orders": "COUNT_IF(is_delivered)",
+        "late_orders": "COUNT_IF(is_late)",
+        "avg_delivery_days": "AVG(CASE WHEN is_delivered THEN delivery_days END)",
+        "in_transit_orders": f"COUNT_IF(NOT is_delivered AND {PAID})",
+    },
+    "fct_order_items": {
+        "count": "COUNT(*)",
+        "gmv": f"SUM(CASE WHEN NOT is_deleted AND {PAID} THEN price END)",
+    },
+    "mart_delivery_sla": {
+        "count": "COUNT(*)",
+        "on_time_rate": "1.0 * SUM(on_time_orders) / NULLIF(SUM(delivered_orders), 0)",
+    },
+}
+
+
+def _expression(table: str, metric: str) -> str:
+    return " ".join(_metrics(table)[metric]["expression"].split())
+
+
+@pytest.mark.parametrize("table", sorted(EXPECTED_METRICS))
+def test_saved_metrics_have_the_expected_expressions(table: str) -> None:
+    """Every saved metric is pinned, so a changed formula or a new metric is a red test."""
+    expected = EXPECTED_METRICS[table]
+
+    assert set(_metrics(table)) == set(expected)
+    assert {name: _expression(table, name) for name in expected} == expected
+
+
+PAID_METRICS = [
+    ("fct_orders", name)
+    for name in ("gmv", "paid_orders", "aov", "freight_share", "in_transit_orders")
+] + [("fct_order_items", "gmv")]
+NOT_IN = re.compile(r"order_status\s+NOT\s+IN\s*\(([^)]*)\)", re.IGNORECASE)
+
+
+@pytest.mark.parametrize(("table", "metric"), PAID_METRICS)
+def test_paid_metrics_exclude_the_statuses_of_reconcile(table: str, metric: str) -> None:
+    """The statuses a metric leaves out are the ones the source comparison leaves out."""
+    expression = _expression(table, metric)
+    excluded = frozenset(reconcile.GMV_EXCLUDED_STATUSES)
+    listed = [frozenset(re.findall(r"'([^']*)'", found)) for found in NOT_IN.findall(expression)]
+    aggregates = len(re.findall(r"\b(?:SUM|COUNT_IF)\(", expression, re.IGNORECASE))
+
+    assert listed, f"{table}.{metric} has no status filter"
+    assert len(listed) == aggregates, f"{table}.{metric}: every aggregate needs the filter"
+    assert set(listed) == {excluded}, f"{table}.{metric}"
+
+
+TRAP_COLUMNS = [
+    ("mart_daily_sales", "orders_count", ("do not sum", "fct_orders")),
+    ("mart_daily_sales", "canceled_orders", ("do not sum", "fct_orders")),
+    ("mart_delivery_sla", "on_time_rate", ("do not average", "on_time_rate")),
+]
+
+
+@pytest.mark.parametrize(("table", "column", "required"), TRAP_COLUMNS)
+def test_trap_columns_say_how_to_aggregate(
+    table: str, column: str, required: tuple[str, ...]
+) -> None:
+    """Columns that look additive but are not carry a description that says what to use."""
+    (dataset,) = [d for d in _load("datasets/**/*.yaml") if d["table_name"] == table]
+    (found,) = [c for c in dataset["columns"] if c["column_name"] == column]
+    description = (found["description"] or "").lower()
+
+    for phrase in required:
+        assert phrase in description, f"{table}.{column} must say {phrase!r}"
+
+
+def test_dashboard_slice_names_match_the_charts() -> None:
+    """The dashboard layout repeats the chart titles, so they must not drift apart."""
+    by_uuid = {c["uuid"]: c["slice_name"] for c in _charts().values()}
+    nodes = [
+        n["meta"]
+        for n in _dashboard()["position"].values()
+        if isinstance(n, dict) and n.get("type") == "CHART"
+    ]
+
+    assert nodes
+    for meta in nodes:
+        assert meta["sliceName"] == by_uuid[meta["uuid"]], meta["uuid"]
+    assert _charts()["delivery_sla"]["slice_name"] == "States with the lowest on-time share"
+
+
 def test_every_ratio_metric_guards_division() -> None:
     for dataset in _load("datasets/**/*.yaml"):
         for metric in dataset["metrics"]:
@@ -262,7 +361,7 @@ KPI_TILE = {
 }
 
 
-def test_kpi_tiles_fit_the_row_with_one_big_number_and_a_short_comparison() -> None:
+def test_kpi_tiles_pin_font_sizes_height_and_columns() -> None:
     layout = _dashboard()["position"]
     kpis = {s: c for s, c in _charts().items() if c["viz_type"] == "pop_kpi"}
 

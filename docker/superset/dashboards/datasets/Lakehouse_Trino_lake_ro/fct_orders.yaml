@@ -52,8 +52,8 @@ metrics:
     metric_type: null
     expression: >-
       SUM(CASE WHEN order_status NOT IN ('canceled', 'unavailable') THEN items_value END) /
-      NULLIF(COUNT_IF(order_status NOT IN ('canceled', 'unavailable')), 0)
-    description: GMV per paid order.
+      NULLIF(COUNT_IF(order_status NOT IN ('canceled', 'unavailable') AND items_count > 0), 0)
+    description: GMV per paid order with at least one live item.
     d3format: null
     extra: {}
     warning_text: null
