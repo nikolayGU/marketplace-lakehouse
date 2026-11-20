@@ -194,7 +194,7 @@ records it here.
 ### Cutover, 2026-10-08
 
 Spark and Trino read and write through Lakekeeper; nothing reads or writes the JDBC catalog any
-more. The cutover followed `docs/runbooks/catalog-cutover.md` on the live stack. Profile `rest`
+more. The cutover followed `docs/planning/archive/catalog-cutover-2026-10-08.md` on the live stack. Profile `rest`
 is gone: `lakekeeper-migrate`, `lakekeeper` and `lakekeeper-bootstrap` are in `core`, and
 `spark-bronze`, `spark-silver` and `trino` wait for `lakekeeper-bootstrap`. `CATALOG_TYPE` is
 `rest` in `.env.example` and as the code default, and an empty value is refused. Trino's

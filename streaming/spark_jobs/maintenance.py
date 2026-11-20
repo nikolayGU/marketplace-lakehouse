@@ -11,7 +11,8 @@ bronze never loses a snapshot (ADR-021), silver and gold keep a week, and an orp
 than a week may be a commit in flight. Each call prints one JSON line. A failing table does not
 stop the others; the exit code is then 1.
 
-The top of the file needs no JVM, so the rules are tested on the host. Python 3.10 (the image).
+The top of the file needs no JVM, so the rules are tested on the host. The image runs Python 3.10;
+ruff checks this as py310 (pyproject).
 """
 
 import argparse
@@ -81,7 +82,7 @@ def check_orphans(table: str, days: int, location_suffix: str | None) -> None:
     if layer(table) == "bronze" and location_suffix != BRONZE_ORPHAN_SUFFIX:
         raise PolicyError(
             f"remove_orphan_files on {table} only with --location-suffix {BRONZE_ORPHAN_SUFFIX}: "
-            "bronze data files are never deleted, Kafka no longer has them (ADR-021, ADR-005)"
+            "bronze data files are never deleted, Kafka no longer has them (ADR-025)"
         )
     if location_suffix is not None and location_suffix not in ORPHAN_SUFFIXES:
         # `..` or a path would list the files of other tables, bronze among them, as orphans.
@@ -108,12 +109,12 @@ def older_than_literal(now: datetime, days: int) -> str:
     """CALL accepts only literals, so the time is formatted, in UTC like the session."""
     if now.tzinfo is None:
         raise ValueError("older_than needs a time with a zone")
-    moment = (now - timedelta(days=days)).astimezone(timezone.utc)  # noqa: UP017
+    moment = (now - timedelta(days=days)).astimezone(timezone.utc)
     return f"TIMESTAMP '{moment.strftime('%Y-%m-%d %H:%M:%S.%f')}'"
 
 
 def before_today_filter(now: datetime) -> str:
-    midnight = now.astimezone(timezone.utc).strftime("%Y-%m-%d 00:00:00")  # noqa: UP017
+    midnight = now.astimezone(timezone.utc).strftime("%Y-%m-%d 00:00:00")
     return f"{DAY_COLUMN} < TIMESTAMP '{midnight}'"
 
 
@@ -217,6 +218,13 @@ def positive(text: str) -> int:
     return value
 
 
+def option_pair(text: str) -> tuple[str, str]:
+    key, separator, value = text.partition("=")
+    if not separator or not key:
+        raise argparse.ArgumentTypeError(f"expected KEY=VALUE, got {text!r}")
+    return key, value
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="maintenance", description="Iceberg maintenance of the lake"
@@ -230,7 +238,6 @@ def build_parser() -> argparse.ArgumentParser:
     deletes = commands.add_parser(
         "rewrite-position-deletes", help="fold position delete files (merge-on-read tables)"
     )
-    deletes.set_defaults(days=None)
 
     data = commands.add_parser("rewrite-data", help="rewrite_data_files: compact small files")
     data.add_argument(
@@ -238,7 +245,9 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help=f"only partitions with {DAY_COLUMN} before today's midnight UTC",
     )
-    data.add_argument("--option", action="append", default=[], metavar="KEY=VALUE")
+    data.add_argument(
+        "--option", action="append", default=[], type=option_pair, metavar="KEY=VALUE"
+    )
 
     orphans = commands.add_parser(
         "orphans", help="remove_orphan_files; a dry run unless --no-dry-run"
@@ -297,7 +306,7 @@ def execute(
     elif args.command == "rewrite-position-deletes":
         sql = rewrite_position_deletes_sql(table)
     else:
-        options = dict(item.split("=", 1) for item in args.option)
+        options = dict(args.option)
         where = before_today_filter(now) if args.before_today else None
         sql = rewrite_data_sql(table, where, options)
     print(sql, file=sys.stderr)
@@ -324,7 +333,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
     spark = open_session()
     try:
-        now = datetime.now(timezone.utc)  # noqa: UP017
+        now = datetime.now(timezone.utc)
         extra = {"dry_run": args.dry_run} if args.command == "orphans" else {}
         return run_tables(
             args.command, tables, lambda table: execute(spark, args, table, now), **extra

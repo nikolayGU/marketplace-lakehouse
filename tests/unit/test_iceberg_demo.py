@@ -1,7 +1,6 @@
 """`make iceberg-demo` runs end to end on a local catalog and leaves the sandbox compacted."""
 
 import os
-import shutil
 from collections.abc import Iterator
 from glob import glob
 from pathlib import Path
@@ -13,8 +12,9 @@ from spark_jobs.catalog import CATALOG
 from spark_jobs.contracts import load_contracts
 from spark_jobs.iceberg_demo import DEMO, show, walkthrough
 from spark_jobs.silver_upsert import SILVER, ensure_table
+from spark_jvm import HAS_SPARK_JVM
 
-HAS_JAVA = shutil.which("java") is not None
+HAS_JAVA = HAS_SPARK_JVM
 SPARK_JARS = f"{os.environ.get('SPARK_HOME', '/opt/spark')}/jars"
 HAS_ICEBERG = bool(glob(f"{SPARK_JARS}/iceberg-spark-runtime-*"))
 needs_iceberg = pytest.mark.skipif(

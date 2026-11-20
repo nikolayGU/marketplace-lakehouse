@@ -276,3 +276,55 @@ def test_container_exporter_limit_leaves_room_for_the_docker_api_walk() -> None:
     limits = _services()["container-exporter"]["deploy"]["resources"]["limits"]
 
     assert limits["memory"] == "128M"
+
+
+def _environment(service: dict[str, Any]) -> dict[str, str]:
+    env = service.get("environment") or {}
+    if isinstance(env, list):
+        return dict(item.split("=", 1) for item in env)
+    return {key: str(value) for key, value in env.items()}
+
+
+def test_no_service_carries_a_catalog_environment_key() -> None:
+    offenders = {
+        name: sorted(k for k in _environment(svc) if k.startswith("CATALOG_"))
+        for name, svc in _load_services().items()
+    }
+
+    assert {name: keys for name, keys in offenders.items() if keys} == {}
+
+
+def test_meta_password_reaches_only_the_services_that_use_postgres_meta() -> None:
+    holders = {
+        name
+        for name, svc in _load_services().items()
+        if any("META_PASSWORD" in value for value in _environment(svc).values())
+    }
+
+    assert holders == {
+        "postgres-meta",
+        "lakekeeper-migrate",
+        "lakekeeper",
+        "superset",
+        "superset-init",
+        "superset-mcp",
+    }
+
+
+def test_airflow_env_has_no_catalog_keys_and_meta_password_only_in_the_connection() -> None:
+    lines = [
+        line
+        for line in (REPO / "docker" / "airflow" / "airflow.env").read_text().splitlines()
+        if "=" in line and not line.lstrip().startswith("#")
+    ]
+    pairs = [line.split("=", 1) for line in lines]
+
+    assert [k for k, _ in pairs if k.startswith("CATALOG_")] == []
+    assert [k for k, v in pairs if "META_PASSWORD" in v] == ["AIRFLOW__DATABASE__SQL_ALCHEMY_CONN"]
+
+
+def test_replayer_mounts_no_data_dir() -> None:
+    replayer = _load_services()["oltp-replayer"]
+
+    assert "volumes" not in replayer
+    assert "DATA_DIR" not in _environment(replayer)

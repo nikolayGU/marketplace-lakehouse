@@ -37,3 +37,8 @@ JSON null stays null, and a null in a required column is `null_required`.
 Adding a column: add the property here, run `ALTER TABLE lake.silver.<table> ADD COLUMN`, and
 new events fill it while older rows stay null. Bronze needs nothing, `after` is text. A column
 that the source has and the contract does not yet know is ignored, not an error.
+
+`enum`, `minimum` and `maximum` mirror the source CHECK constraints in
+`oltp/migrations/001_schema.sql`; silver does not check them, the source does, and dbt
+`accepted_values` and `value_in_range` in `dbt/models/staging/_staging.yml` test gold's input.
+`tests/unit/test_contracts.py` fails when a domain here differs from its CHECK.

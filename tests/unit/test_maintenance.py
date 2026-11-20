@@ -3,7 +3,6 @@ a local Hadoop catalog in the image (`make test-spark`)."""
 
 import json
 import os
-import shutil
 from collections.abc import Iterator
 from datetime import datetime, timedelta, timezone
 from glob import glob
@@ -35,11 +34,12 @@ from spark_jobs.maintenance import (
     run_tables,
     table_location,
 )
+from spark_jvm import HAS_SPARK_JVM
 
 REPO = Path(__file__).resolve().parents[2]
-NOW = datetime(2026, 10, 23, 3, 30, 15, 123456, tzinfo=timezone.utc)  # noqa: UP017
+NOW = datetime(2026, 10, 23, 3, 30, 15, 123456, tzinfo=timezone.utc)
 
-HAS_JAVA = shutil.which("java") is not None
+HAS_JAVA = HAS_SPARK_JVM
 SPARK_JARS = f"{os.environ.get('SPARK_HOME', '/opt/spark')}/jars"
 HAS_ICEBERG = bool(glob(f"{SPARK_JARS}/iceberg-spark-runtime-*"))
 needs_iceberg = pytest.mark.skipif(
@@ -118,7 +118,7 @@ def test_orphans_of_bronze_data_is_refused_without_the_metadata_location() -> No
     bronze = parse_table("lake.bronze.cdc_events")
 
     for suffix in (None, "", "data", "metadata/../data", "meta"):
-        with pytest.raises(PolicyError, match="ADR-021"):
+        with pytest.raises(PolicyError, match="ADR-025"):
             check_orphans(bronze, 7, suffix)
     check_orphans(bronze, 7, "metadata")
 
@@ -336,6 +336,20 @@ def test_a_real_orphans_run_needs_its_own_flag() -> None:
     assert parse_args(["orphans", "--dry-run", "silver.sellers"]).dry_run is True
 
 
+@pytest.mark.parametrize("option", ["nokey", "=v", ""])
+def test_an_option_without_a_key_or_equals_sign_is_a_usage_error(option: str) -> None:
+    with pytest.raises(SystemExit) as raised:
+        parse_args(["rewrite-data", "--option", option, "silver.orders"])
+
+    assert raised.value.code == 2
+
+
+def test_options_are_parsed_into_pairs() -> None:
+    args = parse_args(["rewrite-data", "--option", "a=b=c", "--option", "k=", "silver.orders"])
+
+    assert args.option == [("a", "b=c"), ("k", "")]
+
+
 def test_expire_defaults_to_a_week() -> None:
     args = parse_args(["expire", "silver.sellers", "silver.orders"])
 
@@ -381,7 +395,7 @@ def test_bronze_orphans_in_data_are_refused_before_a_spark_session(
     code = main(["orphans", "--no-dry-run", "lake.bronze.cdc_events"])
 
     assert code == 1
-    assert "ADR-021" in capsys.readouterr().err
+    assert "ADR-025" in capsys.readouterr().err
 
 
 def test_run_job_forwards_the_arguments_after_the_job_name() -> None:
@@ -445,7 +459,7 @@ def test_expire_leaves_one_snapshot_and_reports_deleted_files(
     snapshots_before = snapshots(spark, sandbox)
 
     # The sandbox snapshots are written now: a fixed NOW stops covering them a day after it.
-    later = datetime.now(timezone.utc) + timedelta(days=1)  # noqa: UP017
+    later = datetime.now(timezone.utc) + timedelta(days=1)
     [result] = execute(spark, args, sandbox, later)
 
     assert snapshots(spark, sandbox) == 1
@@ -464,7 +478,7 @@ def test_orphans_dry_run_deletes_nothing_and_lists_candidates(
     args = parse_args(["orphans", "--days", "2", sandbox])
     files_before = spark.table(f"{sandbox}.files").count()
 
-    rows = execute(spark, args, sandbox, datetime.now(timezone.utc))  # noqa: UP017
+    rows = execute(spark, args, sandbox, datetime.now(timezone.utc))
     line = json.loads(result_line("orphans", sandbox, rows, dry_run=args.dry_run))
 
     assert line["dry_run"] is True
@@ -479,7 +493,7 @@ def test_orphans_in_the_metadata_location_takes_the_table_location_from_the_cata
 ) -> None:
     args = parse_args(["orphans", "--days", "2", "--location-suffix", "metadata", sandbox])
 
-    rows = execute(spark, args, sandbox, datetime.now(timezone.utc))  # noqa: UP017
+    rows = execute(spark, args, sandbox, datetime.now(timezone.utc))
 
     assert table_location(spark, sandbox).endswith("/demo/events")
     # Only metadata is looked at: no candidate sits in data/.
@@ -526,9 +540,9 @@ def test_an_old_stray_file_is_listed_by_a_dry_run_and_removed_only_by_the_real_r
 ) -> None:
     stray = Path(table_location(spark, sandbox).removeprefix("file:")) / "data" / "stray.parquet"
     stray.write_bytes(b"not referenced by any snapshot")
-    three_days_ago = (datetime.now(timezone.utc) - timedelta(days=3)).timestamp()  # noqa: UP017
+    three_days_ago = (datetime.now(timezone.utc) - timedelta(days=3)).timestamp()
     os.utime(stray, (three_days_ago, three_days_ago))
-    now = datetime.now(timezone.utc)  # noqa: UP017
+    now = datetime.now(timezone.utc)
 
     dry = execute(spark, parse_args(["orphans", "--days", "2", sandbox]), sandbox, now)
     assert [r["orphan_file_location"].endswith("stray.parquet") for r in dry] == [True]

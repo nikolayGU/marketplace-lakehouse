@@ -1,6 +1,5 @@
 import json
 import re
-import shutil
 from collections.abc import Iterator
 from datetime import datetime
 from pathlib import Path
@@ -18,6 +17,7 @@ from pyspark.sql.types import (
     TimestampType,
 )
 from spark_jobs.bronze_cdc_ingest import ADDED_COLUMNS, DDL, ENVELOPE, to_bronze
+from spark_jvm import HAS_SPARK_JVM, SKIP_REASON
 
 CONTRACT = Path(__file__).parents[2] / "contracts" / "cdc-envelope.schema.json"
 FIXTURES = Path(__file__).parents[1] / "fixtures" / "envelopes"
@@ -34,9 +34,7 @@ KAFKA_SOURCE = StructType(
     ]
 )
 
-needs_java = pytest.mark.skipif(
-    shutil.which("java") is None, reason="local SparkSession needs a JVM; CI and the image have one"
-)
+needs_java = pytest.mark.skipif(not HAS_SPARK_JVM, reason=SKIP_REASON)
 
 
 def test_envelope_reads_only_fields_the_contract_requires() -> None:

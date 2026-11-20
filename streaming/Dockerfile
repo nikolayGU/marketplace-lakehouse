@@ -18,8 +18,7 @@ RUN set -eux; \
       org/apache/kafka/kafka-clients/3.4.1/kafka-clients-3.4.1.jar \
       org/apache/commons/commons-pool2/2.11.1/commons-pool2-2.11.1.jar \
       org/apache/hadoop/hadoop-aws/3.3.4/hadoop-aws-3.3.4.jar \
-      com/amazonaws/aws-java-sdk-bundle/1.12.262/aws-java-sdk-bundle-1.12.262.jar \
-      org/postgresql/postgresql/42.7.8/postgresql-42.7.8.jar; \
+      com/amazonaws/aws-java-sdk-bundle/1.12.262/aws-java-sdk-bundle-1.12.262.jar; \
     do \
       name="$(basename "$jar")"; \
       curl -fsSL -o "$name" "$MAVEN/$jar"; \

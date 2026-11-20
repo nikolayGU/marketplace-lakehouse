@@ -2,7 +2,7 @@
 # Set protected=true on every bronze and silver table in Lakekeeper. Lakekeeper then answers a drop
 # of such a table with 409 before anything is deleted: Spark DROP with or without PURGE, Trino DROP
 # and unregister_table, a REST DELETE, a register overwrite. Only force=true gets past it. Commits
-# are not affected. Runs on the host after the cutover checks (docs/runbooks/catalog-cutover.md).
+# are not affected. Runs on the host.
 # Safe to re-run, also when a new bronze or silver table appears: it only ever sends
 # protected=true, reads the flag back and changes nothing else. Removing protection is on the
 # blast-radius list and is not done here.

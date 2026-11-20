@@ -150,7 +150,7 @@ alerts-test: ## promtool: check the alert rules and run observability/prometheus
 	docker run --rm -v "$(CURDIR)/observability/prometheus:/etc/prometheus:ro" --entrypoint promtool $(PROMETHEUS_IMAGE) check rules /etc/prometheus/alerts.yml
 	docker run --rm -v "$(CURDIR)/observability/prometheus:/etc/prometheus:ro" --entrypoint promtool $(PROMETHEUS_IMAGE) test rules /etc/prometheus/alerts_test.yml
 
-test: ## unit tests (Spark ones skip on a host without Java)
+test: ## unit tests (Spark ones skip on a host without Java 17)
 	uv run pytest tests/unit -q
 
 check: ## make lint and make test, then stamps the tree they passed on for the commit gate (.check-stamp)

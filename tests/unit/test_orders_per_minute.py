@@ -1,7 +1,6 @@
 import calendar
 import json
 import os
-import shutil
 from collections.abc import Callable, Iterator
 from datetime import datetime
 from glob import glob
@@ -17,11 +16,12 @@ from spark_jobs.orders_per_minute import (
     upsert,
     windowed_counts,
 )
+from spark_jvm import HAS_SPARK_JVM, SKIP_REASON
 
-HAS_JAVA = shutil.which("java") is not None
+HAS_JAVA = HAS_SPARK_JVM
 SPARK_JARS = f"{os.environ.get('SPARK_HOME', '/opt/spark')}/jars"
 HAS_ICEBERG = bool(glob(f"{SPARK_JARS}/iceberg-spark-runtime-*"))
-needs_java = pytest.mark.skipif(not HAS_JAVA, reason="local SparkSession needs a JVM")
+needs_java = pytest.mark.skipif(not HAS_JAVA, reason=SKIP_REASON)
 needs_iceberg = pytest.mark.skipif(
     not (HAS_JAVA and HAS_ICEBERG), reason="needs the Iceberg runtime jar: run `make test-spark`"
 )
@@ -232,6 +232,18 @@ def test_upsert_twice_with_the_same_batch_changes_nothing(spark: SparkSession) -
         (r["window_start"], r["orders"]) for r in first
     ]
     assert spark.table(target).count() == 2
+
+
+@needs_iceberg
+def test_upsert_leaves_no_temp_view_behind(spark: SparkSession) -> None:
+    target = "lake.silver.opm_views"
+    spark.sql("create namespace if not exists lake.silver")
+    ensure_table(spark, target)
+
+    upsert(make_batch(spark, [("2026-07-01 10:00:00", 2)]), 0, target)
+    upsert(make_batch(spark, [("2026-07-01 10:00:00", 3)]), 1, target)
+
+    assert [t.name for t in spark.catalog.listTables() if t.name.startswith("opm_batch")] == []
 
 
 @needs_iceberg

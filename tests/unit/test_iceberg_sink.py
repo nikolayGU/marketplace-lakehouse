@@ -8,7 +8,6 @@ keep their own epochs and each skips only a replay of its own.
 """
 
 import os
-import shutil
 from collections import defaultdict
 from collections.abc import Iterator
 from glob import glob
@@ -16,8 +15,9 @@ from pathlib import Path
 
 import pytest
 from pyspark.sql import SparkSession
+from spark_jvm import HAS_SPARK_JVM
 
-HAS_JAVA = shutil.which("java") is not None
+HAS_JAVA = HAS_SPARK_JVM
 SPARK_JARS = f"{os.environ.get('SPARK_HOME', '/opt/spark')}/jars"
 HAS_ICEBERG = bool(glob(f"{SPARK_JARS}/iceberg-spark-runtime-*"))
 needs_iceberg = pytest.mark.skipif(

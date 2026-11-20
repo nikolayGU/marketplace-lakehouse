@@ -1123,7 +1123,7 @@ def test_bronze_orphans_always_go_to_the_metadata_location() -> None:
     command = orphans_command(["lake.bronze.cdc_events"], location_suffix="metadata")
 
     assert command[command.index("--location-suffix") + 1] == "metadata"
-    with pytest.raises(maintenance.PolicyError, match="ADR-021"):
+    with pytest.raises(maintenance.PolicyError, match="ADR-025"):
         assert_accepted_by_the_job(rendered(orphans_command(["lake.bronze.cdc_events"])))
 
 

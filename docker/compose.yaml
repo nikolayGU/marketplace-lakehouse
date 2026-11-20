@@ -203,8 +203,7 @@ services:
     logging: *logging
     networks: [lake]
 
-  # ADR-005: Lakekeeper, the Iceberg REST catalog of Spark and Trino. The JDBC catalog in
-  # postgres-meta is kept as the rollback point (docs/runbooks/catalog-cutover.md).
+  # ADR-005: Lakekeeper, the Iceberg REST catalog of Spark and Trino.
   # Pinned by digest: a newer image migrates the schema on start and the old one then refuses it,
   # so there is no image rollback.
   # One-shot schema migration of the lakekeeper database; the exit code is the signal.
@@ -298,8 +297,6 @@ services:
     depends_on:
       kafka:
         condition: service_healthy
-      postgres-meta:
-        condition: service_healthy
       minio-init:
         condition: service_completed_successfully
       lakekeeper-bootstrap:
@@ -309,12 +306,6 @@ services:
       SPARK_MASTER: ${SPARK_MASTER}
       SPARK_DRIVER_MEMORY: ${SPARK_DRIVER_MEMORY}
       KAFKA_BOOTSTRAP: kafka:9092
-      CATALOG_TYPE: ${CATALOG_TYPE}   # rest; jdbc only through docs/runbooks/catalog-cutover.md
-      # CATALOG_JDBC_* and CATALOG_WAREHOUSE serve CATALOG_TYPE=jdbc only: kept for the rollback.
-      CATALOG_JDBC_URL: jdbc:postgresql://postgres-meta:5432/${CATALOG_DB}
-      CATALOG_JDBC_USER: ${META_USER}
-      CATALOG_JDBC_PASSWORD: ${META_PASSWORD}
-      CATALOG_WAREHOUSE: s3a://${S3_BUCKET}/warehouse
       CHECKPOINT_ROOT: s3a://${S3_BUCKET}/checkpoints
       LAKEKEEPER_URI: ${LAKEKEEPER_URI}
       LAKEKEEPER_WAREHOUSE: ${LAKEKEEPER_WAREHOUSE}
@@ -369,11 +360,6 @@ services:
       SPARK_MASTER: ${SPARK_MASTER}
       SPARK_DRIVER_MEMORY: 1g
       KAFKA_BOOTSTRAP: kafka:9092
-      CATALOG_TYPE: ${CATALOG_TYPE}
-      CATALOG_JDBC_URL: jdbc:postgresql://postgres-meta:5432/${CATALOG_DB}
-      CATALOG_JDBC_USER: ${META_USER}
-      CATALOG_JDBC_PASSWORD: ${META_PASSWORD}
-      CATALOG_WAREHOUSE: s3a://${S3_BUCKET}/warehouse
       CHECKPOINT_ROOT: s3a://${S3_BUCKET}/checkpoints
       LAKEKEEPER_URI: ${LAKEKEEPER_URI}
       LAKEKEEPER_WAREHOUSE: ${LAKEKEEPER_WAREHOUSE}
@@ -413,9 +399,6 @@ services:
     pull_policy: never
     profiles: [jobs]
     depends_on:
-      postgres-meta:
-        condition: service_healthy
-        required: false
       minio:
         condition: service_healthy
         required: false
@@ -426,11 +409,6 @@ services:
     environment:
       SPARK_MASTER: ${SPARK_MASTER}
       SPARK_DRIVER_MEMORY: ${SPARK_DRIVER_MEMORY}
-      CATALOG_TYPE: ${CATALOG_TYPE}
-      CATALOG_JDBC_URL: jdbc:postgresql://postgres-meta:5432/${CATALOG_DB}
-      CATALOG_JDBC_USER: ${META_USER}
-      CATALOG_JDBC_PASSWORD: ${META_PASSWORD}
-      CATALOG_WAREHOUSE: s3a://${S3_BUCKET}/warehouse
       CHECKPOINT_ROOT: s3a://${S3_BUCKET}/checkpoints
       LAKEKEEPER_URI: ${LAKEKEEPER_URI}
       LAKEKEEPER_WAREHOUSE: ${LAKEKEEPER_WAREHOUSE}
@@ -467,10 +445,7 @@ services:
       REPLAY_LATE_DELAY_SECONDS: ${REPLAY_LATE_DELAY_SECONDS}
       REPLAY_DUPLICATE_RATIO: ${REPLAY_DUPLICATE_RATIO}
       REPLAY_SCHEMA_EVOLUTION_AT: ${REPLAY_SCHEMA_EVOLUTION_AT}
-      DATA_DIR: /data
       HTTP_HOST: 0.0.0.0
-    volumes:
-      - ${DATA_DIR}:/data:ro
     ports:
       - "${BIND_IP:?set BIND_IP in .env}:8000:8000"   # /metrics, /status
     healthcheck:
@@ -491,9 +466,6 @@ services:
     image: trinodb/trino:483@sha256:db58cc93e593a2706553745f276bb119c9810e69918be56ecde088ba7ccb0534
     profiles: [query]
     depends_on:
-      postgres-meta:
-        condition: service_healthy
-        required: false
       minio:
         condition: service_healthy
         required: false
@@ -506,16 +478,11 @@ services:
       # glibc gives each busy thread a malloc arena of up to 64 MB; with hundreds of Trino threads
       # that grew RSS about 0.55 GiB past what the JVM tracks (NMT, 2026-10-18, D20).
       MALLOC_ARENA_MAX: "4"
-      # CATALOG_DB, META_* and S3_BUCKET serve only the JDBC lake.properties of the rollback.
-      CATALOG_DB: ${CATALOG_DB}
-      META_USER: ${META_USER}
-      META_PASSWORD: ${META_PASSWORD}
       LAKEKEEPER_URI: ${LAKEKEEPER_URI}
       LAKEKEEPER_WAREHOUSE: ${LAKEKEEPER_WAREHOUSE}
       S3_ENDPOINT: ${S3_ENDPOINT}
       S3_ACCESS_KEY: ${S3_ACCESS_KEY}
       S3_SECRET_KEY: ${S3_SECRET_KEY}
-      S3_BUCKET: ${S3_BUCKET}
     volumes:
       # catalog/lake.properties is Lakekeeper, the catalog Spark writes. Trino reads catalog files
       # only at startup: an edit there needs `docker restart lakehouse-trino-1`.
@@ -536,8 +503,8 @@ services:
     networks: [lake]
 
   # ---------------------------------------------------------------- orchestrate
-  # postgres-meta belongs to core: the databases of Lakekeeper, Airflow and Superset and the JDBC
-  # rollback catalog. orchestrate and bi depend on it with required: false (make start first).
+  # postgres-meta belongs to core: the databases of Lakekeeper, Airflow and Superset.
+  # orchestrate and bi depend on it with required: false (make start first).
   postgres-meta:
     <<: *common
     image: postgres:17@sha256:f4c66b820c6f974249089d3d16d86a3698eae11e8746eb6644b2271031e91232
@@ -548,7 +515,7 @@ services:
       POSTGRES_DB: ${META_USER}
     volumes:
       - postgres_meta:/var/lib/postgresql/data
-      - ./postgres-meta/init:/docker-entrypoint-initdb.d:ro   # creates iceberg_catalog, airflow, lakekeeper, superset databases
+      - ./postgres-meta/init:/docker-entrypoint-initdb.d:ro   # creates airflow, lakekeeper, superset databases
     ports:
       - "${BIND_IP:?set BIND_IP in .env}:5433:5432"
     healthcheck:

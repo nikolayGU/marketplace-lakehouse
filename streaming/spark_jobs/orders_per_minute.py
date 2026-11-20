@@ -14,7 +14,7 @@ orders per one-minute window of `order_purchase_timestamp`, with a watermark of 
   time seen by the delay. A late event for a closed window is dropped, counted in
   `numRowsDroppedByWatermark`; one for an open window changes the count.
 
-Python 3.10 in the image: no syntax newer than that.
+Python 3.10 in the image: ruff checks this as py310 (pyproject).
 """
 
 import logging
@@ -91,10 +91,10 @@ def upsert(batch: DataFrame, batch_id: int, target: str) -> None:
     # run would add to the progress counters (dropped rows, state rows) and repeat the state
     # update; persisted, it runs once.
     batch.persist()
+    view = f"opm_batch_{batch_id}"
     try:
         if batch.isEmpty():
             return
-        view = f"opm_batch_{batch_id}"
         batch.createOrReplaceTempView(view)
         batch.sparkSession.sql(
             f"""
@@ -107,6 +107,7 @@ def upsert(batch: DataFrame, batch_id: int, target: str) -> None:
             """
         )
     finally:
+        batch.sparkSession.catalog.dropTempView(view)
         batch.unpersist()
 
 
@@ -140,7 +141,8 @@ def main() -> None:
         spark.readStream.format("kafka")
         .option("kafka.bootstrap.servers", settings.kafka_bootstrap)
         .option("subscribe", settings.opm_source_topic)
-        .option("startingOffsets", settings.opm_starting_offsets)
+        # Only consulted on the very first start; afterwards offsets come from the checkpoint.
+        .option("startingOffsets", "earliest")
         .option("maxOffsetsPerTrigger", settings.bronze_max_offsets_per_trigger)
         # Offsets that retention deleted before we read them are lost data: fail loudly.
         .option("failOnDataLoss", "true")

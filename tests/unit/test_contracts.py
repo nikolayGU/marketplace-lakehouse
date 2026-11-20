@@ -1,6 +1,5 @@
 import json
 import re
-import shutil
 from collections.abc import Iterator
 from datetime import datetime
 from decimal import Decimal
@@ -12,6 +11,7 @@ from jsonschema import Draft202012Validator
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql.functions import from_json
 from spark_jobs.contracts import load_contracts, parse_contract
+from spark_jvm import HAS_SPARK_JVM, SKIP_REASON
 
 ROOT = Path(__file__).parents[2]
 CONTRACTS = ROOT / "contracts" / "silver"
@@ -27,9 +27,7 @@ ADD_COLUMN = re.compile(
     r"alter table shop\.(\w+) add column (\w+) (varchar\(\d+\)|text|integer|timestamp)"
 )
 
-needs_java = pytest.mark.skipif(
-    shutil.which("java") is None, reason="local SparkSession needs a JVM; CI and the image have one"
-)
+needs_java = pytest.mark.skipif(not HAS_SPARK_JVM, reason=SKIP_REASON)
 
 
 def silver_types(pg_type: str) -> tuple[str, str]:
@@ -98,6 +96,58 @@ def test_contract_matches_the_source_table(table: str) -> None:
     assert columns[len(base) :] == [c for c in evolution_columns().get(table, []) if c in columns]
     assert {c.name for c in contract.columns if not c.nullable} == source["not_null"]
     assert list(contract.primary_key) == source["primary_key"]
+
+
+CONNECTOR = ROOT / "connect" / "shop-connector.json"
+CHECK_IN = re.compile(r"check \(\s*(\w+) in \(([^)]*)\)", re.S)
+CHECK_BETWEEN = re.compile(r"check \(\s*(\w+) between (\d+) and (\d+)\s*\)")
+
+
+def source_domains() -> dict[tuple[str, str], Any]:
+    """Value list or (min, max) of every CHECK in the migration, by (table, column)."""
+    domains: dict[tuple[str, str], Any] = {}
+    sql = SCHEMA_SQL.read_text()
+    for table, body in re.findall(r"create table shop\.(\w+) \((.*?)\n\);", sql, re.S):
+        for column, values in CHECK_IN.findall(body):
+            domains[(table, column)] = set(re.findall(r"'([^']*)'", values))
+        for column, low, high in CHECK_BETWEEN.findall(body):
+            domains[(table, column)] = (int(low), int(high))
+    return domains
+
+
+def contract_domains() -> dict[tuple[str, str], Any]:
+    domains: dict[tuple[str, str], Any] = {}
+    for path in sorted(CONTRACTS.glob("*.json")):
+        for column, spec in json.loads(path.read_text())["properties"].items():
+            if "enum" in spec:
+                domains[(path.stem, column)] = set(spec["enum"])
+            if "minimum" in spec or "maximum" in spec:
+                domains[(path.stem, column)] = (spec.get("minimum"), spec.get("maximum"))
+    return domains
+
+
+def test_every_source_check_is_parsed_into_a_domain() -> None:
+    migrations = sorted((ROOT / "oltp" / "migrations").glob("*.sql"))
+    declared = sum(len(re.findall(r"check \(", p.read_text(), re.I)) for p in migrations)
+
+    assert len(source_domains()) == declared, (
+        "a CHECK in oltp/migrations has a form source_domains() does not parse "
+        "(only `in (...)` and `between a and b` in 001_schema.sql); extend the parser"
+    )
+
+
+def test_contract_domains_equal_the_source_check_constraints() -> None:
+    assert source_domains()  # the parser found the CHECKs
+    assert contract_domains() == source_domains()
+
+
+def test_contracts_cover_the_connector_table_list() -> None:
+    listed = json.loads(CONNECTOR.read_text())["config"]["table.include.list"].split(",")
+    contracts = {
+        json.loads(p.read_text())["x-source-table"] for p in sorted(CONTRACTS.glob("*.json"))
+    }
+
+    assert contracts == {t.strip() for t in listed}
 
 
 def test_evolution_migration_adds_sales_channel() -> None:

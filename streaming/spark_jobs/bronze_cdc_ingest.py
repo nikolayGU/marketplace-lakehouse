@@ -36,7 +36,6 @@ ENVELOPE = StructType(
                     StructField("lsn", LongType()),
                     StructField("sequence", StringType()),
                     StructField("ts_ms", LongType()),
-                    StructField("table", StringType()),
                 ]
             ),
         ),

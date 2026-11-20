@@ -263,12 +263,16 @@ def merge_table(events: DataFrame, count: int, batch_id: int, contract: TableCon
         view = f"silver_upsert_{contract.table}"
         valid = images.where(F.col("_reason").isNull())
         latest_per_key(valid, contract).createOrReplaceTempView(view)
+        valid_count = count - sum(why.values())
+        if valid_count == 0:
+            log.info("batch %s: nothing to merge into %s.%s", batch_id, SILVER, contract.table)
+            return
         started = time.monotonic()
         events.sparkSession.sql(merge_sql(f"{SILVER}.{contract.table}", view, contract))
         log.info(
             "batch %s: %s events merged into %s.%s in %.1f s",
             batch_id,
-            count,
+            valid_count,
             SILVER,
             contract.table,
             time.monotonic() - started,

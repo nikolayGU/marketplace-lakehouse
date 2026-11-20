@@ -3,8 +3,7 @@
 Spark image and jobs.
 
 - `Dockerfile`: `apache/spark:3.5.9-java17-python3` + `iceberg-spark-runtime-3.5_2.12:1.11.0` +
-  `spark-sql-kafka-0-10` + `hadoop-aws` / `aws-java-sdk-bundle` for S3A + PostgreSQL JDBC for the
-  `jdbc` catalog type (the rollback path of the catalog cutover runbook). Jars are downloaded at
+  `spark-sql-kafka-0-10` + `hadoop-aws` / `aws-java-sdk-bundle` for S3A. Jars are downloaded at
   build time with pinned versions and checked against Maven Central's sha1, never fetched at
   runtime. The image's Python is 3.10, so `spark_jobs` avoids 3.11+ syntax.
 - `run-job.sh <job>`: the entrypoint, `spark-submit` of `spark_jobs/<job>.py` with
@@ -29,9 +28,7 @@ Spark image and jobs.
   `METRICS_PORT`; last progress time, input rows, batch duration, Kafka lag
   (`spark_streaming_kafka_lag`).
 - `spark_jobs/catalog.py`: SparkSession with Iceberg catalog `lake` and S3A pointed at MinIO.
-  `CATALOG_TYPE` defaults to `rest` (Lakekeeper, `settings.py`). `jdbc` (JdbcCatalog in
-  postgres-meta) is kept only as the rollback path of `docs/runbooks/catalog-cutover.md`, not a
-  working mode: its rows point at pre-cutover snapshots.
+  The catalog is Lakekeeper over REST (`settings.py`); there is no other mode.
 - `spark_jobs/maintenance.py`: Iceberg maintenance CLI (expire snapshots, remove orphan files,
   rewrite position deletes, compact data files); the rules (bronze never loses a snapshot,
   silver and gold keep a week) are checked before a Spark session starts.

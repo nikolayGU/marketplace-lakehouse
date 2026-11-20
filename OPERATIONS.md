@@ -352,22 +352,21 @@ and a separate decision.
 ## Lakekeeper (REST catalog)
 
 Lakekeeper v0.13.6 is the Iceberg catalog of Spark and Trino since the cutover on 2026-10-08
-(ADR-005; procedure and rollback in `docs/runbooks/catalog-cutover.md`). Its services are in
-profile `core`: `lakekeeper-migrate` (one-shot schema migration of the `lakekeeper` database in
-`postgres-meta`, 128 MiB), `lakekeeper` (the API on `127.0.0.1:8181`, 256 MiB limit) and
-`lakekeeper-bootstrap` (one-shot, 128 MiB). `spark-bronze`, `spark-silver` and `trino` wait for
-`lakekeeper-bootstrap`, so every `up` of them runs the one-shots again (`minio-init`,
-`lakekeeper-migrate`, `lakekeeper-bootstrap`), all idempotent. Without `lakekeeper` Spark cannot
-commit and Trino cannot load a table. The API has no authentication (allow-all), which is why the
-port stays on 127.0.0.1. The same port serves the catalog UI, http://127.0.0.1:8181/ui/ (HTTP 200,
-2026-11-06): the warehouse `lake`, its namespaces and tables; it needs no login either.
+(ADR-005). Its services are in profile `core`: `lakekeeper-migrate` (one-shot schema migration of
+the `lakekeeper` database in `postgres-meta`, 128 MiB), `lakekeeper` (the API on `127.0.0.1:8181`,
+256 MiB limit) and `lakekeeper-bootstrap` (one-shot, 128 MiB). `spark-bronze`, `spark-silver` and
+`trino` wait for `lakekeeper-bootstrap`, so every `up` of them runs the one-shots again
+(`minio-init`, `lakekeeper-migrate`, `lakekeeper-bootstrap`), all idempotent. Without `lakekeeper`
+Spark cannot commit and Trino cannot load a table. The API has no authentication (allow-all), which
+is why the port stays on 127.0.0.1. The same port serves the catalog UI, http://127.0.0.1:8181/ui/
+(HTTP 200, 2026-11-06): the warehouse `lake`, its namespaces and tables; it needs no login either.
 
 `make silver` and `make iceberg-demo` run `spark-silver` with `--no-deps`: they never start
 Lakekeeper, so it must already be running (`make status`; `make lakekeeper-bootstrap` starts it).
 
 Measured on 2026-10-08 right after the cutover: `lakekeeper` 91 MiB of its 256 MiB, the
-`lakekeeper` database 12 MB (commands in the runbook's step 6). Bronze commits every 20 s and each
-commit now writes `postgres-meta` too: compare both a day later.
+`lakekeeper` database 12 MB. Bronze commits every 20 s and each commit now writes `postgres-meta`
+too: compare both a day later.
 
 ```
 make lakekeeper-bootstrap   # starts lakekeeper (migration first) if needed, creates warehouse lake
@@ -392,47 +391,35 @@ and it writes every new metadata file with them, so commits depend on the key. S
 credential again (`POST /management/v1/warehouse/{id}/storage-credential`) should repair that; it
 is untested.
 
-After the cutover. Never start a Spark job with `CATALOG_TYPE=jdbc` (in `.env`, as
-`-e CATALOG_TYPE=jdbc` or exported in a shell), and never give Trino the JDBC `lake.properties`
-back, except through the runbook's rollback. The JDBC rows in `iceberg_catalog` still point at
-the pre-cutover snapshots. They were the rollback point until the first maintenance run of
-2026-10-29, which deleted files those snapshots read (owner decision W6-D16; a copy of `warehouse/`
-taken before it is on `/mnt/d/lakehouse-backup/warehouse-20261029`), so a rollback now starts from
-that copy. A job on them would
-commit on top of an old snapshot, the two catalogs would fork, and `expire_snapshots` or
-`remove_orphan_files` on one side would delete files the other still reads. Compose takes
-`CATALOG_TYPE` from the shell over `.env`, so never source `.env` in a shell that runs compose.
-
-Registration was the cutover's first step and is not repeated. `scripts/lakekeeper/register.sh`
-refuses while `CATALOG_TYPE` in `.env` or in the shell is anything but `jdbc`, and a protected
-table would refuse the overwrite with 409 anyway. Do not work around either: registering again
-puts the stale JDBC pointers over the live ones. A new cutover after a rollback starts at the
-runbook's step 1.
+Spark and Trino reach the catalog only through Lakekeeper (REST); no setting selects another one.
+The `iceberg_catalog` database in `postgres-meta` of an existing volume still holds the rows of
+the old JDBC catalog. Nothing reads it and the rows stay as data; a new `postgres-meta` volume no
+longer creates it. Those rows point at pre-cutover snapshots, and the first maintenance run of
+2026-10-29 deleted files those snapshots read (owner decision W6-D16). A copy of `warehouse/`
+taken before that run is on `/mnt/d/lakehouse-backup/warehouse-20261029`.
 
 What deletes files. Lakekeeper reads a REST `DELETE` without `purgeRequested` as a purge (the
 Iceberg REST spec defaults it to `false`), and warehouse `lake` soft-deletes for 7 days: the table
 disappears from the catalog at once, Lakekeeper deletes its whole location 7 days later, and until
-then it can be undropped (below). The location of a registered table is also the JDBC table's
-directory, so the right column destroys the rollback point too.
+then it can be undropped (below).
 
-| Action | JDBC catalog | Lakekeeper (soft delete, 7 days) |
-|---|---|---|
-| Spark `DROP TABLE` | removes the catalog row; files stay | `DELETE` without `purgeRequested`: location deleted after 7 days |
-| Spark `DROP TABLE ... PURGE` | Spark deletes every file the table references, at once | the same drop, then Spark deletes the files itself, at once; undrop brings back no data |
-| Trino `DROP TABLE` (dbt drops through it) | Trino deletes the table's files and its directory, at once | `DELETE ?purgeRequested=true`: location deleted after 7 days |
-| Trino `CALL system.unregister_table` | removes the catalog row; files stay | `DELETE` without `purgeRequested`: location deleted after 7 days |
-| REST `DELETE .../tables/<t>` | no REST API | location deleted after 7 days |
-| REST `DELETE .../tables/<t>?purgeRequested=false` | no REST API | files stay; the table is hidden at once and leaves the catalog after 7 days |
+| Action | Lakekeeper (soft delete, 7 days) |
+|---|---|
+| Spark `DROP TABLE` | `DELETE` without `purgeRequested`: location deleted after 7 days |
+| Spark `DROP TABLE ... PURGE` | the same drop, then Spark deletes the files itself, at once; undrop brings back no data |
+| Trino `DROP TABLE` (dbt drops through it) | `DELETE ?purgeRequested=true`: location deleted after 7 days |
+| Trino `CALL system.unregister_table` | `DELETE` without `purgeRequested`: location deleted after 7 days |
+| REST `DELETE .../tables/<t>` | location deleted after 7 days |
+| REST `DELETE .../tables/<t>?purgeRequested=false` | files stay; the table is hidden at once and leaves the catalog after 7 days |
 
 `force=true` on a REST `DELETE` skips both the 7 days and table protection: the table leaves the
 catalog at once and, unless `purgeRequested=false`, its whole location is deleted at once too.
-Since the cutover the right column is what every engine does; the left one applies again only
-after a rollback. All of it is on the blast-radius list.
+All of it is on the blast-radius list.
 
 Protection. `scripts/lakekeeper/protect.sh` set `protected` on all 9 bronze and silver tables at
 the cutover. Lakekeeper then answers a drop of any of them with 409 before anything is deleted,
 Spark `DROP ... PURGE` included; commits are not affected. Run it again when a new bronze or
-silver table appears and after any registration, since a re-registered table comes back
+silver table appears; a re-registered table comes back
 unprotected; it only ever sets the flag and reads it back. `demo` and `gold` stay unprotected.
 Removing protection is on the blast-radius list: the owner does it by hand, nothing else does. The
 flag lives under the warehouse id and the table's Iceberg `table-uuid`:
@@ -564,8 +551,8 @@ visitor is admin: D12), `airflow-scheduler` (LocalExecutor: tasks run as process
 container) and `airflow-dag-processor`. One image, `lakehouse/airflow:dev` from
 `airflow/Dockerfile`: Airflow 3.3.2 on Python 3.12, dbt in `/opt/dbt-venv`. Config is
 `docker/airflow/airflow.env`, values from `.env`. Metadata lives in the `airflow` database of
-`postgres-meta`; the same instance holds `lakekeeper` and `iceberg_catalog`, which nothing here
-touches.
+`postgres-meta`; the same instance holds `lakekeeper` and, on a volume that has it,
+`iceberg_catalog` (old rows, unread), which nothing here touches.
 
 Before the first start, once per `.env`, from the repo root: `make secrets`. It generates
 `AIRFLOW_FERNET_KEY` (urlsafe base64 of 32 bytes) and `AIRFLOW_API_SECRET_KEY` for a new `.env`,
@@ -1523,8 +1510,10 @@ merged into lake.silver.orders`) while the row stays. The repeat check by `(sour
 (`lsn_duplicates_since`, and the series `lakehouse_dq_lsn_repeats_last_hour` in `dq_checks`) counts
 the re-sent record as one delivery repeat, as in 2b. In that run bronze took the record in at
 20:59:20 UTC, and the second silver run logged `batch 15: 1 events merged into lake.silver.orders in
-2.4 s`. The count is the orders events the silver batch read from bronze (before quarantine and
-before keeping one row per key), not rows MERGE changed: the snapshot that run committed has
+2.4 s`. The count was then the orders events the silver batch read from bronze (before quarantine
+and before keeping one row per key), not rows MERGE changed. Since 2026-11-20 it counts the events
+left after quarantine, still before keeping one row per key; a batch with none logs `batch N:
+nothing to merge into lake.silver.<t>` and commits no snapshot. The snapshot that run committed had
 `changed-partition-count` 0, no `added-records` and the same `total-records` (98812) as the first
 run's. `lsn_duplicates_since` over the window reported orders with 1 key repeated and 1 extra event.
 Data at risk: none in silver. Bronze keeps the re-sent record for good, at a new offset with the old
@@ -1771,7 +1760,6 @@ lifts its pause (`scripts/chaos/silver-kill.sh:46-59`).
 | Spark job no batch for 5 minutes | `docs/runbooks/spark-stalled.md` |
 | Freshness above 15 minutes | `docs/runbooks/freshness.md` |
 | Disk full | `docs/runbooks/disk-full.md` |
-| Catalog cutover to Lakekeeper, or its rollback (owner only) | `docs/runbooks/catalog-cutover.md` |
 | Reset everything | `make nuke` (asks for confirmation; deletes volumes, checkpoints, data) |
 
 ## Backup

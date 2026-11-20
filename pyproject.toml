@@ -29,6 +29,20 @@ dev = [
 line-length = 100
 target-version = "py312"
 
+[tool.ruff.per-file-target-version]
+# The Spark image runs Python 3.10, and its tests import these files there.
+"streaming/**" = "py310"
+"tests/unit/conftest.py" = "py310"
+"tests/unit/spark_jvm.py" = "py310"
+"tests/unit/test_bronze_cdc_ingest.py" = "py310"
+"tests/unit/test_contracts.py" = "py310"
+"tests/unit/test_envelope.py" = "py310"
+"tests/unit/test_iceberg_demo.py" = "py310"
+"tests/unit/test_iceberg_sink.py" = "py310"
+"tests/unit/test_silver_upsert.py" = "py310"
+"tests/unit/test_orders_per_minute.py" = "py310"
+"tests/unit/test_maintenance.py" = "py310"
+
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "N", "SIM", "RUF"]
 

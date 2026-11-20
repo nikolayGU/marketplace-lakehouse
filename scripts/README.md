@@ -30,14 +30,8 @@
 - `lakekeeper/bootstrap.sh`: bootstraps Lakekeeper and creates the warehouse on MinIO;
   runs in the compose one-shot `lakekeeper-bootstrap`, which Spark and Trino wait for
   (`make lakekeeper-bootstrap` runs it alone), safe to re-run.
-- `lakekeeper/register.sh`: historical, used only by the catalog cutover runbook, not by the
-  Makefile or `make bootstrap`. Registers the bronze and silver tables of the JDBC catalog in
-  Lakekeeper and checks that both catalogs point at the same metadata file; host-side, with Spark
-  stopped (it refuses otherwise, and once `CATALOG_TYPE` is `rest`). How to run it, and why a
-  registration is never undone with a drop: `OPERATIONS.md`, "Lakekeeper (REST catalog)". The
-  cutover runs it as its first step: `docs/runbooks/catalog-cutover.md`.
 - `lakekeeper/protect.sh`: sets `protected` on every bronze and silver table in
-  Lakekeeper, so a drop of one is refused with 409; host-side, after the cutover checks, safe to
+  Lakekeeper, so a drop of one is refused with 409; host-side, safe to
   re-run. It never removes protection.
 - `check-minio-images.sh <minio image> <mc image>`: checks the built MinIO and `mc` images
   (ADR-026) in a throwaway container; CI runs it in the job `minio-images`.

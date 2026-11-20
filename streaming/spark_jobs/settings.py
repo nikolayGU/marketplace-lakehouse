@@ -1,6 +1,6 @@
 """Configuration for the Spark jobs. Every value arrives from compose as an environment variable.
 
-The image runs Python 3.10 (Ubuntu 22.04 in apache/spark), so this package avoids 3.11+ syntax.
+The image runs Python 3.10 (Ubuntu 22.04 in apache/spark); ruff checks this as py310 (pyproject).
 """
 
 from typing import Literal
@@ -13,13 +13,6 @@ class Settings(BaseSettings):
 
     kafka_bootstrap: str = "kafka:9092"
 
-    # rest: Lakekeeper (ADR-005). jdbc: the pre-cutover JdbcCatalog in postgres-meta, only through
-    # the rollback in docs/runbooks/catalog-cutover.md. Anything else fails at startup.
-    catalog_type: Literal["jdbc", "rest"] = "rest"
-    catalog_jdbc_url: str = "jdbc:postgresql://postgres-meta:5432/iceberg_catalog"
-    catalog_jdbc_user: str = "meta"
-    catalog_jdbc_password: str = ""
-    catalog_warehouse: str = "s3a://lakehouse/warehouse"
     lakekeeper_uri: str = "http://lakekeeper:8181/catalog"
     lakekeeper_warehouse: str = "lake"
     checkpoint_root: str = "s3a://lakehouse/checkpoints"
@@ -49,7 +42,6 @@ class Settings(BaseSettings):
     opm_watermark: str = "5 minutes"
     opm_trigger: Literal["processing", "available_now"] = "processing"
     opm_trigger_seconds: int = 20
-    opm_starting_offsets: str = "earliest"
     # Stored in the checkpoint on the first run: 200 state partitions would mean hundreds of small
     # files per batch in S3A, and only a new checkpoint changes the number.
     opm_shuffle_partitions: int = 2

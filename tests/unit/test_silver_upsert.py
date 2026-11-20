@@ -1,7 +1,6 @@
 import json
 import logging
 import os
-import shutil
 from collections.abc import Iterator
 from datetime import datetime
 from decimal import Decimal
@@ -30,6 +29,7 @@ from spark_jobs.silver_upsert import (
     run,
     unknown_fields,
 )
+from spark_jvm import HAS_SPARK_JVM, SKIP_REASON
 
 CONTRACTS = load_contracts(Path(__file__).parents[2] / "contracts" / "silver")
 BRONZE_NAMESPACE = BRONZE.rsplit(".", 1)[0]
@@ -40,10 +40,10 @@ BRONZE_COLUMNS = (
     "source_table string, before string, after string, raw string, ingest_ts timestamp"
 )
 
-HAS_JAVA = shutil.which("java") is not None
+HAS_JAVA = HAS_SPARK_JVM
 SPARK_JARS = f"{os.environ.get('SPARK_HOME', '/opt/spark')}/jars"
 HAS_ICEBERG = bool(glob(f"{SPARK_JARS}/iceberg-spark-runtime-*"))
-needs_java = pytest.mark.skipif(not HAS_JAVA, reason="local SparkSession needs a JVM")
+needs_java = pytest.mark.skipif(not HAS_JAVA, reason=SKIP_REASON)
 needs_iceberg = pytest.mark.skipif(
     not (HAS_JAVA and HAS_ICEBERG), reason="needs the Iceberg runtime jar: run `make test-spark`"
 )
@@ -325,8 +325,35 @@ def test_replaying_a_batch_changes_nothing(spark: SparkSession) -> None:
     first = silver(spark)
     merge_batch(batch, 0, CONTRACTS)
 
+    assert spark.table(f"{SILVER}.orders").count() == 2
+    assert silver(spark) == first
     assert silver(spark).keys() == first.keys() == {"o1", "o2"}
     assert {k: r._last_lsn for k, r in silver(spark).items()} == {"o1": 100, "o2": 110}
+
+
+@needs_iceberg
+@pytest.mark.usefixtures("fresh_silver")
+def test_the_merge_log_counts_only_the_events_that_were_merged(
+    spark: SparkSession, caplog: pytest.LogCaptureFixture
+) -> None:
+    batch = bronze(spark, event("c", order(), lsn=100), event("c", after=None))
+
+    with caplog.at_level(logging.INFO, logger="silver_upsert"):
+        merge_batch(batch, 7, CONTRACTS)
+
+    messages = [r.getMessage() for r in caplog.records]
+    assert any(m.startswith(f"batch 7: 1 events merged into {SILVER}.orders in") for m in messages)
+
+
+@needs_iceberg
+@pytest.mark.usefixtures("fresh_silver")
+def test_a_batch_of_only_invalid_events_adds_no_silver_snapshot(spark: SparkSession) -> None:
+    snapshots = f"{SILVER}.orders.snapshots"
+    before = spark.table(snapshots).count()
+
+    merge_batch(bronze(spark, event("c", after=None), event("t", order())), 0, CONTRACTS)
+
+    assert spark.table(snapshots).count() == before
 
 
 @needs_iceberg
