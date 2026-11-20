@@ -1,5 +1,5 @@
 # P07. Скрипты, Makefile, shellcheck, якоря compose, тест SQL offsets, цена набора
-Статус: не начат. Сессия на Opus по `13-harness.md`: `/task docs/planning/21-final-audit-2026-11-13/P07-infra-scripts.md`.
+Статус: исполнен 20.11.2026, `4ef3c49`.
 
 ## Цель
 
@@ -263,4 +263,49 @@ shellcheck (если прогон чистый); `make help` показывае�
 
 ## Итог
 
-Заполняет исполнитель по разделу 6 `13-harness.md`.
+Исполнено 20.11.2026 (UTC) одной сессией на Opus (оркестратор), коммит `4ef3c49` (30 файлов,
++396 -124). Решения из аргумента `/task`: рутина сессии «да», В-12 «да», оба сокращения набора
+«да»; `uv add --group dev shellcheck-py==0.11.0.1` по «ок» на точный текст. Код и тесты:
+`implementer`, 4 брифа (А шаг 1; Б шаги 2-4 в `lib.sh`; В шаги 8-9; Г шаг 10); шаги 4
+(`verify.sh`), 5-7, 11 и правки по ревью: оркестратор; ревью: `reviewer`, два круга.
+
+| Критерий | Проверка | Результат |
+|---|---|---|
+| Вход | grep и чтение цитат | подтверждён; номера сдвинуты; `*.sh` 25, а не 26 (P06 снял `register.sh`); `test_verify_script` собирал 40, а не 36 |
+| Тесты пакета | 11 файлов «Готово, когда» | `325 passed`; с `test_workflows.py` у ревьюера `338 passed` |
+| Мутации | копии в scratchpad | offsets O1, `>=`, `and`: `RED` (3, 3, 4 failed); T5 `RED`; T4 `GREEN`; копия без дедлайна `1 failed` за 0.35 с; ревьюер повторил и добавил `RED` на снятие `\|\| state=unknown`, `[ -n "$id" ]`, `Accept`, `.env.*`, `!.env.example` (через `--no-index`), `--profile '*'`, шага shellcheck в CI, старого regex `help` |
+| Тесты на отказ | до правки | `test_chaos_lib.py` 7 из 9 красные; `help` `1 failed`; `.gitignore` и `TRINO_XMX` `2 failed`; `test_workflows` `1 failed` |
+| `--basetemp` длинный | `test_container_exporter.py` | до `14 passed, 2 errors` (`AF_UNIX path too long`), после `16 passed` |
+| bash | `bash -n` всех `*.sh` | пусто |
+| grep | `lakehouse-[a-z-]+-1`; `count(distinct kafka_offset)`; `^fail()` | пусто; только `lib.sh`; `lib.sh`, `verify.sh` |
+| `make help`, `.gitignore`, `.env.example` | команды «Готово, когда» | `1`; `ok`; `TRINO_XMX=2g` |
+| compose | хэши и модель, env `.env.example` HEAD | diff 27 хэшей пуст; `model equal`; 909 -> 882 строк; с env владельца хэши HEAD и нового файла равны по всем сервисам |
+| Цена | две медленные выборки на простое | HEAD (worktree `0817f73`) `80 passed in 118.26s`; после `72 passed in 76.32s` (минус 42 с); `test_verify_script` 40 -> 32 |
+| shellcheck | `uv run shellcheck -x -S warning $(git ls-files '*.sh')` | до правок 2 находки, обе `SC2154` в `verify.sh` (`probe_out`, `trino_up_err` из подключаемого `lib.sh`); исправлено директивой `source-path=SCRIPTDIR source=chaos/lib.sh`; после код 0; шаг в `make lint`, `ci.yml`, тест |
+| `make check` | | `2128 passed, 149 skipped` |
+| Ревью | `reviewer` | круг 1 «принять с замечаниями» (1 среднее, 4 низких, все исправлены, кроме записи ниже); круг 2 «принять с замечаниями» (1 низкое) |
+| Verify | цикл §5 перед коммитом | `verify ok`, 7 таблиц `rows ok keys ok values ok`, full-отметка дерева `19e50f67` |
+| CI | `gh run watch 44807057179 --exit-status` | exit 0, `success` на `4ef3c49`, все job `success`; в логе `lint-and-test` шаг `uv run shellcheck -x -S warning $(git ls-files '*.sh')` |
+
+Отклонения от пакета:
+- `test_verify_script` 40 -> 32, а не 36 -> 28: после аудита в файл добавлены 4 теста, снято те же 8.
+- В `verify.sh` кроме шапки одна строка-директива shellcheck (шаг 11 исправляет находки).
+- Тест `.gitignore` зовёт `git check-ignore --no-index`: без флага отслеживаемый `.env.example`
+  никогда не считается игнорируемым и проверка `!.env.example` всегда зелёная (так же команда
+  «Готово, когда» пакета).
+- `container_of` находит только запущенный контейнер (`ps -q`), как `service_healthy`; сообщение
+  «no running container for service X». `connect-restart.sh` проверяет `MODE` до поиска контейнера.
+- В `airflow_api_get` заголовок `Accept: application/json` идёт во все запросы (раньше только у
+  `task_log`).
+- База времени: во «Входе» 109 с (13.11), сегодня на простое 118 с; выигрыш считан от сегодняшней.
+
+Не проверено: живой прогон chaos-скриптов (C), у 9 из 10 нет unit-тестов, их правки доказаны
+`bash -n`, shellcheck, статическим тестом и ревью; smoke на `TRINO_XMX=2g` (P14).
+
+Риски и что осталось:
+- Ревью, круг 2, низкое: комментарий `tests/unit/test_chaos_lib.py:47` «Created containers of
+  every profile» неточен (`ps -q` даёт запущенные); после второго круга не правился.
+- Сверх пакета (наблюдение): у 5 запущенных сервисов (`kafka-exporter`, `postgres-exporter`,
+  `prometheus`, `statsd-exporter`, `trino`) метка `config-hash` не равна хэшу compose HEAD с
+  `.env` владельца ещё до этого пакета; якоря её не меняют. Следующий `make start` их пересоздаст.
+- `.env` владельца остаётся `TRINO_XMX=2500m`: сменить и пересоздать `trino` решает владелец (C).
