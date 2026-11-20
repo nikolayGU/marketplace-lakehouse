@@ -9,7 +9,7 @@ superseded. Longer reasoning lives in `docs/planning/00-mini-architecture-review
 | ADR-002 | Two PostgreSQL instances: `postgres-oltp` (CDC source) and `postgres-meta` | accepted |
 | ADR-003 | Kafka 4 KRaft, single broker, RF=1, 3 partitions per topic, retention 24h | accepted |
 | ADR-004 | Object storage: MinIO, last community release pulled from quay.io (Docker Hub repo removed) | accepted; the image source is superseded by ADR-026 |
-| ADR-005 | JDBC catalog in `postgres-meta` first; REST catalog (Lakekeeper) as should-have after the vertical slice | accepted; Spark and Trino switched to Lakekeeper, cutover done 2026-10-08 |
+| ADR-005 | JDBC catalog in `postgres-meta` first; REST catalog (Lakekeeper) as should-have after the vertical slice | accepted; Spark and Trino switched to Lakekeeper, cutover done 2026-10-08; JDBC layer removed 2026-11-20 |
 | ADR-006 | Spark 3.5 + Iceberg 1.11 runtime in `local[2]`, no standalone cluster | accepted |
 | ADR-007 | Bronze append-only streaming (at-least-once contract, idempotent epoch commit verified 2026-09-26 and 2026-10-07); silver via AvailableNow + foreachBatch MERGE is the no-duplicates guarantee | accepted |
 | ADR-008 | Bronze keeps payload as JSON string; typed schema applied in silver from contracts | accepted |
@@ -262,6 +262,12 @@ from the copy of `warehouse/` taken before that run (OPERATIONS.md, "Lakekeeper"
 that procedure no Spark job runs with `CATALOG_TYPE=jdbc` and Trino does not get the JDBC
 `lake.properties` back: the two histories would fork, and maintenance on one side would delete
 files the other still reads. `register.sh` refuses now that `CATALOG_TYPE` is `rest`.
+
+Removed, 2026-11-20: the JDBC catalog path of the code and its settings (`CATALOG_TYPE`,
+`CATALOG_JDBC_*`, `CATALOG_DB`, the PostgreSQL driver in the Spark image, the `postgres-meta`
+credentials of Spark, Trino and the Spark environment of Airflow) and
+`scripts/lakekeeper/register.sh`; the cutover runbook moved to `docs/planning/archive/`. The
+rows in `iceberg_catalog` stay as data; a new `postgres-meta` volume no longer creates it.
 
 ## ADR-007 Bronze streaming append, silver batch MERGE
 
