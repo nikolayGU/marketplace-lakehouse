@@ -4,6 +4,22 @@
 Новый раздел пишется сверху. Тест держит файл в 20 480 байт: прежние разделы уходят дословно в
 `docs/planning/archive/` (раздел «История»), «Итог» пакетов остаётся в их файлах.
 
+## Состояние на 21.11.2026: P11 исполнен, OPERATIONS
+
+Пакет `docs/planning/21-final-audit-2026-11-13/P11-operations.md` закрыт коммитом `bc96615`:
+`OPERATIONS.md` 138 072 -> 64 111 байт, оглавление из 17 пунктов, `### SLIs and thresholds`;
+сценарии в новом `docs/failure-scenarios.md` (в OPERATIONS таблица-указатель), цепочка поставки
+в новом `docs/supply-chain.md`, замеры обслуживания в `docs/evidence.md`, серии, проверка
+дашбордов и заметки в `observability/README.md`, чтение красного `dq_checks` в
+`docs/runbooks/dq-checks.md` (по гейту снапшотов P05); ложные строки сняты, окна гейта описаны.
+Проверки: все пункты «Готово, когда» зелёные (ссылки: `broken: 3`, все в `docs/planning`, как на
+HEAD); `make check` `2233 passed, 149 skipped`; `reviewer` два круга, «принять с замечаниями»
+(низкие закрыты); CI `success` (run 44895265334). Детали: «Итог» пакета.
+
+Стенд и бэклог: P01-P11 исполнены, следующий P12 (DECISIONS); бэклог только
+`docs/planning/21-final-audit-2026-11-13/README.md`, раздел 4. Стенд не трогали. Реплей на 20.11
+`virtual_now` 2026-07-18 06:02:03, осталось 21 701 событие. Bronze без коммитов с 06.11.
+
 ## Состояние на 21.11.2026: P10 исполнен, история в коде
 
 Пакет `docs/planning/21-final-audit-2026-11-13/P10-history-in-code.md` закрыт коммитом `826a9e3`:
@@ -21,50 +37,27 @@ ok`; CI `success` (run 44891397729). Детали: «Итог» пакета.
 `docs/planning/21-final-audit-2026-11-13/README.md`, раздел 4. Реплей не трогали (на 20.11
 `virtual_now` 2026-07-18 06:02:03, осталось 21 701 событие). Bronze без коммитов с 06.11.
 
-## Состояние на 20.11.2026: P09 исполнен, наблюдаемость
-
-Пакет `docs/planning/21-final-audit-2026-11-13/P09-observability.md` закрыт коммитом `78b3754`:
-- `AirflowDagFailed` не горит после дыры скрейпа (`and on (instance) up offset 30m`);
-- `SparkRestartLoop`, `ContainerRestarting` и 7 панелей Infra без имени проекта; merge и
-  `run`-контейнеры не считаются; stuck `SparkNoBatch5m` с `for: 1m`;
-- `summary` и `runbook_url` у всех 16 правил; ранбуки `airflow-dag-failed`, `dq-checks`,
-  `containers`; таблица «Runbooks» по строке на алерт; порог 200 точек закреплён с двух сторон;
-- Pipeline health: первым рядом таблица «Firing alerts» и stat «Targets down».
-Проверки: `make alerts-test` `SUCCESS: 16 rules found`; `make check` `2215 passed, 149 skipped`;
-`check_dashboards.py` `queries ok: 33`; `reviewer` два круга, «принять»; цикл verify `verify ok`;
-CI `success`. Детали: «Итог» пакета.
-
-HUP (В-06) по «ок» 21:02Z: живой Prometheus `16 16` правил с `runbook_url`, `reloadConfigSuccess`
-true, все `health: ok`. Вид таблицы «Firing alerts» в Grafana глазами не проверен.
-
-Стенд и бэклог: P01-P09 исполнены, следующий P10 (ID карточек в коде); бэклог только
-`docs/planning/21-final-audit-2026-11-13/README.md`, раздел 4. Реплей на 20.11: `virtual_now`
-2026-07-18 06:02:03, осталось 21 701 событие, любая порция только по «ок» на точный текст.
-Bronze без коммитов с 06.11.
-
 ## Открыто
 
 - Режим auto: ответ `ask` хука guard исполнялся без окна владельцу (смоук П-2, «Итог» P03); для
   правил `ask` в `permissions` окно не доказано. Решение владельца: запуск в `acceptEdits` или
   auto, и как спрашивать класс C в auto.
-- Для P11 (ловушки без копии в OPERATIONS): `ImageManifestDescriptor` при containerd store
-  (`.Image` контейнера меняется при каждой сборке) и `memory.swap.current`, `memory.stat`,
-  `memory.events` в cgroup контейнера (`docker stats` swap не видит); текст:
-  `git show 1349e24:docs/NEXT_SESSION.md`, строки 126-130. Там же, строка 120: `dbt/`
-  смонтирован в живой Airflow (`/opt/dbt`), как и `airflow/dags/`: правка моделей при паузе
-  `dbt_build`.
+- `dbt/` смонтирован в живой Airflow (`/opt/dbt`), как и `airflow/dags/`: правка моделей при
+  паузе `dbt_build` (`git show 1349e24:docs/NEXT_SESSION.md`, строка 120).
 - Скриншот дашборда Superset для README (В-07, до P13) даёт владелец.
 - P06, по желанию владельца: строки `CATALOG_TYPE`, `CATALOG_DB` в `.env` ничем не читаются.
 - P07: `.env` владельца `TRINO_XMX=2500m` (решает владелец); 5 сервисов отстали от compose до
   P07, `make start` их пересоздаст («Итог» P07).
 - P05, решение владельца: остаточное окно ложного красного OR-03 (запись между `cdc_progress` и
   первым чтением позиции в задаче, около 7-8 с) закрыть базой из `cdc_progress` (смена условия
-  проверки) или принять и описать в P11.
+  проверки) или принять; P11 описал окно как есть (`OPERATIONS.md`, «Airflow»).
 
 ## Журнал «ок»
 
 | Дата UTC | Действие | Кто дал | Где видно |
 |---|---|---|---|
+| 21.11 ~10:38 | P11: коммит `bc96615` после гейта (только Markdown), push `db9bef4..bc96615`; коммит итога и push | рутина сессии | `git log`, «Итог» P11 |
+| 21.11 ~10:00 | P11: рутина сессии «да» | владелец, аргумент `/task` | «Итог» P11 |
 | 21.11 ~09:50 | P10: паузы `silver_upsert`, `dbt_build`, `dq_checks` на время правки, цикл verify (стоп scheduler, `verify ok`), коммит `826a9e3`, снятие пауз, push `931a05d..826a9e3`; `iceberg_maintenance` не на паузе, правка вне окна 03:00-04:00 UTC | рутина сессии | `git log`, «Итог» P10 |
 | 21.11 ~09:28 | P10: рутина сессии «да»; `iceberg_maintenance` на паузу не ставить, править вне окна 03:00-04:00 UTC | владелец, аргумент `/task` | «Итог» P10 |
 | 20.11 21:02 | P09, В-06: `docker exec lakehouse-prometheus-1 kill -HUP 1`; коммит итога и push | владелец, «ок» на точный текст | «Итог» P09 |
@@ -117,7 +110,7 @@ Bronze без коммитов с 06.11.
 
 ## История
 
-- 13.11-20.11.2026 (Д2.5, финальный аудит, пакеты P01-P07):
+- 13.11-20.11.2026 (Д2.5, финальный аудит, пакеты P01-P07, P09):
   `docs/planning/archive/HANDOFF-2026-11-13-to-2026-11-19.md`.
 - 27.10-10.11.2026 (закрытие проекта, аудиты 30.10 и 06.11, ревью 10.11, «Действия владельца»,
   журнал «ок» по 06.11 включительно): `docs/planning/archive/HANDOFF-2026-10-27-to-2026-11-10.md`.

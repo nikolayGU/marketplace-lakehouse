@@ -1,6 +1,6 @@
 # P11. OPERATIONS: оглавление, вынос сценариев и замеров, правдивые строки
 
-Статус: не начат. Opus, `/task docs/planning/21-final-audit-2026-11-13/P11-operations.md`.
+Статус: исполнен 21.11.2026, `bc96615`. Opus, `/task docs/planning/21-final-audit-2026-11-13/P11-operations.md`.
 
 ## Цель
 
@@ -252,3 +252,88 @@ ADR). Метки «Вход», п. 2 буква в букву. ID карточе
   `superset` в Access control (DC-07 отдал её OB). PF-25 OB отдал P09: здесь, если P09 не сделал.
 
 ## Итог
+
+Сессия 21.11.2026, рутина сессии «да» в аргументе `/task`; решений В-n и действий C нет, стенд не
+трогали. Коммит `bc96615` `docs: operations reorganised around a table of contents; scenarios,
+evidence and runbooks moved out`, 11 файлов (только Markdown, гейт без отметок), push
+`db9bef4..bc96615`. Тексты писали `docs-writer` (брифы A, B1, B2 параллельно, C), часть правок
+по ревью оркестратор; ревью `reviewer`, предмет `документ`.
+
+Вход (21.11, HEAD `db9bef4`), расхождения с пакетом:
+- OPERATIONS 138 072 байт, 1796 строк; сценарии 1257-1755; номера разделов сдвинуты на 10-20 строк.
+- Метка «After the cutover» уже снята P06 (ранбук `catalog-cutover.md` в архиве): в `labels.txt` 20 меток без неё.
+- П. 4 пакета говорит «P05 исполнен с В-04 нет»; по «Итогу» P05 В-04 «да»: описан новый гейт по
+  снапшотам, `deleted order` 0.
+- `check_docs.py . links` на HEAD уже `broken: 3`, не 1: кроме `T00-clean-clone.md:361` ещё
+  `P12-decisions.md:160` (будущий якорь evidence) и `P14-freeze.md:164` (регэксп как ссылка).
+  Критерий принят как «без новых битых». Режим `dashes` в копии исправен (литералы `–`,
+  `—`), правка не нужна.
+- П. 5 «Входа»: ранбуки P09 есть, PF-25 и сон хоста уже в них; текста `reconcile_values`, GMV и
+  чтения красных задач в `dq-checks.md` не было, перенесён. `CATALOG_TYPE` в коде нет.
+- Карта пакета «откат и замер сборки MinIO в ADR-026»: откат в ADR-026 есть, точных времён
+  сборки нет; времена удалены как журнал, строка `supply-chain.md` говорит «cost of a cold build».
+- Якорь OPERATIONS в docstring `scripts/obs/check_dashboards.py` не нужен: ссылки там нет, код не тронут.
+
+| Критерий | Проверка -> вывод (21.11, UTC, дерево перед коммитом) |
+|---|---|
+| размер | `wc -c OPERATIONS.md` -> 64111; `test ... -le 67584` -> `ok` |
+| оглавление | `sed -n 1,40p OPERATIONS.md \| grep -c '](#'` -> 18 |
+| метки | цикл по `labels.txt` -> пусто |
+| ложные строки | grep п. 4 «Готово» -> пусто; `grep -n "Names it does" observability/README.md` -> пусто |
+| ID | grep по OPERATIONS, failure-scenarios, supply-chain -> пусто |
+| новые строки | `grep -c 'SLIs and thresholds\|CACHE_DEFAULT_TIMEOUT\|gold_writers\|dangling'` -> 4; `deleted order` -> 0; `ImageManifestDescriptor\|memory.swap.current` -> 2 |
+| ссылки | `check_docs.py . links` -> `checked: 314, broken: 3` (те же три в `docs/planning`, что на HEAD); `check_md_links.py` OPERATIONS 67/0, failure-scenarios 38/0; без фильтра 313/16 (только `../../../actions/runs/`, предел скрипта) |
+| тире | `check_docs.py . dashes \| grep -v docs/planning` -> одна итоговая строка |
+| старые якоря | `git grep -nE 'OPERATIONS\.md#([0-9]\|first-live\|orphans-next)' -- '*.md' ':!docs/planning'` -> пусто |
+| тесты | `make check` -> `2233 passed, 149 skipped`; `test_alerts`, `test_chaos_silver_kill`, `test_trino_access` -> `223 passed` |
+| границы | `git status --short`: 11 файлов, все из «Границ» |
+| CI | `gh run view 44895265334` на `bc96615` -> `success`, 12 из 12 job |
+| ревью | круг 1 «принять с замечаниями» (5 средних, 8 низких), круг 2 «принять с замечаниями» (4 низких); дерево круга 2 `9e67e0c` |
+
+Сделано:
+- `docs/failure-scenarios.md`: дословно сценарии 1-10b (diff этапа 1: шапка, таблица статусов, две
+  ссылки), затем метки ID по DC-04 и номера строк кода (`silver-kill.sh:41-52`,
+  `silver_upsert.py:36-37`).
+- `docs/evidence.md`: «First live run» и «Orphans» дословно (снята метка `W6-D16`), сводка-дубль
+  удалена; в «Alerts and time to fire» добавлены значения колонок «Shown in» и «Time to fire»,
+  которых там не было; замер отказа Lakekeeper 11 s в «Probe: MinIO stopped». Ссылки README,
+  evidence, interview-notes переведены на новые файлы.
+- `observability/README.md`: «Series», «Dashboard check», «Notes»; строка TTL вместо «Names it does
+  not map»; `reconcile_in_flight` и `dbt_source_freshness_exit_code` по коду.
+- Ранбуки: `dq-checks.md` «A red dq_checks task» по гейту снапшотов, двойному чтению CDC, пунктам
+  `cdc_reread_failed`, `gold_stale_failed` (два случая); `airflow-dag-failed.md` сон хоста
+  полностью; ссылки `containers.md`, `freshness.md` на новые места.
+- `docs/supply-chain.md`: закрепление образов и actions, «Not covered», образы MinIO и mc.
+- `OPERATIONS.md`: оглавление, SLI, вступление и таблица Alerts без колонок Shown in и Time to
+  fire, «Limits» 5 пунктов, Superset «Freshness» и `check.py`, строка `dq_checks` и окна гейта
+  (запись между `cdc_progress` и чтением позиции, merge посреди `dbt_build`, Kafka меньше 20 мин),
+  PF-20 отдельно, TRINO_XMX, `airflow-init`, offsets в Daily commands, `superset` в Access control,
+  smoke и 60 дней, ловушки образов и памяти, Backup с PF-30 и PF-54, таблица-указатель сценариев.
+
+Удалено без переноса (кроме перечисленного в отчётах брифов, сводка
+`<scratchpad>/removed-lists.md` сессии): журнальные замеры с датами (память 2026-10-18 и
+2026-10-19, первые прогоны bronze и silver, Lakekeeper 91 MiB, smoke-прогоны по id), «config hash
+of 11 services», замер `check.py` по v1, строка сценария 10. В круге 2 сжатия без следа (ревью,
+низкое): у Ctrl+C «once the current probe or step ends», имена `AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION`,
+`AIRFLOW__DAG_PROCESSOR__REFRESH_INTERVAL=60`, `group_add`, «publishes port 29092 of the container
+as 9092», метрики `kafka_connect_connector_status`, `MilliSecondsSinceLastEvent`,
+`TotalNumberOfEventsSeen`, `airflow_dagrun_success_seconds` в таблице job, «A false 1 is possible
+once», «A negative value is never sent»; фраза interview-notes «`make kafka-groups` lists Connect
+only» (источник удалён и противоречил ей).
+
+Не проверено: живые утверждения окон (около 7-8 s, около 4 минут PF-20) по стенду (взяты из
+«Итога» P05 и `reports/OR.md`); пауза расписаний GitHub через 60 дней по документации GitHub;
+рендер на GitHub глазами.
+
+Риски и что осталось:
+- Запас до 66 KiB около 3.4 KB; P13 добавит около 1.5 KiB.
+- Окно OR-03 описано как есть; решение владельца (закрыть базой из `cdc_progress` или принять) открыто.
+- Для P13: `OPERATIONS.md`, «Stateful job» ссылается на строку README, а README:148 называет
+  источником OPERATIONS (круг); перенести живую проверку в evidence. Для P13 или кода:
+  `observability/prometheus/alerts.yml:5` «live proof per alert: OPERATIONS.md» теперь в
+  `docs/evidence.md#alerts-and-time-to-fire`.
+- В evidence остались `W6-T07` и ссылки на `planning/14-closeout-spec.md` в перенесённых с HEAD
+  строках (зона P12, P13).
+
+Замечено вне пакета: формулировка «the owner's Modify gate» у метрики quarantine в
+`docs/failure-scenarios.md` и docstring `dq_checks.py:18` (журнальная, P13).
