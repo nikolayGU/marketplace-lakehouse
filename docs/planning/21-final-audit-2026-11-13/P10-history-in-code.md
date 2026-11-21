@@ -1,6 +1,6 @@
 # P10. История в коде: ID карточек, аудитов, решений недели и даты
 
-Статус: не начат. Opus, `/task docs/planning/21-final-audit-2026-11-13/P10-history-in-code.md`.
+Статус: исполнен 21.11, `826a9e3`. Opus, `/task docs/planning/21-final-audit-2026-11-13/P10-history-in-code.md`.
 
 ## Цель
 
@@ -188,4 +188,47 @@
 
 ## Итог
 
-(заполняет исполнитель по разделу 6 `13-harness.md`)
+Сессия 21.11.2026, рутина сессии «да» в аргументе `/task`; `iceberg_maintenance` не на паузе,
+правка и коммит вне окна 03:00-04:00 UTC (09:30-09:50Z, `list-runs --state running` пуст у всех
+четырёх DAG). Коммит кода `826a9e3` `repo: comments without planning ids and dates, a test keeps
+them out`, 71 файл (70 правок и новый тест), push `931a05d..826a9e3`.
+
+Вход: список пересобран командой «Входа» 1 с добавкой «Входа» 2: 123 строки в 72 файлах (13.11
+было 156 в 81). В `observability/` 0 строк (P09 вычистил), стопа нет. Новые против 13.11: 2 строки
+`tests/unit/test_spark_jvm.py:8,9` (P06): это данные (вывод `java -version` с датой релиза JDK
+`2026-04-21`), не метка. Их держит `ALLOWED` теста с причиной; правка тестовых данных вне пакета.
+
+| Критерий | Проверка -> вывод (21.11, UTC) |
+|---|---|
+| тест passed, до правки failed | до: `1 failed, 16 passed`, «121 lines with work labels»; после: `18 passed` |
+| grep «Входа» пуст | остаются 2 строки `test_spark_jvm.py:8,9` (данные, `ALLOWED`); прочее пусто. Отступление от буквы «Готово», записано здесь |
+| `config --hash '*'` до и после | `diff` пуст (27 сервисов) |
+| скрипт шага 5 | 68 `same`; `DIFF` только `Makefile` и `scripts/chaos/connect-pause.sh` |
+| `git diff --stat` | 70 файлов, все из пересобранного списка, плюс новый тест |
+| `make dbt-parse`, `make dags-check`, `make check` | rc 0; «5 dags import ... checked»; `2233 passed, 149 skipped` |
+| `make verify` | цикл verify, отметка `full` 09:50:52Z дерева `f05c414`: `verify ok`, reconcile 7 таблиц `ok` |
+| паузы | после коммита `silver_upsert`, `dbt_build`, `dq_checks` `is_paused False`; `iceberg_maintenance` False, `iceberg_orphans` True, как были |
+
+Сделано:
+- `tests/unit/test_no_history_in_code.py`: шаблон аудита плюс даты `dd.mm`; пропуски по шагу 1;
+  `ALLOWED` с причиной; второй тест держит каждую пару `ALLOWED` живой (мутация пары: `2 failed`);
+  параметризованные тесты шаблона (8 совпадений, 8 несовпадений).
+- Замена по таблице шага 3: `D4` -> ADR-009; `D10`, `D11`, `D12` -> ADR-011; `D2` -> ADR-016
+  (ссылка на `07-w3-spec.md` убрана); `W4-D1`, `W4-D2` -> ADR-023; `W5-D9` -> ADR-020;
+  `W5-D11..D13` -> ADR-025; `W5-T01*` -> ADR-024; остальные метки и даты удалены, факты и числа
+  на месте. ADR вне индекса `DECISIONS.md` не появилось (`reviewer` сверил).
+- Видимый текст взят в пакет (решение оркестратора): `Makefile` описание пула `gold_writers`
+  `(ADR-025)` вместо `(W5-D11)`, применится при следующем `make airflow-init`;
+  `scripts/chaos/connect-pause.sh` текст `fail` «the inactive-slot alert scenario needs a rethink».
+
+Независимо: `reviewer` круг 1 «принять с замечаниями» (3 низких): точка в
+`mart_daily_sales.sql:25` исправлена; тест на живые пары `ALLOWED` добавлен; несоответствие
+«Готово» по `test_spark_jvm.py` записано выше. Не взято: сканировать неотслеживаемые файлы
+(`git ls-files -co`): `make check` краснел бы от любого локального файла владельца; новый файл с
+меткой ловит CI после коммита. Круг 2 «принять», дерево `f05c414`.
+
+Не проверено: живой Superset покажет новые `description` бандла только при следующем импорте
+(«Не входит»); описание пула `gold_writers` в живом Airflow старое до `make airflow-init`.
+
+Замечено вне пакета: `dbt/README.md` (метки `D3`..`D14`) и `OPERATIONS.md:1591` (`W4-D11`) это
+Markdown, их чистят P11 и P13.
