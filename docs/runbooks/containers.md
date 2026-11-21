@@ -40,7 +40,7 @@ that is down silences its own alerts, so fix this first.
 2. The container behind the job: `make status`. Down or unhealthy: `make logs S=<service>`.
 3. `container-exporter` down with a permission error in its log: `DOCKER_GID` in `.env`; an empty
    container list fails the scrape too, which means `COMPOSE_PROJECT_NAME` does not match the
-   stack. Exporter healthchecks and what else can fail: `../../OPERATIONS.md#observability`.
+   stack. Exporter healthchecks and what else can fail: `../../observability/README.md#notes`.
 4. Prometheus itself down: no rule is evaluated and nothing is delivered (no Alertmanager).
    `make report` lists project containers that are down although their policy is
    `unless-stopped`.

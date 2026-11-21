@@ -21,7 +21,7 @@ written. Across partitions there is no order at all.
 In this project: Debezium writes one topic per table, `oltp.shop.<table>`, keyed by primary key,
 3 partitions each ([ARCHITECTURE.md](../ARCHITECTURE.md), data flow step 2;
 [.env.example:29](../.env.example)). Seven tables make the 21 topic partitions that bronze is checked
-against for repeated and missing offsets ([OPERATIONS.md, scenario 1](../OPERATIONS.md#1-spark-bronze-killed-mid-batch)).
+against for repeated and missing offsets ([failure scenario 1](failure-scenarios.md#1-spark-bronze-killed-mid-batch)).
 Silver still does not rely on arrival order: it orders changes of a key by LSN (question 17).
 
 **2. Where does at-least-once come from, and what is an offset and a consumer group?**
@@ -32,10 +32,9 @@ doing the work but before recording the position, the work is done again: that i
 Exactly-once needs an idempotent or transactional sink on top.
 
 In this project: Debezium re-sends events after a hard stop of Connect, 253 events in the run of
-2026-10-07 ([OPERATIONS.md, scenario 2b](../OPERATIONS.md#2b-kafka-connect-killed)). Spark does not use a consumer group
+2026-10-07 ([failure scenario 2b](failure-scenarios.md#2b-kafka-connect-killed)). Spark does not use a consumer group
 at all: it keeps offsets in its checkpoint, so `kafka-exporter` shows no lag for it and a
 `StreamingQueryListener` exports the lag instead ([ADR-013](../DECISIONS.md#adr-013-spark-metrics)).
-`make kafka-groups` lists Connect only ([OPERATIONS.md, Daily commands](../OPERATIONS.md#daily-commands)).
 
 **3. What happens when Kafka retention is shorter than the consumer's downtime? Replay or reprocess?**
 
@@ -66,8 +65,8 @@ In this project: the connector uses `pgoutput`, slot `shop_slot` and `snapshot.m
 ([connect/shop-connector.json:12](../connect/shop-connector.json)). All seven tables have `REPLICA
 IDENTITY FULL` so one UPDATE envelope shows what changed; the price is more WAL ([ADR-018](../DECISIONS.md#adr-018-replica-identity-full-on-the-source-tables)). The slot risk was measured on 2026-10-23: with the connector stopped, `ConnectorNotRunning`
 fired 95 s after the stop and `SlotWalRetainedHigh` 326 s after it, with about 80 MB held and
-`max_slot_wal_keep_size = -1` ([OPERATIONS.md, scenario 6](../OPERATIONS.md#6-connector-stopped-for-30-minutes-wal-growth); alert table in
-[OPERATIONS.md, Alerts](../OPERATIONS.md#alerts)).
+`max_slot_wal_keep_size = -1` ([failure scenario 6](failure-scenarios.md#6-connector-stopped-for-30-minutes-wal-growth); time to fire in
+[evidence, Alerts and time to fire](evidence.md#alerts-and-time-to-fire)).
 
 **5. What does a Kafka Connect restart do to the data, compared with a kill?**
 
@@ -78,9 +77,9 @@ Nothing is lost in either case; only repeats differ.
 
 In this project: on 2026-10-07 `docker restart` of Connect produced 0 events repeated with the same
 LSN (1429 CDC events in the minute before the restart, 1593 after), recovery took about 32 s
-([OPERATIONS.md, scenario 2a](../OPERATIONS.md#2a-kafka-connect-restart)). `docker kill` about 9 s after an offset flush
+([failure scenario 2a](failure-scenarios.md#2a-kafka-connect-restart)). `docker kill` about 9 s after an offset flush
 repeated 253 events, and live row counts of all seven silver tables still matched Postgres
-([OPERATIONS.md, scenario 2b](../OPERATIONS.md#2b-kafka-connect-killed)). The repeat count follows the time since the
+([failure scenario 2b](failure-scenarios.md#2b-kafka-connect-killed)). The repeat count follows the time since the
 last flush, up to `offset.flush.interval.ms` = 60 s.
 
 ## Spark Structured Streaming
@@ -125,7 +124,7 @@ holds.
 In this project: `make chaos-spark-kill` killed the bronze driver on 2026-10-07 four seconds after
 `offsets/80` was written. The log said `Resuming at batch 80`, the replayed batch committed 28 s after
 the kill with the same query id, and the script found no duplicate and no missing offset in any of the
-21 topic partitions ([OPERATIONS.md, scenario 1](../OPERATIONS.md#1-spark-bronze-killed-mid-batch)). Both live kills landed
+21 topic partitions ([failure scenario 1](failure-scenarios.md#1-spark-bronze-killed-mid-batch)). Both live kills landed
 before the write stage, so the commit-window case is reproduced by a unit test
 (question 16).
 
@@ -175,7 +174,7 @@ travel, rollback, compaction and expiration on a sandbox copy, `lake.demo.orders
 silver ([streaming/spark_jobs/iceberg_demo.py:1](../streaming/spark_jobs/iceberg_demo.py)). In
 failure scenario 9 a failing dbt test left `mart_daily_sales` at its previous snapshot: 9 snapshots
 before and after, read from `"mart_daily_sales$snapshots"`
-([OPERATIONS.md, scenario 9](../OPERATIONS.md#9-airflow-task-failure-dbt-test)).
+([failure scenario 9](failure-scenarios.md#9-airflow-task-failure-dbt-test)).
 Time travel deeper than 7 days on silver and gold is gone by design
 ([ADR-025](../DECISIONS.md#adr-025-iceberg-maintenance-policy)).
 
@@ -209,7 +208,7 @@ snapshots, because that breaks the streaming read of silver (apache/iceberg#1800
 ([ADR-025](../DECISIONS.md#adr-025-iceberg-maintenance-policy)). The rules are enforced in code before
 a Spark session starts ([streaming/spark_jobs/maintenance.py:67](../streaming/spark_jobs/maintenance.py)).
 
-The first live run was on 2026-10-29 ([OPERATIONS.md, First live run](../OPERATIONS.md#first-live-run-2026-10-29);
+The first live run was on 2026-10-29 ([evidence, First live run](evidence.md#first-live-run-2026-10-29);
 [evidence](evidence.md#maintenance-before-and-after)). Bronze compaction rewrote 589 files (46 048 268
 bytes) into 24, so the data files in partitions before today went from 595 in 27 partitions to 30,
 with the row count (558 629) and `max(kafka_offset)` (77 659) equal. The real orphans run removed 21
@@ -281,7 +280,7 @@ and `test_late_event_does_not_roll_a_row_back` ([tests/unit/test_silver_upsert.p
 [:334](../tests/unit/test_silver_upsert.py)).
 Live, `make chaos-late` re-sent an old insert of an order whose row was already `approved` with
 `_last_lsn` 1401679552 on 2026-10-07; the row and its LSN stayed and the second run's snapshot changed
-no partition ([OPERATIONS.md, scenario 4](../OPERATIONS.md#4-late-events)). Deletes are soft (`_is_deleted`), and a
+no partition ([failure scenario 4](failure-scenarios.md#4-late-events)). Deletes are soft (`_is_deleted`), and a
 re-sent insert does not resurrect a deleted row.
 
 **18. Where does the LSN guard break down?**
@@ -342,7 +341,7 @@ duplicate it.
 In this project: `make chaos-poison-event` produces a record that is not a Debezium envelope. Bronze
 keeps it as raw text, the next `silver_upsert` run writes it to `silver.quarantine` with
 `reason = unparsed_envelope`, and a second run adds nothing because the quarantine key is
-`(topic, partition, offset)` ([OPERATIONS.md, scenario 7](../OPERATIONS.md#7-corrupted-event-in-topic)). Reasons are ordered
+`(topic, partition, offset)` ([failure scenario 7](failure-scenarios.md#7-corrupted-event-in-topic)). Reasons are ordered
 (`unknown_op`, `null_key`, `type_mismatch`, `null_required`, ...) and quarantined events are not
 retried ([OPERATIONS.md, Silver upsert](../OPERATIONS.md#silver-upsert)). The count is only a line in the `dq_checks` log, not
 a metric or alert, and detection today is manual: `select reason, count(*) from silver.quarantine
@@ -363,7 +362,7 @@ The recompute shares the model's SQL, so a wrong filter passes it; since 2026-10
 compares GMV per purchase date with Postgres, outside dbt
 ([OPERATIONS.md, Airflow](../OPERATIONS.md#airflow)).
 Failure path: `make chaos-break-dbt-test` fails a test on `fct_orders`; dbt skips the children and the
-marts keep their previous snapshot ([OPERATIONS.md, scenario 9](../OPERATIONS.md#9-airflow-task-failure-dbt-test)).
+marts keep their previous snapshot ([failure scenario 9](failure-scenarios.md#9-airflow-task-failure-dbt-test)).
 
 ## Observability
 
@@ -375,9 +374,9 @@ waiting, so it is the better paging signal.
 
 In this project: `lakehouse_silver_lag_seconds` is how long the oldest bronze snapshot silver has not
 merged has waited, 0 at rest. `lakehouse_table_freshness_seconds` grows for hours between replay
-bursts and does not alert ([OPERATIONS.md, Observability](../OPERATIONS.md#observability), series table). `FreshnessAbove15m`
+bursts and does not alert ([observability README, Series](../observability/README.md#series)). `FreshnessAbove15m`
 fires on the lag; in the live test it fired 1561 s after bronze caught up with `silver_upsert` paused
-(900 s plus up to 15 minutes until the next `dq_checks`, [OPERATIONS.md, Alerts](../OPERATIONS.md#alerts)). The
+(900 s plus up to 15 minutes until the next `dq_checks`, [evidence, Alerts and time to fire](evidence.md#alerts-and-time-to-fire)). The
 dbt source freshness check is separate: warn after 30 minutes, error after 2 hours, and with the
 replay stopped it means "no traffic" ([dbt/README.md](../dbt/README.md)).
 
@@ -406,11 +405,11 @@ has to handle the case where the metric disappears.
 
 In this project: `SparkNoBatch5m` compares `time()` with the last-batch timestamp. Idle triggers
 keep the timestamp moving, so only a stuck or dead query trips it, and a second rule uses `absent()`
-for a dead driver; after `docker stop` of `spark-bronze` it fired at 315 s ([OPERATIONS.md, Alerts](../OPERATIONS.md#alerts), table).
+for a dead driver; after `docker stop` of `spark-bronze` it fired at 315 s ([evidence, Alerts and time to fire](evidence.md#alerts-and-time-to-fire)).
 The case it misses was found by a scenario: with Kafka stopped for 6 minutes on 2026-10-23, Spark
 restarted 15 times and `SparkNoBatch5m` did not fire: the last-batch series was absent in one piece
 (17:10:23 to 17:15:38 UTC) and Kafka was back before the 5 minutes of `for` of the `gone` rule were
-over. `ContainerRestarting` fired instead ([OPERATIONS.md, scenario 8](../OPERATIONS.md#8-kafka-down-for-6-minutes)).
+over. `ContainerRestarting` fired instead ([failure scenario 8](failure-scenarios.md#8-kafka-down-for-6-minutes)).
 A week-6 rule, `SparkRestartLoop`, targets exactly that case; it is proven by promtool and by a
 retro run over the stored 2026-10-23 data (true from 51 s after the first restart), not shown firing
 live ([OPERATIONS.md, Alerts](../OPERATIONS.md#alerts), "Limits worth knowing" below the table).
@@ -431,7 +430,7 @@ in chaos 6, 33 minutes after the connector was stopped at 17:47:02. `SparkRestar
 firing: its expression was run over the stored data of chaos 8 and was true 51 s after the first
 restart. `DqChecksStale`, `ScrapeTargetDown`, `SlotWalHeldIdle`, `SilverGoldNotCompared`, `GoldStaleAtRest` and the
 `absent` form of `FreshnessAbove15m` are proven by promtool only
-([OPERATIONS.md, Alerts](../OPERATIONS.md#alerts), table). Known limits are written down: `absent()`
+([evidence, Alerts and time to fire](evidence.md#alerts-and-time-to-fire)). Known limits are written down: `absent()`
 alerts burn when `core` is off, the `lakehouse_*` gauges arrive every 15 minutes so their alerts lag
 by that much, and there is no Alertmanager, so alerts are read in the Prometheus UI
 ([OPERATIONS.md, Alerts](../OPERATIONS.md#alerts), "Limits worth knowing";

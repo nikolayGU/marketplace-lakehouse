@@ -1,36 +1,54 @@
 # Operations
 
+- [Profiles and what runs together](#profiles-and-what-runs-together)
+- [Ports](#ports-all-on-127001)
+- [Daily commands](#daily-commands)
+- [Bronze ingest](#bronze-ingest)
+- [Silver upsert](#silver-upsert)
+- [Query](#query): [Access control](#access-control)
+- [Lakekeeper (REST catalog)](#lakekeeper-rest-catalog)
+- [MinIO console](#minio-console)
+- [Superset (profile `bi`)](#superset-profile-bi)
+- [Airflow](#airflow)
+- [Observability](#observability): [SLIs](#slis-and-thresholds), [Alerts](#alerts), [Dashboards](#dashboards)
+- [Stateful job](#stateful-job)
+- [Maintenance](#maintenance)
+- [CI](#ci): [Pinned images and actions](#pinned-images-and-actions)
+- [Failure scenarios](#failure-scenarios)
+- [Runbooks](#runbooks)
+- [Backup](#backup)
+
 ## Profiles and what runs together
 
 | Situation | Command | RAM (limits) |
 |---|---|---|
 | Daily work on ingestion | `make start` | ~11 GB limits, ~7 GB real |
-| Working on dbt / Airflow | `make start && make up PROFILE=orchestrate` (Trino `Xmx` drops to 2g via `TRINO_XMX`); stop `orchestrate` when not working on batch | ~13 GB limits, ~9 GB real |
-| Full pipeline with monitoring | `TRINO_XMX=2g make start && make up PROFILE=orchestrate,obs` | 14.2 GB limits (14496 MiB on 2026-11-10: `core` without `oltp-replayer` 7680, `trino` 3584, `orchestrate` 2100, `obs` 1132, sum of `deploy` limits, one-shot jobs not counted; raised that day: `kafka-connect` 1536M to 1792M, heap 1g plus native JVM memory, RSS up to 1375 MiB; `grafana` 384M to 512M, one process per datasource plugin, constant swapping; `container-exporter` 64M to 128M, each `/metrics` walks the Docker API), 5.2 GB real at rest (2026-10-19, before the Trino plugin) |
-| Demo dashboard (optional Superset and its MCP endpoint, [section](#superset-profile-bi)) | `make down PROFILE=orchestrate && make up PROFILE=bi` | swap orchestrate for bi; ~1.8 GB of limits running (superset 1280M, superset-mcp 512M) and 1024M while the one-shot `superset-init` runs; needs `SUPERSET_ADMIN_PASSWORD` in `.env` (`make secrets`) |
+| Working on dbt / Airflow | `make start && make up PROFILE=orchestrate`; stop `orchestrate` when not working on batch | ~13 GB limits, ~9 GB real |
+| Full pipeline with monitoring | `make start && make up PROFILE=orchestrate,obs` | 14.2 GB limits (14496 MiB on 2026-11-10: `core` without `oltp-replayer` 7680, `trino` 3584, `orchestrate` 2100, `obs` 1132; sum of `deploy` limits, one-shot jobs not counted), 5.2 GB real at rest (2026-10-19, before the Trino plugin) |
+| Demo dashboard ([Superset](#superset-profile-bi) and its MCP endpoint) | `make down PROFILE=orchestrate && make up PROFILE=bi` | swap orchestrate for bi; ~1.8 GB of limits (superset 1280M, superset-mcp 512M), 1024M while `superset-init` runs; needs `SUPERSET_ADMIN_PASSWORD` in `.env` |
 | Stateful job (`orders_per_minute`) | `make up PROFILE=stateful` on top of `core` | +1.75 GB limit; 495 MiB at rest, 842 MiB while reading 24 h of the topic (2026-10-23) |
 | Debugging Kafka visually | `make up PROFILE=tools` for 15 minutes, then `make down PROFILE=tools` | +0.4 GB |
 
-All profiles except `tools` (core, query, stateful, orchestrate, obs, bi) ran together on
-2026-11-10: 20 containers, 6.0 GiB in `docker stats` at rest with Trino at `-Xmx2g` (7.5 GiB
-earlier that day at `-Xmx2500m`). The largest sum over the 7 days before was 8.33 GiB, on
-2026-11-06 at 16:20:30 UTC during the live end-to-end run to gold and Superset, with the silver
-merge container at 0.96 GiB (Prometheus, `sum(docker_container_memory_usage_bytes)` at the 15 s
-scrape step; a 1 m step misses it). No OOM; WSL sees 11.7 GiB. Conditions: `TRINO_XMX=2g`, no
-`tools`, no parallel `make test-spark` (1.1 to 1.2 GiB, no limit), no image builds and no `make
-dags-check` meanwhile. `tools` and a second stack still do not run together with it. `docker stats`
-leaves out swap: a container may swap up to its own limit.
+All profiles except `tools` ran together on 2026-11-10: 20 containers, 6.0 GiB in `docker stats` at
+rest. The largest sum over the 7 days before was 8.33 GiB, on 2026-11-06 at 16:20:30 UTC during the
+live end-to-end run to gold and Superset (Prometheus, `sum(docker_container_memory_usage_bytes)`
+at the 15 s scrape step; a 1 m step misses it). No OOM; WSL sees 11.7 GiB. Conditions: `TRINO_XMX=2g`,
+no `tools`, no parallel `make test-spark` (1.1 to 1.2 GiB, no limit), no image builds and no
+`make dags-check` meanwhile. `tools` and a second stack do not run together with it.
 
-`core` includes Lakekeeper, the Iceberg catalog, since the cutover on 2026-10-08; there is no
-`rest` profile any more. `make start` brings up `core` without `oltp-replayer`, plus `trino`: it
+`TRINO_XMX=2g` is the default of `.env.example`; an existing `.env` keeps its value, set
+`TRINO_XMX=2g` there. `docker stats` and RSS do not see swap: a container may swap up to its own
+limit. Read `memory.stat`, `memory.swap.current` and `memory.events` in the container's cgroup, and
+take the peaks of a sum in Prometheus with a 15 s subquery step.
+
+`core` includes Lakekeeper, the Iceberg catalog. `make start` brings up `core` without `oltp-replayer`, plus `trino`: it
 names `spark-bronze kafka-connect trino`, and their `depends_on` pull in the rest of `core`
 (ADR-016). `make up` refuses any `PROFILE` that contains `core`, because that would start the
 replayer container, which plays at `REPLAY_SPEED` (2880, one virtual day per 30 s) until stopped.
 `postgres-meta` (the Lakekeeper, Airflow and Superset databases) belongs to `core` only: the other
 profiles depend on it with `required: false`, so `make up PROFILE=orchestrate|bi|query` expects
 `make start` first, and `make down PROFILE=orchestrate|bi` leaves the catalog database running.
-The rest of the history is a budget for the remaining weeks (D2 in
-`docs/planning/07-w3-spec.md`), so traffic comes in bursts from the host:
+The replay budget is limited, so traffic comes in bursts from the host:
 `make replay-burst SECONDS=<n>` plays `n` real seconds at 720x and stops. `make replay-live`
 starts the container on purpose, for a continuous demo; stop it with
 `docker compose --env-file .env -f docker/compose.yaml stop oltp-replayer`.
@@ -59,17 +77,14 @@ starts the container on purpose, for a continuous demo; stop it with
 | superset-mcp | `bi` | 5008 |
 | kafka-ui | `tools` | 8085 |
 
-`make start` starts `core` without the replayer, plus `trino`. Every other profile (`orchestrate`,
-`obs`, `stateful`, `bi`, `tools`) is started on purpose with `make up PROFILE=<name>`, and `jobs`
+Every profile except `core` is started on purpose with `make up PROFILE=<name>`, and `jobs`
 only runs when a make target starts its container, so most rows above answer nothing by default.
 `BIND_IP` in `.env` is `127.0.0.1`. From the host, Kafka clients use the bootstrap `127.0.0.1:9092`:
-the broker publishes port 29092 of the container as 9092 and advertises `localhost:9092` on its
-`HOST` listener (`docker/compose.yaml:76`), so the broker address a client gets back works (an
-earlier setup advertised `localhost:29092`, which nothing listened on). Containers use `kafka:9092`.
+the broker advertises `localhost:9092` on its `HOST` listener. Containers use `kafka:9092`.
 
 ## Daily commands
 
-First run, from a fresh clone:
+First run:
 
 ```
 make secrets         # .env with generated passwords; on an existing .env it only appends missing keys; REPLAY_DATA=sample skips the download
@@ -77,51 +92,41 @@ make data            # download Olist into data/raw (not needed with REPLAY_DATA
 make bootstrap       # start, migrate, connector, replay-load, verify, protect; safe to re-run
 ```
 
-`make bootstrap` runs, in order: `make start`; a wait of up to 5 minutes for `spark-bronze`,
-`kafka-connect` and `trino` to turn healthy; `make migrate`; `connect/register.sh`;
-`make replay-load` unless a replay state exists (`replay state exists, load skipped`);
-`make verify`; `scripts/lakekeeper/protect.sh`. None of the steps deletes anything. From a fresh
-clone on the sample it took 4 minutes with the images built, a re-run 75 seconds; the first build
-of the Spark image adds about 80 seconds with its base image already pulled (2026-10-17).
+`make bootstrap` runs: `make start`; a wait of up to 5 minutes for `spark-bronze`, `kafka-connect`
+and `trino` to turn healthy; `make migrate`; `connect/register.sh`; `make replay-load` unless a
+replay state exists (`replay state exists, load skipped`); `make verify`;
+`scripts/lakekeeper/protect.sh`. None of the steps deletes anything.
+On the sample it took 4 minutes with the images built, a re-run 75 seconds; the first build of the Spark image adds about 80 seconds with its base image already pulled (2026-10-17).
 
 `make verify` refuses (exit 2) while `airflow-scheduler` runs, while a replayer answers on port
 8000, and when Trino does not answer `select 1`, its catalog `lake` does not answer `show schemas`
 (Lakekeeper down) or MinIO does not answer (MinIO down). Otherwise it waits up to `VERIFY_WAIT`
-seconds (default 900) for bronze to catch up with Kafka, runs one silver merge, and checks that
-every Kafka offset is in bronze exactly once, that live silver rows equal Postgres for all seven
-tables (row count, set of primary keys, sum of every decimal column, and since 2026-10-30 the row
+seconds (default 900) for bronze to catch up with Kafka, runs one silver merge, and checks that no
+Kafka offset is in bronze twice and none is missing between the lowest and the highest offset of
+each partition, that bronze reached Kafka's end offsets, that live silver rows equal Postgres for
+all seven tables (row count, set of primary keys, sum of every decimal column and the row
 fingerprint of every column; `reconcile`), and that all seven tables reached bronze. The last line
 is `verify ok` or `verify failed: <reason>`.
 
 Both `verify` targets run three probes after the replayer check (and the scheduler check of
 `make verify`), each in at most `TRINO_PROBE_WAIT` (a number from 1, default 20) + 2 seconds,
 instead of waiting `VERIFY_WAIT` and blaming Kafka: `select 1` to Trino, `show schemas` in catalog
-`lake`, and `curl` of `$S3_ENDPOINT/minio/health/live` run inside the trino container, so MinIO is
-asked from the host of Trino by the endpoint of its catalog. The third is not a query on a table
-on purpose: Trino caches table metadata in memory (`iceberg.metadata-cache.enabled`), so
-`$manifests` answered with MinIO down (2026-11-04), and `select 1 from bronze.cdc_events limit 1`
-reads no data file (`explain analyze`: `Input: 70 rows (0B)`, no physical input). curl gets the
-same limit (`-m`) and must exist in the trino image. The health check shows that MinIO answers,
-not that the credentials, the permissions, the bucket or the files of a table are right. Exit 2
-with:
+`lake`, and `curl` of `$S3_ENDPOINT/minio/health/live` run inside the trino container. The third is
+not a table query on purpose: Trino caches table metadata, so `$manifests` answered with MinIO
+down. It shows that MinIO answers, not that the credentials or the files are right. Exit 2 with:
 
-- `verify failed: Trino does not answer within N s: <reason>` when the first probe hangs or is
-  killed, `verify failed: Trino probe failed: <reason>` when Trino answers with an error (a
-  stopped container);
-- `verify failed: Trino answers, but catalog lake does not answer within N s` or
-  `... catalog lake fails (Lakekeeper?): <reason>` when the second one does;
+- `verify failed: Trino does not answer within N s: <reason>` (hangs) or `verify failed: Trino
+  probe failed: <reason>` (error, a stopped container);
+- `verify failed: Trino answers, but catalog lake does not answer within N s` or `... catalog lake
+  fails (Lakekeeper?): <reason>`; with `TRINO_PROBE_WAIT` below about 10 a stopped Lakekeeper reads
+  as `does not answer within N s`;
 - `verify failed: Trino and catalog lake answer, but the object store (MinIO) does not answer
-  within N s` or `... but the object store (MinIO) fails: <reason>` when the third one does.
+  within N s` or `... but the object store (MinIO) fails: <reason>`; a stopped MinIO leaves the
+  Docker DNS (`curl: (6) Could not resolve host: minio`), a paused one would read as `does not
+  answer` (not measured).
 
-With Lakekeeper stopped the refusal took 11 s on 2026-11-04, about 9 s of it the Trino REST client
-giving up; with `TRINO_PROBE_WAIT` below about 10 the same fault reads as `does not answer within
-N s`. `show schemas` lists namespaces in Lakekeeper and does not read MinIO, which is why the third
-probe exists. With MinIO stopped (`docker stop lakehouse-minio-1`) `make verify-fast` refused
-in 11.7 s on 2026-11-05 with `... but the object store (MinIO) fails: curl: (6) Could not resolve
-host: minio`: a stopped container leaves the Docker DNS, so the name does not resolve; a paused
-MinIO would read as `does not answer within N s` (not measured). Ctrl+C ends either target with
-`verify interrupted` and exit 130 once the current probe or step ends, before the next probe
-starts; a kill (TERM) ends the script at once, but a running merge container goes on.
+Measured refusals: [evidence](docs/evidence.md#probe-minio-stopped). Ctrl+C ends either target with
+`verify interrupted` and exit 130; a kill (TERM) ends the script at once, but a running merge container goes on.
 
 ```
 make replay-burst SECONDS=60   # about 12 virtual hours at 720x; prints virtual_now before and after
@@ -129,9 +134,8 @@ make replay-start              # plays until ctrl-c at REPLAY_SPEED (1 day / 30 
 ```
 
 `replay-load` refuses to touch non-empty tables. Starting over means `make replay-reset`, which
-empties every `shop` table and drops staging; it asks before doing it. The emptying is a
-`TRUNCATE`, and Debezium 3.5 skips truncate events by default (`skipped.operations=t`, not
-overridden in `connect/shop-connector.json`): bronze and silver keep every row, and the next
+empties every `shop` table and drops staging; it asks first. The emptying is a `TRUNCATE`, and
+Debezium 3.5 skips truncate events by default (`skipped.operations=t`): bronze and silver keep every row, and the next
 `make reconcile` is red on row counts. A real start over is the lake too, which today means
 `make nuke && make bootstrap` (blast radius, owner's ok).
 
@@ -141,17 +145,15 @@ make logs S=spark-bronze
 make psql            # psql into shop
 make trino           # trino cli, catalog lake
 make kafka-topics    # list topics with partitions
-make kafka-groups    # classic consumer groups and lag; Spark keeps offsets in its checkpoint (lag is in Grafana), and the Connect group is listed only by kafka-groups.sh --list
+make kafka-groups    # classic consumer groups and lag; Spark keeps offsets in its checkpoint (lag is in Grafana)
 make connector-status
 make replay-status   # replayer position and virtual clock
 make iceberg-demo    # snapshots, time travel, rollback, compaction, expiration
 ```
 
-`make iceberg-demo` works on `lake.demo.orders` only: every run drops and rebuilds that sandbox
-from `silver.orders`, which it only reads, so its rollback and `expire_snapshots` never reach
-bronze or silver. It needs `silver.orders` populated (`make silver`) with at least 1 100 live
-rows: it copies 1 000 for the first snapshot, then 20 appends of 5. Before the first
-`make silver` it fails with table not found.
+`make iceberg-demo` works on `lake.demo.orders` only: it rebuilds that sandbox from `silver.orders`
+(read only), so its rollback and `expire_snapshots` never reach bronze or silver. It needs
+`silver.orders` with at least 1 100 live rows (`make silver` first).
 
 ## Bronze ingest
 
@@ -162,29 +164,21 @@ which happens on an empty topic too.
 
 - A crash or OOM kill makes Docker restart it (`unless-stopped`), and the job resumes from the
   checkpoint (`Resuming at batch N` in the log). A manual `docker kill` or `docker stop` does not:
-  start it with `docker start lakehouse-spark-bronze-1`. Verified on 2026-09-22: resumed at
-  batch 6, same `queryId`, no duplicate or missing offsets.
+  start it with `docker start lakehouse-spark-bronze-1`.
 - `startingOffsets=earliest` applies only to a fresh checkpoint. If the job is down longer than
-  Kafka retention (24 h), offsets it never read are gone and `failOnDataLoss=true` fails the
-  query instead of silently skipping them. Docker then restarts it and it fails the same way,
-  so the symptom is a restart loop (`RestartCount` growing, `OffsetOutOfRange` or "data loss" in
-  the log). Recovery is a decision, not a restart: see the Kafka gate.
+  Kafka retention (24 h), `failOnDataLoss=true` fails the query instead of skipping offsets, and
+  Docker restarts it into the same failure: a restart loop (`RestartCount` growing, `OffsetOutOfRange`
+  or "data loss" in the log). Recovery is a decision, not a restart: see the Kafka gate.
 - Unhealthy means no progress or idle event for 120 s: the query is stuck, typically on MinIO
-  or `postgres-meta`. The container keeps running; look at `make logs S=spark-bronze`.
+  or `postgres-meta`. The container keeps running; read `make logs S=spark-bronze`.
 - Consumer down longer than retention, or bronze started after the history left Kafka:
   `make cdc-snapshot` (all tables) or `make cdc-snapshot TABLES="shop.orders"` re-reads the
-  source into the topics without touching the slot (ADR-019). Done on 2026-09-22 for all seven
-  tables after the initial snapshot had expired.
+  source into the topics without touching the slot (ADR-019).
 - Schema changes of bronze itself are additive and applied on start: a new column goes into
   the DDL at its position and into `ADDED_COLUMNS` (name, type, after), and `ensure_table` adds it
   to the live table there, logging `lacks <column>, adding it`. A column only in the DDL is not
-  added, and the streaming sink then refuses the DataFrame: it checks column order. The
-  checkpoint is unaffected. `source_sequence` arrived this way on 2026-09-26 (ADR-022); from then
-  on every parsed event has one:
-  `select count(*) from bronze.cdc_events where op is not null and source_sequence is null
-  and ingest_ts > timestamp '2026-09-26 04:13:00'` returns 0.
-- Resetting bronze means deleting both the checkpoint prefix and the table, which is on the
-  blast-radius list.
+  added, and the streaming sink then refuses the DataFrame (column order). The checkpoint is unaffected. `source_sequence` arrived this way (ADR-022).
+- Resetting bronze means deleting the checkpoint prefix and the table: blast radius.
 
 `spark_streaming_kafka_lag{topic,partition}` (21 rows) is messages the broker has past the last
 batch; it is 0 at rest and rises only when a backlog is bigger than one trigger
@@ -205,7 +199,7 @@ make logs S=spark-bronze
 `Trigger.AvailableNow`, checkpoint `s3a://lakehouse/checkpoints/silver_upsert`. It reads every
 bronze snapshot committed since the previous run in micro-batches of about 200 000 rows
 (`silver_max_rows_per_batch` in `spark_jobs/settings.py`), merges each into the seven
-`lake.silver.<table>` tables and exits. Airflow takes over scheduling in week 3.
+`lake.silver.<table>` tables and exits.
 
 - Per table and batch: parse `after` (`before` for a delete) with `contracts/silver/<table>.json`,
   send events that cannot become a row to `silver.quarantine`, keep the newest event per primary
@@ -213,48 +207,37 @@ bronze snapshot committed since the previous run in micro-batches of about 200 0
 - Quarantine: one row per Kafka record, keyed by `(topic, kafka_partition, kafka_offset)`, so a
   replayed batch adds nothing. A table without a contract goes there whole as `no_contract`.
   Otherwise `reason` is the first that applies: `unparsed_envelope` (bronze kept it as `raw`),
-  `unknown_op`, `null_key`, then, for anything but a delete, `type_mismatch` (a field present in
-  the payload that does not fit its column) and `null_required`. A delete needs only its key: it
-  flags the row and never writes the other values. `payload` is `raw`, `after`, or `before` for a
-  delete. The log says `batch N: <table> events quarantined: {reason: count}` (counts of rejected
-  events in the batch, a replay counts them again) or `batch N: <n> <table> events quarantined,
-  no contract`. Check: `select source_table, reason, count(*) from silver.quarantine group by 1, 2`.
-- Quarantined events are not retried. After a contract fix: a key silver never received (its
-  insert was quarantined, or the table had no contract) arrives with its next change or with
-  `make cdc-snapshot TABLES=shop.<table>`; a key silver already holds catches up only with its
-  next streamed change, because a snapshot read never beats a streamed LSN (ADR-019); a
-  quarantined delete is not delivered again by anything and needs a hand fix the owner approves.
+  `unknown_op`, `null_key`, then, for anything but a delete, `type_mismatch` (a field that does not
+  fit its column) and `null_required`. A delete needs only its key: it flags the row and never
+  writes the other values. The log says `batch N: <table> events quarantined: {reason: count}` (a
+  replay counts them again) or `batch N: <n> <table> events quarantined, no contract`. Check: `select source_table, reason, count(*) from silver.quarantine group by 1, 2`.
+- Quarantined events are not retried. After a contract fix a key silver never received arrives with
+  its next change or with `make cdc-snapshot TABLES=shop.<table>`; a key silver already holds
+  catches up only with its next streamed change (a snapshot never beats a streamed LSN, ADR-019); a
+  quarantined delete needs a hand fix the owner approves.
 - Payload fields the contract does not declare are ignored and logged once per table and batch
   (`payloads carry fields contracts/silver/<table>.json does not declare: [...]`): the source
-  gained a column (schema evolution, W2-T07). The row still merges. Proven by the Spark unit tests
+  gained a column. The row still merges. Proven by the Spark unit tests
   (`tests/unit/test_silver_upsert.py`), not live: migration
-  `oltp/migrations/evolution/003_orders_sales_channel.sql` has not run on the stack (`shop.orders`
-  has no `sales_channel` on 2026-10-30; the contract change is the owner's Modify gate).
+  `oltp/migrations/evolution/003_orders_sales_channel.sql` has not run on the stack (the contract
+  change is the owner's Modify gate).
 - Soft delete: `_is_deleted = true` keeps the last values. Live rows are `where not _is_deleted`.
 - Layout (ADR-010): `silver.orders` is merge-on-read and partitioned by month, the other tables
-  copy-on-write. An older table converges on the next run (`lake.silver.orders: set ...` and
-  `partitioned by ... from now on` in the log), metadata only. Delete files accumulate between
-  compactions; `alter table silver.orders execute optimize` in Trino folds them and rewrites old
-  files into the current spec. Check: `select content, spec_id, count(*) from
+  copy-on-write. An older table converges on the next run (metadata only). Delete files accumulate
+  between compactions; `alter table silver.orders execute optimize` in Trino folds them. Check: `select content, spec_id, count(*) from
   silver."orders$files" group by 1, 2` (content 1 are delete files).
-- `silver_shuffle_partitions` in `spark_jobs/settings.py` (a code default, compose does not pass
-  it) is frozen in the checkpoint on the first run: Spark restores the stored value and logs
-  `Updating the value of conf 'spark.sql.shuffle.partitions'`. A new value takes effect only
-  with a new checkpoint, and deleting the checkpoint prefix is blast radius: the next run then
-  re-reads all of bronze (idempotent, but long).
+- `silver_shuffle_partitions` in `spark_jobs/settings.py` is frozen in the checkpoint on the first
+  run (Spark logs `Updating the value of conf 'spark.sql.shuffle.partitions'`). A new value takes
+  effect only with a new checkpoint, and deleting the checkpoint prefix is blast radius: the next
+  run then re-reads all of bronze (idempotent, but long).
 - A rerun with nothing new in bronze does nothing. A crash mid-run replays the unfinished batch,
   and the replay changes nothing that the first attempt already merged.
 - The job refuses to start if a silver table and its contract disagree on columns: add the
   column to the contract and `ALTER TABLE ... ADD COLUMN`, in that order.
 - Losing the silver checkpoint is checked by the unit test
-  `test_a_lost_checkpoint_rereads_bronze_and_silver_keeps_its_values`, not live (owner's decision of
-  2026-11-04): a new checkpoint re-reads all of bronze, and silver keeps the same values, with no
-  duplicates and no losses. The re-read does update `_updated_at` of the rows that came from a
-  snapshot read without an LSN (`_last_lsn is null`); rows with an LSN are untouched.
+  `test_a_lost_checkpoint_rereads_bronze_and_silver_keeps_its_values`, not live (owner's decision, 2026-11-04): a new checkpoint re-reads all of bronze, and silver keeps the same values, with no
+  duplicates and no losses; `_updated_at` changes only for rows without an LSN (`_last_lsn is null`).
 - Resetting silver means dropping the tables and deleting the checkpoint prefix: blast radius.
-
-First run on 2026-09-23: the whole bronze (518 461 events) in 51 s, 3 batches; live rows equal
-`count(*)` in Postgres for all seven tables, 3 order items soft-deleted.
 
 Check it:
 
@@ -278,65 +261,50 @@ docker compose --env-file .env -f docker/compose.yaml --profile core --profile q
 make trino           # trino> select source_table, count(*) from bronze.cdc_events group by 1;
 ```
 
-Healthy means the image's `health-check` saw `"starting": false` on `/v1/info`, about 40 s
-after start. It does not prove the catalog works: run one query. The config is bind-mounted, so
+Healthy means `/v1/info` says `"starting": false`; run one query to prove the catalog. The config is bind-mounted, so
 after editing `docker/trino/etc` (catalogs, `access-control.properties`, `rules.json`) restart the
 container (`docker compose ... restart trino`); `up -d` does not notice file changes.
 
-Trino only reads what Spark committed: a bronze micro-batch shows up after its Iceberg commit,
-not when Kafka receives the event.
+Trino only reads what Spark committed: a micro-batch shows up after its Iceberg commit.
 
 ### Access control
 
-Trino has file-based access control (W6-D17, 483): `docker/trino/etc/access-control.properties`
+Trino has file-based access control (Trino 483): `docker/trino/etc/access-control.properties`
 (`access-control.name=file`) points at `docker/trino/etc/rules.json`. Rules go top down, the first
 match applies, no match is a deny
 (https://trino.io/docs/483/security/file-system-access-control.html).
 
-File-based rules do not cover table procedures: the documentation says "File-based access control
-does not support privileges for table procedures and therefore all are effectively allowed", so
-`ALTER TABLE ... EXECUTE expire_snapshots | remove_orphan_files | optimize` passes whatever the
-rules say, and the first two delete files. `grafana` therefore does not read `lake` at all. It reads
-`lake_ro` (`docker/trino/etc/catalog/lake_ro.properties`): the same Lakekeeper, warehouse and S3
-keys as `lake`, plus `iceberg.security=read_only`, which denies DDL, DML, table procedures and CALL
+File-based rules do not cover table procedures ("all are effectively allowed" in the
+documentation), so `ALTER TABLE ... EXECUTE expire_snapshots | remove_orphan_files | optimize`
+passes whatever the rules say, and the first two delete files. `grafana` therefore does not read
+`lake` at all. It reads `lake_ro` (`docker/trino/etc/catalog/lake_ro.properties`): the same
+Lakekeeper, warehouse and S3 keys, plus `iceberg.security=read_only`, which denies DDL, DML and
 procedures for every user on that catalog
-(https://trino.io/docs/483/connector/iceberg.html#security; the connector's read-only access
-control implements only read checks and denies the rest by default). `lake_ro` and `lake` are two
-names for the same tables: nothing is copied.
+(https://trino.io/docs/483/connector/iceberg.html#security). `lake_ro` and `lake` are two names for
+the same tables: nothing is copied.
 
 | User | Can |
 |---|---|
-| `grafana` (Grafana datasource) | `select` on the `lake_ro.gold` tables `fct_*`, `dim_*` and `mart_*` only (not the dbt views `stg_*` and `int_*`, which read silver with the owner's rights, nor the seed `category_translation`); `lake_ro` is read-only twice (rules and connector); catalogs `lake` and `system` and every other: none; no schema ownership, no procedures, no other users' queries, no system information |
+| `grafana` (Grafana), `superset` (Superset) | `select` on the `lake_ro.gold` tables `fct_*`, `dim_*` and `mart_*` only (not the dbt views `stg_*` and `int_*`, which read silver with the owner's rights, nor the seed `category_translation`); `lake_ro` is read-only twice (rules and connector); catalogs `lake` and `system` and every other: none; no schema ownership, no procedures, no other users' queries, no system information |
 | everyone else (`dbt`, `airflow`, `trino` of the CLI and `make` targets, any new name) | `lake` as before access control: all table privileges, schema ownership, procedures, query management, system information; `lake_ro` is read-only for them too, they have no use for it |
 
-Both files are read when `trino` starts, so a rule or catalog change needs a restart of the
-container (`docker compose ... restart trino`, which interrupts running queries and needs an "ok").
-There is no `security.refresh-period` on purpose: an edit of the bind-mounted file must not apply
-silently. A malformed `rules.json` is expected to stop Trino at startup (see `docker logs`; by the documentation, not tried). The unit test
+Both files are read when `trino` starts, so a change needs a restart of the container
+(`docker compose ... restart trino`, which interrupts running queries and needs an "ok"); there is
+no `security.refresh-period` on purpose. A malformed `rules.json` is expected to stop Trino at startup (see `docker logs`; by the documentation, not tried).
 `tests/unit/test_trino_access.py` checks the files against the model of the documentation (first
 match, no match is a deny) and that `lake_ro.properties` equals `lake.properties` plus
 `iceberg.security=read_only`. It does not run Trino: the checks below do.
 
-Check it after a restart (Trino up):
+Check it after a restart (Trino up; the iceberg metadata tables follow their table):
 
 ```
 T="docker compose --env-file .env -f docker/compose.yaml exec -T trino trino"
-$T --user grafana --execute "select count(*) from lake_ro.gold.fct_orders"   # passes
-$T --user grafana --execute "select count(*) from lake_ro.silver.orders"     # Access Denied
-$T --user grafana --execute "select count(*) from lake_ro.gold.stg_reviews"   # Access Denied (dbt view over silver)
-$T --user grafana --execute "select count(*) from lake_ro.gold.int_daily_sales" # Access Denied
-$T --user grafana --execute "select count(*) from lake_ro.gold.mart_daily_sales" # passes
-# Iceberg metadata tables follow their table: those of the marts pass ($files shows S3 paths), the seed's do not.
-$T --user grafana --execute 'select count(*) from lake_ro.gold."fct_orders$snapshots"'        # passes
-$T --user grafana --execute 'select count(*) from lake_ro.gold."category_translation$files"'  # Access Denied
-$T --user trino --execute "select count(*) from lake.gold.stg_reviews"       # passes
-$T --user grafana --execute "select count(*) from lake.gold.fct_orders"      # Access Denied (catalog)
-$T --user grafana --execute "create table lake_ro.gold.t_acl (a int)"        # Access Denied
-$T --user grafana --execute "alter table lake.gold.category_translation execute optimize"    # Access Denied (catalog)
+$T --user grafana --execute "select count(*) from lake_ro.gold.fct_orders"        # passes
+$T --user grafana --execute "select count(*) from lake_ro.silver.orders"          # Access Denied
+$T --user grafana --execute "select count(*) from lake_ro.gold.stg_reviews"       # Access Denied (dbt view over silver)
+$T --user grafana --execute "select count(*) from lake.gold.fct_orders"           # Access Denied (catalog)
 $T --user grafana --execute "alter table lake_ro.gold.category_translation execute optimize" # Access Denied
 $T --user dbt --execute "alter table lake_ro.gold.category_translation execute optimize"     # Access Denied (read_only)
-# A gold table dbt rebuilds: if a denial did not hold, the harm is one compaction, not a second silver writer.
-$T --user trino --execute "select count(*) from lake.silver.orders"          # passes
 ```
 
 Residual risk. Trino has no authentication, the user name is only a label. Two ways around the
@@ -344,29 +312,23 @@ rules remain: (1) a Grafana admin creates a new Trino datasource in the UI with 
 (`editable: false` protects only the provisioned datasource, not Grafana from new ones);
 (2) any client that reaches port 8080 (the host, bound to `BIND_IP`, or any container in the
 `lake` network) can pass `--user dbt` and get all rights on `lake`. What stands in the way: the
-Grafana admin password and the ports bound to `BIND_IP`. The rules protect against a panel or
-Explore run through the provisioned datasource; they do not protect against a person with an admin
-login, a shell or network access. Real protection needs authentication (TLS plus password or JWT)
-and a separate decision.
+Grafana admin password and the ports bound to `BIND_IP`. The rules do not protect against a person
+with an admin login, a shell or network access; that needs authentication and a separate decision.
 
 ## Lakekeeper (REST catalog)
 
-Lakekeeper v0.13.6 is the Iceberg catalog of Spark and Trino since the cutover on 2026-10-08
-(ADR-005). Its services are in profile `core`: `lakekeeper-migrate` (one-shot schema migration of
-the `lakekeeper` database in `postgres-meta`, 128 MiB), `lakekeeper` (the API on `127.0.0.1:8181`,
-256 MiB limit) and `lakekeeper-bootstrap` (one-shot, 128 MiB). `spark-bronze`, `spark-silver` and
-`trino` wait for `lakekeeper-bootstrap`, so every `up` of them runs the one-shots again
-(`minio-init`, `lakekeeper-migrate`, `lakekeeper-bootstrap`), all idempotent. Without `lakekeeper`
-Spark cannot commit and Trino cannot load a table. The API has no authentication (allow-all), which
-is why the port stays on 127.0.0.1. The same port serves the catalog UI, http://127.0.0.1:8181/ui/
-(HTTP 200, 2026-11-06): the warehouse `lake`, its namespaces and tables; it needs no login either.
+Lakekeeper v0.13.6 is the Iceberg catalog of Spark and Trino (ADR-005). Its services are in profile
+`core`: `lakekeeper-migrate` (one-shot schema migration of the `lakekeeper` database in
+`postgres-meta`, 128 MiB), `lakekeeper` (the API on `127.0.0.1:8181`, 256 MiB limit) and
+`lakekeeper-bootstrap` (one-shot, 128 MiB). `spark-bronze`, `spark-silver` and `trino` wait for
+`lakekeeper-bootstrap`, so every `up` of them runs the idempotent one-shots again (`minio-init`,
+`lakekeeper-migrate`, `lakekeeper-bootstrap`). Without `lakekeeper` Spark cannot commit and Trino
+cannot load a table. The API has no authentication (allow-all), which is why the port stays on
+127.0.0.1. The same port serves the catalog UI, http://127.0.0.1:8181/ui/
+(HTTP 200): the warehouse `lake`, its namespaces and tables; it needs no login either.
 
 `make silver` and `make iceberg-demo` run `spark-silver` with `--no-deps`: they never start
 Lakekeeper, so it must already be running (`make status`; `make lakekeeper-bootstrap` starts it).
-
-Measured on 2026-10-08 right after the cutover: `lakekeeper` 91 MiB of its 256 MiB, the
-`lakekeeper` database 12 MB. Bronze commits every 20 s and each commit now writes `postgres-meta`
-too: compare both a day later.
 
 ```
 make lakekeeper-bootstrap   # starts lakekeeper (migration first) if needed, creates warehouse lake
@@ -374,29 +336,21 @@ curl -s '127.0.0.1:8181/catalog/v1/config?warehouse=lake'   # defaults.prefix is
 docker stats --no-stream lakehouse-lakekeeper-1
 ```
 
-`make lakekeeper-bootstrap` is safe to re-run: the second time it prints `warehouse lake exists`
-and changes nothing, since it never updates an existing warehouse. It runs in
-`lakehouse/spark:dev` with `pull_policy: never`, so build that image first (`make start` does);
+`make lakekeeper-bootstrap` is safe to re-run (`warehouse lake exists`, nothing changes). It runs
+in `lakehouse/spark:dev` with `pull_policy: never`, so build that image first (`make start` does);
 otherwise compose stops with `No such image`.
 
 Encryption key. `LAKEKEEPER_ENCRYPTION_KEY` encrypts the warehouse's S3 keys inside the
-`lakekeeper` database. `make secrets` generates every secret of a new `.env`; on an existing one it
-never changes a key, it only appends the keys of `.env.example` that are missing (so a new service
-can ship its secret), and without the key every compose command fails, `make lint` and `make up`
-included, whatever the profile (`required variable LAKEKEEPER_ENCRYPTION_KEY is missing a
-value`). Run `make secrets` once on an existing `.env` to add it.
+`lakekeeper` database. `make secrets` generates every secret of a new `.env` and on an existing one
+only appends the keys that are missing; without this key every compose command fails (`required
+variable LAKEKEEPER_ENCRYPTION_KEY is missing a value`), so run `make secrets` once on an existing
+`.env`. Never change the key once the warehouse exists: Lakekeeper could no longer decrypt its S3
+keys, and every commit depends on them. Sending the credential again
+(`POST /management/v1/warehouse/{id}/storage-credential`) should repair that; it is untested.
 
-Never change the key once the warehouse exists: Lakekeeper could no longer decrypt its S3 keys,
-and it writes every new metadata file with them, so commits depend on the key. Sending the
-credential again (`POST /management/v1/warehouse/{id}/storage-credential`) should repair that; it
-is untested.
-
-Spark and Trino reach the catalog only through Lakekeeper (REST); no setting selects another one.
-The `iceberg_catalog` database in `postgres-meta` of an existing volume still holds the rows of
-the old JDBC catalog. Nothing reads it and the rows stay as data; a new `postgres-meta` volume no
-longer creates it. Those rows point at pre-cutover snapshots, and the first maintenance run of
-2026-10-29 deleted files those snapshots read (owner decision W6-D16). A copy of `warehouse/`
-taken before that run is on `/mnt/d/lakehouse-backup/warehouse-20261029`.
+Spark and Trino reach the catalog only through Lakekeeper. The `iceberg_catalog` database in
+`postgres-meta` of an existing volume holds old rows that nothing reads. A copy of `warehouse/` from
+before the first maintenance run is on `/mnt/d/lakehouse-backup/warehouse-20261029`.
 
 What deletes files. Lakekeeper reads a REST `DELETE` without `purgeRequested` as a purge (the
 Iceberg REST spec defaults it to `false`), and warehouse `lake` soft-deletes for 7 days: the table
@@ -416,13 +370,12 @@ then it can be undropped (below).
 catalog at once and, unless `purgeRequested=false`, its whole location is deleted at once too.
 All of it is on the blast-radius list.
 
-Protection. `scripts/lakekeeper/protect.sh` set `protected` on all 9 bronze and silver tables at
-the cutover. Lakekeeper then answers a drop of any of them with 409 before anything is deleted,
-Spark `DROP ... PURGE` included; commits are not affected. Run it again when a new bronze or
-silver table appears; a re-registered table comes back
-unprotected; it only ever sets the flag and reads it back. `demo` and `gold` stay unprotected.
-Removing protection is on the blast-radius list: the owner does it by hand, nothing else does. The
-flag lives under the warehouse id and the table's Iceberg `table-uuid`:
+Protection. `scripts/lakekeeper/protect.sh` set `protected` on all 9 bronze and silver tables.
+Lakekeeper then answers a drop of any of them with 409 before anything is deleted, Spark
+`DROP ... PURGE` included; commits are not affected. Run it again when a new bronze or silver table
+appears or a table is re-registered (it comes back unprotected); it only sets the flag and reads it
+back. `demo` and `gold` stay unprotected. Removing protection is on the blast-radius list: the
+owner does it by hand. The flag lives under the warehouse id and the table's Iceberg `table-uuid`:
 
 ```
 lk=http://127.0.0.1:8181; json() { python3 -c "import json, sys; print(json.load(sys.stdin)$1)"; }
@@ -434,9 +387,8 @@ curl -s "$lk/management/v1/warehouse/$wid/table/$tid/protection"   # {"protected
 # {"protected": false} removes it: owner only
 ```
 
-Undrop. A dropped table stays in Lakekeeper's list of deleted tables for 7 days and can be
-brought back with its files, unless Spark `DROP ... PURGE` already deleted them. Not tried on this
-stack yet; `lk` and `wid` as above:
+Undrop (not tried on this stack): a dropped table can be brought back within 7 days unless
+`DROP ... PURGE` deleted its files; `lk` and `wid` as above:
 
 ```
 curl -s "$lk/management/v1/warehouse/$wid/deleted-tabulars"   # id, name, expiration-date
@@ -447,68 +399,51 @@ curl -sS -X POST -H 'Content-Type: application/json' \
 
 ## MinIO console
 
-The console of MinIO is on http://127.0.0.1:9001 (`docker/compose.yaml:163`, `:171`), profile `core`.
+The console of MinIO is on http://127.0.0.1:9001 (service `minio` in `docker/compose.yaml`), profile `core`.
 Log in with `S3_ACCESS_KEY` and `S3_SECRET_KEY` from `.env`. The bucket named by `S3_BUCKET` holds
-the Iceberg data and metadata files of bronze, silver and gold. Port 9000 is the S3 API: opened in a
-browser, it redirects to the console. Look, do not delete: a file removed by hand breaks the table
-that owns it.
+the Iceberg data and metadata files of bronze, silver and gold. Look, do not delete: a file removed by hand breaks its table.
 
 ## Superset (profile `bi`)
 
-Optional BI over the gold marts, with an MCP endpoint for agents. `make up PROFILE=bi` on top of
-`core` and `query` (swap `orchestrate` for `bi` to stay lean; together they fit under the conditions
-in "Profiles and what runs together"); three services, all built from `docker/superset/Dockerfile`
-(Superset 6.1.0 plus the drivers `psycopg2-binary`, `trino` and `fastmcp`, pinned by
-`constraints.txt`):
+Optional BI over the gold marts, with an MCP endpoint. `make up PROFILE=bi` on top of
+`core` and `query` (swap `orchestrate` for `bi` to stay lean); three services, all built from
+`docker/superset/Dockerfile` (Superset 6.1.0 plus the drivers `psycopg2-binary`, `trino` and
+`fastmcp`, pinned by `constraints.txt`):
 
 | Service | Port | Limit | Does |
 |---|---|---|---|
-| `superset-init` | none | 1024M | one-shot, `restart: "no"`: `superset db upgrade`, creates `admin` if absent, `superset init`, imports the bundle `docker/superset/dashboards/` (`docker/superset/init.sh`); skips the import with a warning when Trino is not reachable, run it again once Trino is up |
+| `superset-init` | none | 1024M | one-shot: `superset db upgrade`, creates `admin`, `superset init`, imports the bundle `docker/superset/dashboards/` (`docker/superset/init.sh`); skips the import with a warning when Trino is not reachable |
 | `superset` | 8088 | 1280M | UI and REST API, metadata in the database `superset` of `postgres-meta`; waits for `superset-init` |
 | `superset-mcp` | 5008 | 512M | the MCP server built into Superset 6.1 (`superset mcp run`), endpoint `http://127.0.0.1:5008/mcp`; waits for `superset-init` |
 
-(Services `superset`, `superset-init` and `superset-mcp` in `docker/compose.yaml`.) The admin password is `SUPERSET_ADMIN_PASSWORD` in `.env`. Compose
-requires it (`${SUPERSET_ADMIN_PASSWORD:?...}`), so after updating the repository run `make secrets`
-once: it appends the keys of `.env.example` that `.env` lacks and never changes an existing one
-(`scripts/make_env.py`). Without it every compose command, whatever the profile, stops with that
-message.
+The admin password is `SUPERSET_ADMIN_PASSWORD` in `.env`. Compose requires it, so after updating
+the repository run `make secrets` once: it appends the keys of `.env.example` that `.env` lacks and
+never changes an existing one. Without it every compose command, whatever the profile, stops.
 
 The bundle holds the database `Lakehouse (Trino lake_ro)` (`trino://superset@trino:8080/lake_ro`),
-4 datasets (`fct_order_items`, `fct_orders`, `mart_daily_sales`, `mart_delivery_sla`), 13 charts and
-the dashboard `Marketplace` (v2, Harbor palette).
+4 datasets, 13 charts and the dashboard `Marketplace` (v2, Harbor palette).
 
-Import order. `superset-init` runs `docker/superset/import_bundle.py`, which imports datasets, then
-charts, then the dashboard, each with `overwrite=True`, so a metric, column or chart changed in the
-bundle reaches an instance that already has the object (the stock `superset import-dashboards`
-overwrites only the dashboard). A UI edit of a bundled object is replaced by the next import. Any
-import error makes the script exit 1 and `superset-init` fail. To import again after a bundle
-change, recreate the one-shot (it needs Trino up, otherwise the import is skipped with a warning):
+Import order. `superset-init` runs `docker/superset/import_bundle.py` (datasets, charts, dashboard,
+`overwrite=True`): a UI edit of a bundled object is replaced by the next import, and an import
+error fails `superset-init`. To import again, recreate the one-shot (Trino must be up):
 
 ```
 docker compose --env-file .env -f docker/compose.yaml --profile bi up -d --force-recreate --no-deps superset-init
 ```
 
-Relative time and `SUPERSET_DATA_ANCHOR`. The Olist data ends in 2026, so "today" would point past
-it. `superset_config.py` sets `DEFAULT_RELATIVE_START_TIME` and `DEFAULT_RELATIVE_END_TIME` from
-`SUPERSET_DATA_ANCHOR`, and "Last quarter" or "Last year" count from that date. The default is
-`2026-07-01` (`.env.example`, `docker/compose.yaml`): the first day of the month of the latest
-order. The variable is passed to `superset` and `superset-mcp`, not to `superset-init`. After a
-replay that moves the data end into a later month, set the variable in `.env` and recreate
-`superset` and `superset-mcp`; this changes the stand, so ask first.
+Relative time: `superset_config.py` sets the relative start and end from `SUPERSET_DATA_ANCHOR`
+(default `2026-07-01`, the first day of the month of the latest order), so "Last quarter" counts
+from the data, not from today. After a replay moves the data end into a later month, set it in
+`.env` and recreate `superset` and `superset-mcp`; this changes the stand, so ask first.
 
-Config changes need a restart. `superset_config.py` is mounted as a single file, and
-`make up PROFILE=bi` does not recreate `superset` when it changes, so `superset` keeps the old
-settings. Restart `superset` after editing the file (that is how `FEATURE_FLAGS` was switched on on
-2026-11-13).
+Restart `superset` after editing `superset_config.py` (`make up` does not recreate it).
 
 Dashboard notes:
 - The KPI tiles are `pop_kpi` charts, which the 6.1.0 frontend registers only with
   `CHART_PLUGINS_EXPERIMENTAL` in `FEATURE_FLAGS` (`superset_config.py`). Without it every tile shows
   "Item with key pop_kpi is not registered".
-- With "No filter" in the Period filter the KPI tiles show an error: period comparison needs a
-  closed time range. Pick a period such as "Last quarter".
-- The Harbor palette (categorical `harbor`, sequential `harbor_blue`, diverging `harbor_diverging`)
-  and the theme tokens are in `docker/superset/superset_config.py`.
+- "No filter" in the Period filter breaks the KPI tiles: pick a period such as "Last quarter".
+- The Harbor palette and the theme tokens are in `docker/superset/superset_config.py`.
 
 Check that the charts answer, from the host (reads only; the password comes from the container
 environment):
@@ -517,77 +452,61 @@ environment):
 docker exec lakehouse-superset-1 python /app/check.py
 ```
 
-It logs in through the REST API and runs every chart of the dashboard. Measured with the v1 bundle
-(4 charts) on 2026-11-06 15:52 UTC: `Cancellations: 601 rows`, `Daily sales: 601 rows`,
-`Delivery SLA by state: 27 rows`, `GMV by category, top 10: 10 rows`, exit code 0 (it exits 1
-for a failing or empty chart).
+It logs in through the REST API and runs every chart of the dashboard; it exits 1 for a failing or
+empty chart. Last run: [evidence](docs/evidence.md#superset-dashboard-v2).
+
+Freshness. `silver_upsert` merges every 5 minutes and `dbt_build` runs on its Asset. Superset caches
+chart data and metadata for 300 s (`CACHE_DEFAULT_TIMEOUT` in `superset_config.py`), so a chart can lag
+by that much. "Data through" is the date of the last purchase, not the build time.
 
 Data boundary. Superset queries Trino as the user `superset`, which has the rights of `grafana`:
 `select` on the `fct_*`, `dim_*` and `mart_*` tables of `lake_ro.gold` and nothing else
-(`docker/trino/etc/rules.json`, rule `grafana|superset`; `lake_ro` is read-only at the connector).
-The database is imported with `allow_dml: false`. As with Grafana, Trino has no authentication, so
-the user name is a label ([Access control](#access-control)).
+(`docker/trino/etc/rules.json`, rule `grafana|superset`). The database is imported with
+`allow_dml: false`. Trino has no authentication, so the user name is a label
+([Access control](#access-control)).
 
-MCP and its limits. Any MCP client can connect to `http://127.0.0.1:5008/mcp`; the client settings
-are not kept in the repository (`.mcp.json` is in `.gitignore`). Example for Claude Code:
-`claude mcp add --transport http --scope local superset http://127.0.0.1:5008/mcp`.
-- Every tool runs as the Superset user `admin` (`MCP_DEV_USERNAME`,
-  `docker/superset/superset_config.py:32`). There is no login on the endpoint: it is the local
-  single-user mode, like Airflow without a login. A client can create and change charts,
-  dashboards and saved queries in the Superset metadata; the data it can read stays inside the ACL
-  above.
-- The port is bound to `BIND_IP` (`127.0.0.1`). On top of that `FASTMCP_HTTP_HOST_ORIGIN_PROTECTION`
-  and `FASTMCP_HTTP_ALLOWED_HOSTS` (`127.0.0.1`, `localhost`, `::1`) make the server check the Host
-  and Origin headers: a foreign Host gets 421, a foreign Origin 403. Without them a web page could
-  reach the local port by DNS rebinding.
+MCP and its limits. Any MCP client can connect to `http://127.0.0.1:5008/mcp` (client settings are not kept in
+the repository). Example for Claude Code: `claude mcp add --transport http --scope local superset http://127.0.0.1:5008/mcp`.
+- Every tool runs as the Superset user `admin` (`MCP_DEV_USERNAME` in `superset_config.py`), with no
+  login on the endpoint: the local single-user mode, like Airflow without a login. A client can
+  create and change charts, dashboards and saved queries; the data it reads stays inside the ACL above.
+- The port is bound to `BIND_IP`; `FASTMCP_HTTP_HOST_ORIGIN_PROTECTION` and
+  `FASTMCP_HTTP_ALLOWED_HOSTS` check Host and Origin (421, 403), against DNS rebinding.
 - A deployment reachable from outside the machine must turn on `MCP_AUTH_ENABLED` with a JWT
-  provider and drop `MCP_DEV_USERNAME` (the comment in `superset_config.py:28-31`). This repository
-  does not configure that.
+  provider and drop `MCP_DEV_USERNAME` (see the comment next to it in `superset_config.py`); this
+  repository does not configure that.
 
 ## Airflow
 
 Profile `orchestrate`: `airflow-api-server` (UI and REST API on `127.0.0.1:8090`, no login, every
-visitor is admin: D12), `airflow-scheduler` (LocalExecutor: tasks run as processes inside this
+visitor is admin, ADR-011), `airflow-scheduler` (LocalExecutor: tasks run as processes inside this
 container) and `airflow-dag-processor`. One image, `lakehouse/airflow:dev` from
 `airflow/Dockerfile`: Airflow 3.3.2 on Python 3.12, dbt in `/opt/dbt-venv`. Config is
 `docker/airflow/airflow.env`, values from `.env`. Metadata lives in the `airflow` database of
 `postgres-meta`; the same instance holds `lakekeeper` and, on a volume that has it,
 `iceberg_catalog` (old rows, unread), which nothing here touches.
 
-Before the first start, once per `.env`, from the repo root: `make secrets`. It generates
-`AIRFLOW_FERNET_KEY` (urlsafe base64 of 32 bytes) and `AIRFLOW_API_SECRET_KEY` for a new `.env`,
-and on an existing one appends the keys that are missing. It leaves `DOCKER_GID` empty (as
-`.env.example` has it), so set it if it is empty (the command prints nothing):
+Before the first start, once per `.env`: `make secrets`. It generates `AIRFLOW_FERNET_KEY` and
+`AIRFLOW_API_SECRET_KEY` for a new `.env`, and on an existing one appends the keys that are missing.
+It leaves `DOCKER_GID` empty, so set it if it is empty (the command prints nothing):
 
 ```
 sed -i "s/^DOCKER_GID=$/DOCKER_GID=$(stat -c %g /var/run/docker.sock)/" .env
 ```
 
-- Fernet key: a `.env` from `make secrets` before 2026-10-09 holds a 32-character
-  `AIRFLOW_FERNET_KEY`, and Airflow accepts only urlsafe base64 of 32 bytes (44 characters).
-  Replace such an old key, and only before Airflow first starts, with the output of the command
-  below edited into `.env`. Once Airflow has stored connections or variables, a new key makes them
-  unreadable.
+- `AIRFLOW_API_SECRET_KEY` signs the api-server's requests for task logs; without it the UI shows no task log.
+- `DOCKER_GID` is the group of `/var/run/docker.sock`, which the scheduler joins to start
+  spark-silver through DockerOperator. Without it: `permission denied` on the socket.
 
-  ```
-  python3 -c 'import base64, secrets; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())'
-  ```
-- `AIRFLOW_API_SECRET_KEY` signs the api-server's requests for task logs, which the scheduler
-  container serves. Without it each process makes up its own, and the UI shows no task log.
-- `DOCKER_GID` is the group of `/var/run/docker.sock`; the scheduler joins it (`group_add`) to
-  start spark-silver through DockerOperator. Without it: `permission denied` on the socket.
-
-Start, with Trino on a 2 GB heap (RAM, `docs/planning/00-mini-architecture-review.md` §6):
+Start (the Trino heap is `TRINO_XMX`, see Profiles):
 
 ```
-TRINO_XMX=2g make start          # recreates trino with -J-Xmx2g
+make start
 make up PROFILE=orchestrate      # builds lakehouse/airflow:dev on the first run
-make airflow-init                # pool lake_writers, 1 slot; safe to re-run
+make airflow-init                # pools lake_writers and gold_writers, 1 slot each; safe to re-run
 ```
 
-While `orchestrate` runs, every `make start` needs `TRINO_XMX=2g` in front: compose takes it from
-the shell over `.env`, and without it recreates Trino with the 2500m of `.env`. Stop Airflow with
-`make down PROFILE=orchestrate`; the next plain `make start` puts Trino back on 2500m.
+Stop Airflow with `make down PROFILE=orchestrate`.
 
 Check it:
 
@@ -598,20 +517,17 @@ docker compose --env-file .env -f docker/compose.yaml exec airflow-scheduler \
   python -c "import docker; print(docker.from_env().ping())"   # True
 ```
 
-A new DAG starts paused (`AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION`): unpause it in the UI or
-with `airflow dags unpause <dag_id>` in the scheduler container. A trigger of a paused DAG stays
-queued. A new DAG file shows up within a minute (`AIRFLOW__DAG_PROCESSOR__REFRESH_INTERVAL=60`).
-
-Measured on 2026-10-18 (`docker stats`, idle, Trino at 2g): airflow-scheduler 386.5 MiB of 600 MiB, airflow-api-server 353.9 MiB of 700 MiB, airflow-dag-processor 202 MiB of 500 MiB, trino 756.3 MiB of 3.5 GiB. Under `dbt build` the scheduler peaked at 579 MiB of the first 600 MiB limit; it is 900 MiB since (D19).
+A new DAG starts paused: unpause it in the UI or with `airflow dags unpause <dag_id>` in the
+scheduler container; a trigger of a paused DAG stays queued. A new DAG file shows up within a minute.
 
 DAGs live in `airflow/dags/`; their shared code is `airflow/dags/lakehouse/`, which
 `.airflowignore` keeps out of DAG parsing.
 
 | DAG | Schedule | Does |
 |---|---|---|
-| `silver_upsert` | every 5 min, `max_active_runs=1`, 1 retry; each task 10 min, the run 30 min | `bronze_has_new_snapshot` skips the run when bronze has no snapshot silver has not merged; `merge` starts spark-silver (DockerOperator, pool `lake_writers`) and publishes the Asset `lake.silver`; `remember_snapshot` stores the merged snapshot id in the Variable `silver_upsert_last_bronze_snapshot` |
+| `silver_upsert` | every 5 min, `max_active_runs=1`, 1 retry; each task 10 min, the run 30 min | `bronze_has_new_snapshot` skips the run when silver has merged every bronze snapshot; `merge` starts spark-silver (DockerOperator, pool `lake_writers`) and publishes the Asset `lake.silver`; `remember_snapshot` stores the merged snapshot id in the Variable `silver_upsert_last_bronze_snapshot` |
 | `dbt_build` | Asset `lake.silver`; the task 15 min, the run 20 min | `dbt build` of `lake.gold` from `/opt/dbt-venv`, no retries; a manual run takes dbt vars from its conf, `{"dbt_vars": "{...}"}` |
-| `dq_checks` | every 15 min; each task 10 min, the run 14 min | fails on a primary key twice in silver, or on silver differing from Postgres at rest; logs `dq <name>=<value>` lines: delivery repeats and source no-ops of the last hour, new quarantine rows, freshness of each silver table, `dbt source freshness`; sends the same values to Prometheus (see "Observability", `lakehouse_*`), except the quarantine count |
+| `dq_checks` | every 15 min; each task 10 min, the run 14 min | `cdc_progress` reads the CDC position; `silver_keys_unique` fails on a primary key twice in silver; `silver_matches_postgres` fails when silver differs from Postgres at rest; `reconcile_values` compares values source-silver and silver-gold and GMV against the source, fails on a difference at rest, on a failed gold snapshot check (`dq gold_stale_failed=1`) and on a failed GMV step or CDC re-read; `dbt_source_freshness` fails when its query fails, not when the source is stale; `report` logs `dq <name>=<value>` lines and sends them to Prometheus (see "Observability", `lakehouse_*`), except the quarantine count |
 | `iceberg_maintenance` | daily; each task 60 min, the run 4 h | `optimize` of each silver table through Trino, in pool `lake_writers`; the Spark steps (position deletes, `expire_snapshots` of silver and gold, compaction of past bronze days) only in a run with `{"expire_and_compact": true}`, see "Maintenance" |
 | `iceberg_orphans` | weekly; each task 60 min, the run 4 h | `remove_orphan_files` of silver, gold and bronze metadata; a dry run unless the run has `{"dry_run": false}` |
 
@@ -622,146 +538,63 @@ running `merge` ends, `make silver`, then `airflow dags unpause silver_upsert`. 
 Airflow continues from the checkpoint of the last `make silver`.
 
 A paused `dbt_build` loses Asset events. Airflow 3.3 queues no Asset event for a DAG that is paused
-(`airflow/assets/manager.py:354` in the Airflow image: `if not ref.dag.is_paused`) and does not
-replay it on unpause. On 2026-11-06 the `lake.silver` event of 12:11:49 UTC, which came while
-`dbt_build` was paused, created no run, and gold stayed behind silver. So after you unpause
-`dbt_build`, trigger it once by hand (`airflow dags trigger dbt_build`), unless a silver merge with
-events will follow. `make chaos-silver-kill` does this itself after it lifts its own pause
-(`scripts/chaos/silver-kill.sh:46-59`). If it is forgotten, `dq_checks` counts the runs that find the
-stand at rest and gold older than silver (Variable `dq_gold_stale_runs`) and the alert
+(`airflow/assets/manager.py:354` in the Airflow image) and does not replay it on unpause: on
+2026-11-06 the `lake.silver` event of 12:11:49 UTC created no run, and gold stayed behind silver.
+So after you unpause `dbt_build`, trigger it once by hand (`airflow dags trigger dbt_build`),
+unless a silver merge with events will follow. `make chaos-silver-kill` does this itself after it
+lifts its own pause (`cleanup` in `scripts/chaos/silver-kill.sh`). If it is forgotten, `dq_checks` counts
+the runs that find the stand at rest and gold older than silver (Variable `dq_gold_stale_runs`) and
 `GoldStaleAtRest` fires after two in a row (see "Alerts").
 
-Timeouts (audit 30.10, B1). Every task has an `execution_timeout` and every DAG a
-`dagrun_timeout`; all attempts of a task fit in its run (`make dags-check` and
-`tests/unit/test_dags.py` check it). The Spark tasks remove their container with force, so a task
-that times out stops its Spark job. Such a failure reads `Process timed out` followed by
-`NotFound: No such container`: `on_kill` tries to stop a container the timeout already removed.
-The merge container has a fixed name, `lakehouse-silver-merge`: a second Airflow merge fails with
-409 while it exists, and `make silver` refuses too. After a killed scheduler or worker the
-container can stay behind and every merge fails with `name "/lakehouse-silver-merge" is already
-in use`. Check `docker ps -a --filter 'name=^/lakehouse-silver-merge$' --format '{{.Status}}'`:
+The checks of `dq_checks` have known windows; no fix is decided. (1) A write to the source between `cdc_progress` and the first position read
+in `reconcile_values` (about 7 to 8 s) shows neither as a standing CDC nor as a shift. (2) A merge
+that commits silver in the middle of `dbt_build` while gold is committed later from the old silver
+leaves the gate open until the next build. (3) Kafka down for less than 20 minutes while the slot
+moved earlier in the same 15 minutes: the first run at rest is red, a true signal through a check
+written for another cause ([scenario 8](docs/failure-scenarios.md#8-kafka-down-for-6-minutes)). A CDC position that shifts
+during the check reads as `in flight`, not as red.
+
+Separately, `dbt_build` and the silver merge do not exclude each other: a build longer than about 4
+minutes can meet a merge and fail on a relationships test; the next build fixes it.
+
+Timeouts. Every task has an `execution_timeout` and every DAG a `dagrun_timeout`; all attempts of a
+task fit in its run (`make dags-check` and `tests/unit/test_dags.py` check it). The Spark tasks
+remove their container with force, so a task that times out stops its Spark job; the failure reads
+`Process timed out` followed by `NotFound: No such container` (`on_kill` stops a container the
+timeout already removed).
+The merge container has a fixed name, `lakehouse-silver-merge`: a second merge fails with 409
+while it exists, and `make silver` refuses too. After a killed scheduler or worker it can stay
+behind and every merge fails with `name "/lakehouse-silver-merge" is already in use`. Check `docker ps -a --filter 'name=^/lakehouse-silver-merge$' --format '{{.Status}}'`:
 `Up` is a live writer, wait for it; `Exited` is a leftover, `docker rm lakehouse-silver-merge`
 with the owner's ok (never `rm -f` on an `Up` one). The name is global to the Docker host: a
-second stack of this repo on the same Docker would collide on it. Not proven live: a timeout on a
-real merge, and what `dagrun_timeout` does to a running container (SIGTERM, then SIGKILL after
-5 s; if the JVM is slower, the container stays and the next merge fails loudly with the 409).
+second stack of this repo would collide on it. Not proven live: a timeout on a real merge, and what
+`dagrun_timeout` does to a running container (SIGTERM, then SIGKILL after 5 s; if the JVM is slower,
+the container stays and the next merge fails with the 409).
 
-`reconcile_values` compares by value (`make reconcile` uses the same fingerprint since 2026-10-30,
-for the source-silver pairs only and without the at-rest check): a row
-fingerprint is the md5 of the canonical text of every column (null as `\N`, decimals at the contract
-scale, timestamps as epoch milliseconds), built the same in Postgres and Trino; a table is the row
-count plus the md5 of its sorted `key=fingerprint` pairs. Pairs: each of the seven source tables
-against silver (live rows), and `fct_orders`, `fct_order_items` (soft-deleted rows included, with
-their flag), `dim_products`, `dim_sellers` against silver; `dim_customers` only by row count (its
-grain is `customer_unique_id`). Only at rest (`checks.at_rest`; the silver-gold pairs also wait until
-`fct_orders.updated_at` has caught up with silver); otherwise the task is green, prints `in flight, no
-verdict` and sets `lakehouse_dq_reconcile_in_flight` to 1; with a stalled CDC (W6-D9, see the
-alert table) only the silver-gold pairs run and the gauge is 1. Red means a value differs at rest: the log
-lists the first 20 keys of each kind of difference and, for a key silver lacks, why (`quarantined`,
-`merge_pending`, `unknown`). Measured 2026-10-23: 7 source-silver and 5 silver-gold verdicts in 7 s
-inside the task (25 s through the Trino CLI), 0 differing, 19 `reconcile_rows` series; right after a
-20 s burst the task said `in flight`. The negative path (a changed value at an equal count, a missing
-key and its reason) is covered by unit tests, since a live difference would have to be written to
-the source, and from there it goes to silver.
-
-GMV against the source (audit B5, 2026-10-30; it replaces the part of W5-D9 that left the marts to
-the dbt tests alone): after the silver-gold pairs, `reconcile_values` compares GMV per purchase
-date in Postgres (`sum(price)` of `shop.order_items` joined to `shop.orders`, status not
-`canceled` or `unavailable`, the filter of `int_daily_sales`) with `gold.mart_daily_sales` (days
-with a live item), pair `source_gold`, table `mart_daily_sales_gmv`, exact decimal text. It runs
-only when the source pairs run (at rest, CDC not stalled) and only when the mart has caught up
-with `fct_orders` (`max(source_updated_at)` of the mart not older than `max(updated_at)` of
-`fct_orders`), since `dbt build` rebuilds `fct_orders` before the mart; otherwise the log says
-`mart_daily_sales has not caught up with fct_orders: GMV not compared`. Postgres is read last, so
-the CDC position (write counter of schema `shop` and the confirmed LSN of the slot, as in
-`cdc_progress`) is read once after the rest check, before the source-silver pairs, and again just
-before the GMV query; if either value differs, the source wrote or the slot moved while the task
-ran, gold may be behind the source, and the log says `in flight: ... GMV not compared`. If a GMV
-step fails (the `MART_UPDATED` read, the second CDC read, or a GMV query), the finished verdicts
-and the run count are still printed and sent, `lakehouse_dq_reconcile_gmv_compared` is 0, the log
-has `dq reconcile_gmv_failed=1`, and the task then fails with that error; with a difference
-found at the same time it fails with `ValueError` that lists the difference and names the failure. The
-full recompute test compares the mart only with `int_daily_sales`, so a wrong filter in that model
-passes it; this comparison does not share the model's SQL. Measured 2026-10-30 by `select`: 596 days, fingerprint
-`0857d53200f24741049bbdf3c2d3520f` on both sides, totals 13 101 558.80 and 108 637 items; the same
-GMV computed with `canceled` left in gives another fingerprint (`ba89f32e...`), so such a change in
-the model turns the task red for every date dbt rebuilds after it.
-
-A red `dq_checks` task: `silver_keys_unique`: silver holds a primary key
-twice, which MERGE must never produce; read the last `silver_upsert` log and the quarantine.
-`silver_matches_postgres`: counts differ although bronze has been quiet for 5 minutes and silver
-merged its latest snapshot and CDC is not stalled (below), so a change never reached silver;
-`make verify` (with the scheduler stopped) shows the offsets and the counts. `reconcile_values`
-with `source_gold mart_daily_sales_gmv`: GMV of a purchase date in the mart differs from Postgres
-at rest; the log names the dates. With `dq reconcile_gmv_failed=1` in the log it is a failed query,
-not a difference: read the error next to it. A soft-deleted order leaves its old date stale (D18, the
-replayer does not delete orders; a seller moved to another state does not change GMV per day, only
-the full recompute test sees it). While neither `silver_upsert` nor `dbt_build` runs,
-`cd dbt && uv run dbt build --profiles-dir . --target dev --select mart_daily_sales --full-refresh`
-rebuilds the mart; a wrong filter in `int_daily_sales` needs a fix of the model.
-Differences with `at_rest=False` are normal during a replay burst. A stale `dbt source freshness`
-(exit code 1) is logged, not failed: no traffic is not a broken pipeline.
-
-Host sleep pauses the Docker VM. A task in flight at that moment fails on wake: Trino has
-abandoned its query (`ABANDONED_QUERY`), the scheduler fails task instances without a heartbeat,
-and the task's API token has expired (`Invalid auth token`). Before reading a red run as a
-pipeline failure, look for `Heartbeat recovered after <n> seconds` just before it in
-`docker logs lakehouse-airflow-scheduler-1`. A sleep longer than a DAG's `dagrun_timeout` also
-fails its run by timeout on wake. Keep Windows sleep off while the stack runs
-(`powercfg /change standby-timeout-ac 0`, the same for `hibernate-timeout-ac`).
+`reconcile_values` (value comparison source-silver and silver-gold, GMV against the source) and
+what a red `dq_checks` task means: [dq-checks runbook](docs/runbooks/dq-checks.md#a-red-dq_checks-task).
+A red run after host sleep: step 2 of [airflow-dag-failed](docs/runbooks/airflow-dag-failed.md).
 
 ## Observability
 
-`make up PROFILE=obs` on top of `core` (and usually `orchestrate`); it starts nothing from
-`core`. Prometheus on http://127.0.0.1:9090, Grafana on http://127.0.0.1:3000 (`admin`, password
-`GRAFANA_ADMIN_PASSWORD` from `.env`). Exporters have no host ports; Prometheus reaches them on
-the `lake` network.
+`make up PROFILE=obs` on top of `core` (and usually `orchestrate`). Prometheus on
+http://127.0.0.1:9090, Grafana on http://127.0.0.1:3000 (`admin`, password `GRAFANA_ADMIN_PASSWORD`
+from `.env`). Exporters have no host ports.
 
 | Job | Target | What it gives |
 |---|---|---|
 | `prometheus` | `localhost:9090` | Prometheus itself, `prometheus_tsdb_head_series` |
-| `kafka-connect` | `kafka-connect:9404` | JMX agent in the Connect JVM (`docker/connect/`): `kafka_connect_connector_status`, `kafka_connect_connector_task_status{connector,task,status}` (1 for the current status), `debezium_postgres_streaming_*` (`Connected`, `MilliSecondsSinceLastEvent`, `MilliSecondsBehindSource`, `TotalNumberOfEventsSeen`; -1 and 0 until the first event after a start), `jvm_*` |
+| `kafka-connect` | `kafka-connect:9404` | JMX agent in the Connect JVM (`docker/connect/`): `kafka_connect_connector_task_status{connector,task,status}`, `debezium_postgres_streaming_*` (-1 and 0 until the first event after a start), `jvm_*` |
 | `spark-bronze` | `spark-bronze:4041` | bronze listener: rows, batch duration, last batch time, `spark_streaming_kafka_lag{query,topic,partition}` (ADR-013) |
 | `kafka-exporter` | `kafka-exporter:9308` | brokers, topic and partition offsets (not Spark's lag: ADR-013) |
 | `postgres-exporter` | `postgres-exporter:9187` | `pg_*`, plus `lakehouse_slot_retained_bytes` and `lakehouse_slot_active` per slot from `observability/postgres-exporter/queries.yaml` |
-| `statsd-exporter` | `statsd-exporter:9102` | StatsD of Airflow (`AIRFLOW__METRICS__STATSD_*` in `docker/airflow/airflow.env`): `airflow_dagrun_success_seconds{dag_id}`, `airflow_dagrun_failed_seconds{dag_id}`, `airflow_ti_finish_total{dag_id,task_id,state}`, `airflow_task_duration_seconds{dag_id,task_id}` by `observability/statsd/mapping.yml`; unmapped names pass through with underscores. `dq_checks` gauges (`lakehouse_*`, below) |
+| `statsd-exporter` | `statsd-exporter:9102` | StatsD of Airflow (`AIRFLOW__METRICS__STATSD_*` in `docker/airflow/airflow.env`): `airflow_dagrun_failed_seconds{dag_id}`, `airflow_ti_finish_total{dag_id,task_id,state}`, `airflow_task_duration_seconds{dag_id,task_id}` by `observability/statsd/mapping.yml`; `dq_checks` gauges (`lakehouse_*`, [series](observability/README.md#series)) |
 | `container-exporter` | `container-exporter:9105` | `docker_container_*{name,service}`: memory as `docker stats`, limit, CPU, start time, restarts, OOM kill, health (ADR-023) |
 
-`dq_checks` sends DogStatsD gauges over UDP to `statsd-exporter:9125` (`lakehouse/metrics.py`,
-`STATSD_HOST` and `STATSD_PORT` default to that); tags become labels, and the mapping gives every
-`lakehouse.*` series a TTL of 45 minutes (three cadences), so a series disappears when `dq_checks`
-stops instead of showing its last value for ever.
-
-| Series | Labels | Meaning |
-|---|---|---|
-| `lakehouse_table_freshness_seconds` | `layer` (`silver`, `bronze`), `table` | seconds since the newest `_updated_at` (silver, 7 tables) or `ingest_ts` (bronze, per `source_table`); grows for hours between replay bursts, which is "no traffic", not a fault |
-| `lakehouse_silver_lag_seconds` | none | seconds the oldest bronze snapshot silver has not merged has waited; 0 at rest. It is not freshness. Not sent while the Variable `silver_upsert_last_bronze_snapshot` is missing or names a snapshot bronze no longer has |
-| `lakehouse_dq_silver_duplicate_keys` | `table` | primary keys twice in a silver table (8 incl. quarantine) |
-| `lakehouse_dq_reconcile_tables_differing` | `at_rest` | tables whose live row count differs from Postgres |
-| `lakehouse_dq_lsn_repeats_last_hour`, `lakehouse_dq_noop_updates_last_hour` | none | delivery repeats and no-op updates of the last hour |
-| `lakehouse_dq_dbt_source_freshness_exit_code` | none | 0, or 1 for a stale source |
-| `lakehouse_dq_last_run_timestamp_seconds` | none | Unix time of the last `report` task |
-
-`reconcile_values` (W5-T04) adds the series of the value reconciliation:
-
-| Series | Labels | Meaning |
-|---|---|---|
-| `lakehouse_dq_reconcile_rows` | `layer` (`source`, `silver`, `gold`), `table` | rows compared (20 series: 7 + 7 + 6; for `mart_daily_sales_gmv` the count is days) |
-| `lakehouse_dq_reconcile_values_differing` | `pair` (`source_silver`, `silver_gold`, `source_gold`), `table` | keys on both sides whose row fingerprints differ (for `source_gold`: purchase dates whose GMV differs) |
-| `lakehouse_dq_reconcile_keys_missing` | `pair`, `table`, `side` | keys the other side lacks; `side="right"` is a key the source (or silver) has and silver (or gold) lacks |
-| `lakehouse_dq_reconcile_in_flight` | none | 1 while work is in flight and no verdict was made, or while a stalled CDC keeps the source-silver pairs out (the silver-gold pairs are still compared) |
-| `lakehouse_dq_cdc_stalled` | none | 1 while CDC stands: the source wrote since the previous run (write counter of schema `shop` in `pg_stat_user_tables`) and `confirmed_flush_lsn` of `shop_slot` did not move; it stays 1 until the slot moves. 0 without a slot, and for one run after a reset of the statistics (1 again at the next write while the slot stands). Sent every run, whether or not counts differ |
-| `lakehouse_dq_reconcile_verdict_timestamp_seconds` | none | Unix time of the last verdict |
-| `lakehouse_dq_reconcile_gold_compared` | none | 1 when the run compared silver and gold, 0 when it did not: nothing at rest, or gold behind silver |
-| `lakehouse_dq_reconcile_gmv_compared` | none | 1 when the run compared GMV per day with Postgres, 0 when it did not: not at rest, CDC stalled or moved during the run, gold behind silver, the mart behind `fct_orders`, or a failed GMV step |
-| `lakehouse_dq_gold_not_compared_runs` | none | runs in a row without a silver-gold comparison (Airflow Variable `dq_gold_not_compared_runs`), 0 after a comparison |
-| `lakehouse_dq_gold_stale_runs` | none | runs in a row that found the stand at rest and gold stale (Airflow Variable `dq_gold_stale_runs`), 0 after a run that did not; not sent when the check itself failed. Stale means: the newest data snapshot (operation other than `replace`) of the seven silver tables is newer than the oldest of the latest rebuilds of the seven table marts of gold (`dim_*`, `fct_order_items`, `fct_orders`, `mart_delivery_sla`, `mart_seller_performance`), or the watermark of `mart_daily_sales` is behind `fct_orders` (`airflow/dags/lakehouse/reconcile.py:170-218`, `SILVER_DATA_CHANGED`, `GOLD_REBUILT`, `MART_UPDATED`) |
-
-Values come at the cadence of `dq_checks` (15 minutes), so an alert on them can lag by that long.
-A negative value is never sent (StatsD would read it as a decrement). The quarantine count stays
-in the log: its metric and alert are the owner's Modify gate (W4-D8). UDP gives no receipt: the
-check is the series in Prometheus. With `obs` down the tasks print `statsd: could not send` and
-stay green (checked 2026-10-23).
+The series `dq_checks` sends (`lakehouse_*`, DogStatsD over UDP, a 45 minute TTL):
+[observability/README.md](observability/README.md#series). They come every 15 minutes, so an alert
+on them can lag by that long. The quarantine count stays in the log (its metric and alert are the
+owner's decision). UDP gives no receipt: the check is the series in Prometheus.
 
 Check it:
 
@@ -771,98 +604,68 @@ curl -s 127.0.0.1:9090/api/v1/query --data-urlencode 'query=lakehouse_slot_retai
 curl -s 127.0.0.1:3000/api/health
 ```
 
-- Their `depends_on` on `core` services is `required: false`, so `make up PROFILE=obs` stays a
-  valid project without `core`. The healthchecks of `kafka-exporter` and `postgres-exporter` look
-  for `kafka_brokers` above 0 and `pg_up 1`, since `/metrics` answers 200 with the broker or the
-  database down; without `core` both should stay unhealthy (not run live: `core` was up).
-- `observability/prometheus` is mounted read-only as a directory. After editing rules or scrape
-  configs: `docker exec lakehouse-prometheus-1 kill -HUP 1` (busybox `kill` is in the image).
-  Never `docker kill -s HUP`: the daemon records any `docker kill` as a manual stop, and after the
-  next Docker restart `unless-stopped` leaves the container down. That is the likely cause of
-  Prometheus staying `Exited (255)` after the Docker restarts of 2026-10-27 and 2026-10-30, both
-  after a `docker kill -s HUP` (inferred from moby's `killWithSignal`, not reproduced).
-  `make report` lists such containers.
-- Kafka Connect: `/kafka/config` is an anonymous volume of the Debezium image, and a recreated
-  container keeps the old one. A file the image layer adds there is hidden, so `metrics.yaml` is
-  bind-mounted; without it the agent stops the JVM and Connect restarts in a loop (2026-10-19,
-  ten minutes of no CDC).
-- Airflow sends StatsD over UDP: without `obs` the packets are lost and Airflow keeps running
-  (scheduler healthy in 66 s with `obs` down, no `gaierror`, 2026-10-19).
-- Grafana provisioning is mounted whole over the image's directory, so `provisioning/alerting`
-  and `provisioning/plugins` exist in the repo empty: without them Grafana logs errors.
-- Every file compose mounts must exist before the first start: a missing file becomes a
-  root-owned directory on the host. `find observability -type d -name '*.y*ml'` must print nothing.
-- `container-exporter` holds the Docker socket (root on the host in effect) and only sends GET.
-  It joins the socket's group `DOCKER_GID` from `.env`, as the scheduler does; a wrong group
-  shows as `up == 0` with a permission error in its log. An empty container list fails the
-  scrape too: it means `COMPOSE_PROJECT_NAME` does not match the stack.
-  `docker_container_restart_count` counts restarts by the restart policy only; `docker restart`
-  shows as a new `docker_container_start_time_seconds`.
+Mounts, the reload of Prometheus, the Connect volume and the other notes on the profile:
+[observability/README.md](observability/README.md#notes).
+
+### SLIs and thresholds
+
+| SLI | Metric | Threshold and alert |
+|---|---|---|
+| Bronze freshness against Kafka | `spark_streaming_kafka_lag`, `time() - spark_streaming_last_batch_timestamp` | 300 s without a batch: `SparkNoBatch5m`; no alert on lag, it is 0 at rest |
+| Silver freshness against bronze | `lakehouse_silver_lag_seconds` | 900 s: `FreshnessAbove15m`; 900 s plus up to 15 minutes until the next `dq_checks` (1561 s measured) |
+| Gold freshness against silver | `lakehouse_dq_gold_stale_runs`, `lakehouse_dq_gold_not_compared_runs` | 2 runs at rest: `GoldStaleAtRest`; 24 runs: `SilverGoldNotCompared`; no gauge for the age of gold |
+| Table freshness | `lakehouse_table_freshness_seconds` | no alert: no traffic between replay bursts is not a fault |
+| CDC | `kafka_connect_connector_task_status`, `lakehouse_dq_cdc_stalled` | task not `running` for 1m: `ConnectorNotRunning`; stalled 20 minutes: `CdcStalledSourceWrites` |
+| Replication slot | `lakehouse_slot_retained_bytes`, `lakehouse_slot_active` | 64 MiB inactive or 512 MiB any, 5m: `SlotWalRetainedHigh`; 64 MiB for an hour on an active slot: `SlotWalHeldIdle`; a healthy slot holds about 25 MB |
+
+These are targets for a laptop, not SLOs with an error budget.
+
 ### Alerts
 
-Thirteen alerts in `observability/prometheus/alerts.yml`, tested by `make alerts-test` (promtool, failure
-cases first). The first six are each shown firing in their own scenario; the next three, added after
-the review of weeks 4 and 5, watch for a source that went silent, two more (week 6) catch a
-slot that holds WAL on an idle source and a Spark restart loop, `SilverGoldNotCompared` (audit
-30.10) says `dq_checks` has not compared silver and gold for 24 runs in a row, and `GoldStaleAtRest`
-(audit 06.11) says gold was not rebuilt after silver changed. These seven are proven
-by promtool;
-`CdcStalledSourceWrites` also fired live in chaos 6 (2026-10-29), and `SparkRestartLoop` was run
-over the stored chaos 8 data (below), never live. Thirteen names make 16 rules (`make alerts-test`: `SUCCESS: 16 rules found`, 2026-11-06): `SparkNoBatch5m`,
-`FreshnessAbove15m` and `DqChecksStale` have two each. No Alertmanager (ADR-023):
-read them in the Prometheus UI (`/alerts`), `curl 127.0.0.1:9090/api/v1/alerts` or the "Firing
-alerts" panel. After editing the file: `docker exec lakehouse-prometheus-1 kill -HUP 1` (see above
-why not `docker kill`).
+13 alerts in 16 rules in `observability/prometheus/alerts.yml` (`SparkNoBatch5m`, `FreshnessAbove15m`
+and `DqChecksStale` have two each), tested by `make alerts-test`; live proof and time to fire:
+[evidence](docs/evidence.md#alerts-and-time-to-fire). No Alertmanager (ADR-023): read them in the
+Prometheus UI (`/alerts`), `curl 127.0.0.1:9090/api/v1/alerts` or the "Firing alerts" panel. After
+editing the file: `docker exec lakehouse-prometheus-1 kill -HUP 1`, never `docker kill -s HUP`
+([why](observability/README.md#notes)).
 
 Nothing watches the watcher: when Prometheus itself is down, no rule is evaluated, Grafana has no
-alerting set up (`provisioning/alerting` is empty) and nothing is delivered anywhere. A host that
-slept or a Docker restart shows only to someone who looks. After either, run `make report`: it
-lists project containers that are down although their restart policy is `unless-stopped`.
+alerting set up (`provisioning/alerting` is empty) and nothing is delivered anywhere. After a host
+sleep or a Docker restart run `make report`: it lists project containers that are down although
+their restart policy is `unless-stopped`.
 
-| Alert | Expression | `for` | Why this threshold | Shown in | Time to fire (2026-10-23) |
-|---|---|---|---|---|---|
-| `ConnectorNotRunning` | `absent(kafka_connect_connector_task_status{connector="shop-connector",status="running"} == 1)` | 1m | a task that is not `running` is no CDC; `absent` also covers a Connect that is down | scenario 6 | 95 s after `PUT /stop` |
-| `SlotWalRetainedHigh` | slot over 64 MiB and inactive, or over 512 MiB | 5m | an idle healthy slot holds about 25 MB; an inactive one grows without bound (`max_slot_wal_keep_size = -1`) | scenario 6 | 326 s after the stop (80 MB held) |
-| `SparkNoBatch5m` | `time() - last_batch_timestamp > 300`, and `absent(...)` for the dead driver | 1m / 5m | idle events keep the timestamp moving, so only a stuck or dead query trips it | stop `spark-bronze` | 315 s after the stop (`cause="gone"`) |
-| `FreshnessAbove15m` | `last_over_time(lakehouse_silver_lag_seconds[1h]) > 900` (the last value holds past the TTL drop) | 0 | age of the oldest bronze snapshot silver has not merged; table freshness grows between bursts and does not alert | pause `silver_upsert`, burst | 1561 s after bronze caught up (900 s plus up to 15 min until the next `dq_checks`) |
-| `AirflowDagFailed` | `increase(airflow_dagrun_failed_seconds_count[30m]) > 0` or a series new within 30 minutes while the `statsd-exporter` target was up 30 minutes earlier | 0 | the second half catches the first failure after statsd-exporter started; after a scrape gap (host sleep) old counters no longer fire. Cost: the first DAG failure in the 30 minutes after Prometheus starts (and after a sleep) is not caught; it shows in Airflow and on the "Failed Airflow DAG runs" panel | scenario 9 | 17 s after the red run ended |
-| `ContainerRestarting` | `changes(docker_container_start_time_seconds{...}[15m]) > 0`, for compose names `<project>-<service>-<n>` without the one-shot services | 0 | `docker restart` moves the start time; `RestartCount` follows only the restart policy; `lakehouse-silver-merge` and `run` containers do not end in a number and are not counted | scenarios 5 and 8 | 15 s after the restart |
-| `FreshnessAbove15m`, `cause="unknown"` | `absent(lakehouse_silver_lag_seconds)` | 15m | `dq_checks` sends no lag it cannot tell, and statsd-exporter drops a gauge 45 minutes after its last value: without this the lag alert goes quiet | promtool | |
-| `DqChecksStale` | `time() - last_over_time(lakehouse_dq_last_run_timestamp_seconds[1h]) > 1800` (`cause="stale"`), `absent(...)` (`cause="gone"`); no gap at the TTL drop (promtool case) | 0 / 15m | `dq_checks` runs every 15 minutes; a paused DAG, a stopped scheduler or a failing `report` stops every `lakehouse_dq_*` gauge | promtool | |
-| `CdcStalledSourceWrites` | `min_over_time(lakehouse_dq_cdc_stalled[20m]) == 1 and count_over_time(...[20m]) >= 70` | 0 | the source wrote and the slot confirmed nothing (Kafka or the connector down), and still nothing 20 minutes later, so two runs in a row; `dq_checks` stays green with `in flight` instead of a false `AirflowDagFailed`. One run or a late second run that says 0 stays quiet; 70 samples at 15 s keep a series with a short history from firing. A paused DAG leaves the last 1 until the statsd TTL (45 min), then this and `DqChecksStale` fire together | promtool (two runs, one run, short history); chaos 6, 2026-10-29 | 33 min after the stop (17:47:02 to 18:20:04): two `dq_checks` runs with stalled 1, then the 20 min window |
-| `ScrapeTargetDown` | `up{job!="spark-orders-per-minute"} == 0` | 2m | an exporter that is down silences its own alerts (ADR-023); the stateful job runs only with `PROFILE=stateful` | promtool | |
-| `SlotWalHeldIdle` | `min_over_time(lakehouse_slot_retained_bytes[1h])` over 64 MiB, slot active, now at most 512 MiB | 0 | an active slot moves only when the source writes (about 24 MB held after a day idle), so a whole hour above 64 MiB (at least 200 samples in the hour) means no traffic reached it; inactive or over 512 MiB is `SlotWalRetainedHigh` | promtool | |
-| `SparkRestartLoop` | `changes(docker_container_start_time_seconds{service="spark-bronze", name=~".+-spark-bronze-[0-9]+"}[10m]) > 2` | 0 | a driver that dies before its first batch keeps both `SparkNoBatch5m` rules inside their window; one planned restart stays under the threshold | chaos 8 data, TSDB replay | 51 s after the first restart (23.10 data, rule not loaded then) |
-| `GoldStaleAtRest` | `last_over_time(lakehouse_dq_gold_stale_runs[1h]) >= 2`, severity `warn` | 0 | gold is older than silver while nothing is in flight: `dbt_build` paused or red, or its Asset event lost for a paused DAG (see "Airflow"). By Iceberg snapshots, not by data. One run that sees it stale can still be the build on its way (`dbt_build` takes under a minute, `dq_checks` runs every 15 minutes); two in a row (30 minutes) are not. Limits: it compares commit times, not the snapshot that dbt read; `expire_silver` after `optimize` can remove the newest data snapshot. Both only miss an alert, they do not raise a false one | promtool only | not shown live |
-| `SilverGoldNotCompared` | `last_over_time(lakehouse_dq_gold_not_compared_runs[1h]) >= 24` | 0 | `dq_checks` compares silver and gold only at rest; a continuous replay or a deleted order keeps it from comparing, silently. 24 runs of every 15 minutes are 6 hours of `dq_checks` working: counted in runs, so host sleep and scrape gaps do not reset or stall it, and the 60 s replay bursts leave rest between them; the 24 h run of B6 fires it by design. A dead `dq_checks` is `DqChecksStale`, not this | promtool only | not shown live |
+| Alert | Expression | `for` | Why this threshold |
+|---|---|---|---|
+| `ConnectorNotRunning` | `absent(kafka_connect_connector_task_status{connector="shop-connector",status="running"} == 1)` | 1m | a task not `running` is no CDC; `absent` covers a Connect that is down |
+| `SlotWalRetainedHigh` | slot over 64 MiB and inactive, or over 512 MiB | 5m | an idle healthy slot holds about 25 MB; an inactive one grows without bound (`max_slot_wal_keep_size = -1`) |
+| `SparkNoBatch5m` | `time() - last_batch_timestamp > 300`, and `absent(...)` for the dead driver | 1m / 5m | idle events keep the timestamp moving, so only a stuck or dead query trips it |
+| `FreshnessAbove15m` | `last_over_time(lakehouse_silver_lag_seconds[1h]) > 900` | 0 | age of the oldest bronze snapshot silver has not merged; table freshness does not alert |
+| `AirflowDagFailed` | `increase(airflow_dagrun_failed_seconds_count[30m]) > 0` or a series new within 30 minutes while the `statsd-exporter` target was up 30 minutes earlier | 0 | second half: first failure after statsd-exporter started, ignoring old counters after a scrape gap; misses a first failure in the 30 minutes after Prometheus starts |
+| `ContainerRestarting` | `changes(docker_container_start_time_seconds{name=~".+-[0-9]+", service!~"<one-shot services>"}[15m]) > 0` | 0 | `docker restart` moves the start time, `RestartCount` does not; the silver merge container is not counted |
+| `FreshnessAbove15m`, `cause="unknown"` | `absent(lakehouse_silver_lag_seconds)` | 15m | `dq_checks` sends no lag it cannot tell, and statsd-exporter drops a gauge after 45 minutes |
+| `DqChecksStale` | `time() - last_over_time(lakehouse_dq_last_run_timestamp_seconds[1h]) > 1800` (`cause="stale"`), `absent(...)` (`cause="gone"`) | 0 / 15m | `dq_checks` runs every 15 minutes; a paused DAG, a stopped scheduler or a failing `report` stops every `lakehouse_dq_*` gauge |
+| `CdcStalledSourceWrites` | `min_over_time(lakehouse_dq_cdc_stalled[20m]) == 1 and count_over_time(...[20m]) >= 70` | 0 | the source wrote and the slot confirmed nothing for two `dq_checks` runs in a row |
+| `ScrapeTargetDown` | `up{job!="spark-orders-per-minute"} == 0` | 2m | an exporter that is down silences its own alerts (ADR-023); the stateful job runs only with `PROFILE=stateful` |
+| `SlotWalHeldIdle` | `min_over_time(lakehouse_slot_retained_bytes[1h])` over 64 MiB, slot active, now at most 512 MiB | 0 | an active slot moves only when the source writes (about 24 MB held after a day idle), so a whole hour above 64 MiB means no traffic reached it |
+| `SparkRestartLoop` | `changes(docker_container_start_time_seconds{service="spark-bronze", name=~".+-spark-bronze-[0-9]+"}[10m]) > 2` | 0 | a driver that dies before its first batch keeps both `SparkNoBatch5m` rules inside their window; one planned restart stays under the threshold |
+| `GoldStaleAtRest` | `last_over_time(lakehouse_dq_gold_stale_runs[1h]) >= 2`, severity `warn` | 0 | gold is older than silver by Iceberg snapshots while the stand is at rest: `dbt_build` paused or red, or its Asset event lost for a paused DAG (see "Airflow"); two runs because one can be the build on its way. Silent under a continuous replay (never at rest): `SilverGoldNotCompared` speaks after 6 hours |
+| `SilverGoldNotCompared` | `last_over_time(lakehouse_dq_gold_not_compared_runs[1h]) >= 24` | 0 | `dq_checks` compares silver and gold only at rest and skips silently when the stand never is (a continuous replay); 24 runs are 6 hours of `dq_checks` working |
 
-Limits worth knowing: `absent()` alerts also burn when the source is off (obs up, core down); a
-crash-looping Spark driver (Kafka stopped, 15 restarts) dies before its first batch, its last-batch
-series stays absent and the `gone` rule is still inside its 5 minutes when Kafka returns, so
-`SparkNoBatch5m` stays quiet, and `SparkRestartLoop` catches it on the third restart
-within 10 minutes. It was not shown firing live: on 2026-10-23 the rule was not loaded, and the
-retro check ran the expression over the stored data (Prometheus `query_range`, step 15 s, taken
-2026-10-29): it was true from 17:11:15 to 17:24:15 UTC with a maximum of 15 changes, the first
-restart at 17:10:24 and the last at 17:15:10. So it fires about 51 s after the first restart, and
-after the loop ends it keeps firing for up to 10 minutes (the window). `SlotWalHeldIdle` needs a
-full hour above 64 MiB, so it is late by design and silent while traffic keeps moving the slot; on
-the move to over 512 MiB or to an inactive slot it goes out at once while `SlotWalRetainedHigh` waits
-its `for: 5m`, so up to 5 minutes pass with no alert. CDC "stands" (W6-D9) when the write counter
-of schema `shop` (`pg_stat_user_tables`) grew since the previous `dq_checks` run and `confirmed_flush_lsn`
-of `shop_slot` did not move; it keeps standing, whatever the source does next, until the slot moves
-(chaos 6 holds for 30 minutes without writes). Then the source-silver comparisons (counts and values,
-also an UPDATE, which moves no count) are `in flight, no verdict` and the gauge says 1; the silver-gold
-pairs are still compared. Expected in chaos 6 (one burst, then 30 minutes without writes): green
-and `in flight` for the whole stall, `CdcStalledSourceWrites` after about 20 minutes, the verdict
-again after the slot moves and bronze catches up (shown live in chaos 6 on 2026-10-29, below). Chaos 8 is shorter than the
-alert window (Kafka down 6 minutes), and if the slot moved earlier in the same 15 minutes (offset
-commit or heartbeat) the first run at rest still sees "the slot moved" and is red as before. The check stays strict where it cannot tell: a difference at rest is
-red when the source is silent, when the slot does not exist (CDC is dead), after a reset of the
-statistics (the counter fell, one run), and on the first run. If the counter cannot be read,
-`cdc_progress` fails with "cannot read the write counter of schema shop" and the two checks that
-need it end `upstream_failed`, so the run is red. A false 1 is possible once: a write just before
-a run, before Debezium confirmed it; it is out at the next run and too short to fire the alert. The
-`lakehouse_*` gauges arrive every 15 minutes, so alerts on them lag by that much.
+Limits worth knowing:
+
+- `absent()` alerts also fire when the source is off (obs up, core down).
+- A crash-looping Spark driver (Kafka stopped) dies before its first batch, so `SparkNoBatch5m`
+  stays quiet; `SparkRestartLoop` catches it on the third restart within 10 minutes (51 s on the
+  stored chaos 8 data, not shown live).
+- `SlotWalHeldIdle` is late by design (a full hour); when the slot goes over 512 MiB or inactive it
+  goes out at once while `SlotWalRetainedHigh` waits its `for: 5m`: up to 5 minutes with no alert.
+- CDC "stands" when the write counter of schema `shop` (`pg_stat_user_tables`) grew since the
+  previous `dq_checks` run and `confirmed_flush_lsn` of `shop_slot` did not move, until the slot
+  moves. The source-silver comparisons are then `in flight, no verdict`, the silver-gold pairs still
+  run, and `CdcStalledSourceWrites` fires after about 20 minutes (live in chaos 6, 2026-10-29).
+- A difference at rest is red when the source is silent, the slot does not exist, after a reset
+  of the statistics and on the first run; if the counter cannot be read, `cdc_progress` fails and
+  the checks that need it end `upstream_failed`.
 
 ### Dashboards
 
@@ -870,65 +673,33 @@ Grafana provisions `observability/grafana/dashboards/*.json` (classic JSON, edit
 not saved: change the file). `uv run python scripts/obs/check_dashboards.py` runs every panel query
 against Prometheus (or, for a Trino panel, its SQL against Trino on `127.0.0.1:8080`, which needs the
 `query` profile) and lists the empty ones, since a typo and a missing metric both read "No data".
-A Spark panel whose query ran fine but is empty is printed as `idle:` (exit 0) only if all of these
-hold: the expression names exactly one `query="..."` and has no `on`, `ignoring` or `group_*`; that
-query has no `spark_streaming_batch_duration_seconds` series (no batch with data since the start;
-the listener sets it on every progress event); it reported progress or idle within 300 s
-(`spark_streaming_last_batch_timestamp`); and every metric name, type (a counter with `_total`) and
-selector of the panel has metadata or a series within the 7 days of Prometheus retention
-(`--storage.tsdb.retention.time=7d` in `docker/compose.yaml`). Anything else, a typo included, is
-`empty` and exit 1. After 7 days without a batch with data, or on a fresh Prometheus volume, these
-panels are `empty` and the check exits 1 until the next batch with data; confirm with the "Seconds
-since the last bronze batch" panel and `group(last_over_time(<selector>[7d]))`. Grafana shows "no
-samples: no batch with data since start, or the job is down" on those panels.
+A Spark panel that ran fine but is empty is `idle:` (exit 0) only under conditions that are in
+[observability/README.md](observability/README.md#dashboard-check); anything else is `empty`, exit 1.
 
 | Dashboard / panel | Query (metric) | Source |
 |---|---|---|
-| Pipeline health: bronze Kafka lag | `spark_streaming_kafka_lag` | bronze listener (ADR-013) |
-| rows per second, batch duration | `spark_streaming_input_rows_total`, `spark_streaming_batch_duration_seconds` | bronze listener |
-| seconds since the last bronze batch | `time() - spark_streaming_last_batch_timestamp` | bronze listener; alert `SparkNoBatch5m` |
-| connector task status, behind source | `kafka_connect_connector_task_status`, `debezium_postgres_streaming_MilliSecondsBehindSource` | JMX agent in Connect; alert `ConnectorNotRunning` |
-| WAL retained, slot active | `lakehouse_slot_retained_bytes`, `lakehouse_slot_active` | custom query of postgres-exporter; alert `SlotWalRetainedHigh` |
-| silver lag, table freshness | `lakehouse_silver_lag_seconds`, `lakehouse_table_freshness_seconds` | `dq_checks` via StatsD; alert `FreshnessAbove15m` |
-| DQ | `lakehouse_dq_*` | `dq_checks` via StatsD |
-| task durations, failed tasks and runs | `airflow_task_duration_seconds`, `airflow_ti_finish_total`, `airflow_dagrun_failed_seconds_count` | Airflow StatsD; alert `AirflowDagFailed` |
+| Pipeline health: bronze lag, rows, batch duration, last batch | `spark_streaming_*` | bronze listener (ADR-013); `SparkNoBatch5m` |
+| connector status, behind source | `kafka_connect_connector_task_status`, `debezium_postgres_streaming_MilliSecondsBehindSource` | Connect JMX; `ConnectorNotRunning` |
+| WAL retained, slot active | `lakehouse_slot_*` | postgres-exporter; `SlotWalRetainedHigh` |
+| silver lag, table freshness, DQ | `lakehouse_silver_lag_seconds`, `lakehouse_table_freshness_seconds`, `lakehouse_dq_*` | `dq_checks` via StatsD; `FreshnessAbove15m` |
+| Airflow tasks and runs | `airflow_*` | StatsD; `AirflowDagFailed` |
 | firing alerts | `ALERTS{alertstate="firing"}` | Prometheus |
-| Infra: memory, CPU, start time, restarts, OOM, health | `docker_container_*` | container-exporter (ADR-023); alert `ContainerRestarting` |
-| Marketplace: daily sales, GMV by category, delivery SLA by state, cancellations | SQL on `lake_ro.gold.fct_orders`, `mart_daily_sales` (GMV only), `fct_order_items` | Trino datasource plugin `trino-datasource@1.4.1` (W6-D11) |
+| Infra: memory, CPU, restarts, OOM, health | `docker_container_*` | container-exporter (ADR-023); `ContainerRestarting` |
+| Marketplace: sales, GMV, delivery SLA, cancellations | SQL on `lake_ro.gold.fct_orders`, `mart_daily_sales`, `fct_order_items` | Trino plugin `trino-datasource@1.4.1` |
 
-The Marketplace dashboard needs the plugin: `GF_PLUGINS_PREINSTALL_SYNC=trino-datasource@1.4.1` in
-the `grafana` service installs it from the Grafana catalog into the `grafana` volume before Grafana
-starts (synchronously, so provisioning finds the datasource type), so the first start after the
-change needs internet and a recreated container (limit 512M). A synchronous install that fails
-halts Grafana as a whole: with a new or empty `grafana` volume and no network, Grafana does not
-start at all, the Prometheus dashboards included. Once the pinned version is in the volume, a
-restart does not ask the catalog and works offline. Datasource
-`trino` is provisioned from `observability/grafana/provisioning/datasources/trino.yml`; the plugin has no catalog
-setting, so panels name `lake_ro.gold.<table>`, the read-only twin of `lake` that the user
-`grafana` may read ("Access control" under "Query"). Trino returns decimal as a string: the panels
-convert the field to a number with a transformation and the SQL keeps the decimal. Check:
-`uv run python scripts/obs/check_dashboards.py observability/grafana/dashboards/marketplace.json`
-prints `queries ok: 4`; it runs the Trino panels as the user `grafana`, so it also fails on a panel
-the access rules deny (`lake_ro` exists only after `trino` restarted with the new catalog files).
+The Marketplace dashboard needs the Trino plugin: `GF_PLUGINS_PREINSTALL_SYNC=trino-datasource@1.4.1`
+installs it into the `grafana` volume before Grafana starts. The first start needs internet, and a
+failed install halts Grafana as a whole; once the version is in the volume, a restart works offline.
+Panels name `lake_ro.gold.<table>` and convert Trino's decimal string to a number. Check: `uv run python scripts/obs/check_dashboards.py observability/grafana/dashboards/marketplace.json`
+prints `queries ok: 4`; it runs as the user `grafana`, so it also fails on a panel the rules deny.
 
-Order counts and cancellations come from `fct_orders`: `mart_daily_sales` has a row per date and
-seller state and counts an order in each of its states, so `sum(orders_count)` overstates (96650
-against 96163 orders on 2026-10-29). GMV and canceled GMV are summed from the mart (they add up);
-the category panel applies the gmv definition (live items, status neither `canceled` nor
-`unavailable`), so its categories add up to `sum(gmv)`.
+Order counts and cancellations come from `fct_orders`: `mart_daily_sales` counts an order in each
+of its states, so `sum(orders_count)` overstates. GMV is summed from the mart; the category panel
+applies the same definition, so its categories add up to `sum(gmv)`.
 
-Risk: the plugin runs any SQL the panel or Explore sends, as Trino user `grafana`. That user reads
-`fct_*`, `dim_*` and `mart_*` of `lake_ro.gold` only, and `lake_ro` is read-only at the connector
-(W6-D17, "Access control" under "Query"), so DDL, DML and table procedures from Explore get
-`Access Denied` and no table files can be deleted on Lakekeeper. Residual risk: Trino has no authentication. A Grafana admin can create a
-new Trino datasource in the UI with user `dbt` and get all rights on `lake` (`editable: false`
-protects only the provisioned datasource), and a client that reaches the Trino port can name
-itself any user. Mitigation: the Grafana admin password and the ports bound to `BIND_IP`.
-
-Freshness panels step every 15 minutes (the cadence of `dq_checks`); that is not a bug.
-
-- At rest on 2026-10-19 with `core+query+orchestrate+obs`: 2921 head series; Prometheus 142 MiB
-  of 300 MiB, Grafana 123 of 256, container-exporter 29 of 64, other exporters 8-10 of 64.
+Risk: the plugin runs any SQL the panel or Explore sends, as Trino user `grafana`; what that user may
+do and the residual risk are in [Access control](#access-control). Freshness panels step every 15
+minutes (the cadence of `dq_checks`); that is not a bug.
 
 ## Stateful job
 
@@ -939,51 +710,38 @@ Freshness panels step every 15 minutes (the cadence of `dq_checks`); that is not
 - Start: `make up PROFILE=stateful` (the image is built with `core`; nothing from `core` restarts).
   Stop: `make down PROFILE=stateful`. UI `127.0.0.1:4043`, metrics `:4041` inside the network
   (Prometheus job `spark-orders-per-minute`).
-- It reads from the beginning of the topic on the first start, so the table fills up to the data
-  Kafka still holds (24 h of retention).
+- It reads from the beginning of the topic on the first start (Kafka keeps 24 h).
 - Metrics (the query label is `orders_per_minute`): `spark_streaming_state_rows` (windows held),
-  `spark_streaming_watermark_timestamp_seconds` (event time of the data: a date in the replay's
-  past, not the clock), `spark_streaming_late_rows_dropped_total`, plus the batch metrics of
-  bronze. Read `late_rows_dropped` as: rows behind the watermark in that batch, counted once the
-  batch after the one that moved the watermark has run.
-- Reset (the checkpoint is on the blast-radius list, so with the owner's "ok"): the table is derived
-  and a MERGE never lowers a count, so deleting `checkpoints/orders_per_minute` and starting again
-  recomputes from Kafka without undoing anything; windows older than Kafka's retention keep their
-  old counts. Needed when the service was down longer than 24 h (`failOnDataLoss`).
+  `spark_streaming_watermark_timestamp_seconds` (event time of the data, not the clock),
+  `spark_streaming_late_rows_dropped_total` (rows behind the watermark, counted once the batch after
+  the one that moved the watermark has run), plus the batch metrics of bronze.
+- Reset (blast radius, needs the owner's "ok"): a MERGE never lowers a count, so deleting
+  `checkpoints/orders_per_minute` and starting again recomputes from Kafka; windows older than
+  Kafka's retention keep their counts. Needed after more than 24 h down (`failOnDataLoss`).
 - After a start or restart the state and watermark series are absent until the first batch with
-  data (an idle trigger carries no state), so `check_dashboards.py` lists those two panels as `idle`
-  (not empty) on a quiet system while the query keeps making idle triggers, for at most the 7 days
-  of Prometheus retention since the last batch with data.
-- Live check (2026-10-23, 60 s burst, 12 virtual hours): per minute, `silver.orders_per_minute`
-  against `count(*)` of `silver.orders` from the burst's start: 164 windows, 0 differing, 194
-  orders each side; `spark_streaming_late_rows_dropped_total` 0, so no partition skew beat the
-  watermark at 720x. After `restart` the job resumed from its checkpoint and the same comparison
-  gave 0 again. `make watermark-live`: the oldest order of the last 12 hours was dropped once
-  (`dropped 0 -> 1`), the newest was counted once (`1 -> 1`), the sum of orders stayed 819.
-  Memory of all containers with the profile: 8.2 GiB (below the 10 GiB stop rule, W4-D5).
-- Demos: `make watermark-demo` (lab topic, three `availableNow` runs, own table
-  `demo.orders_per_minute`, needs only the `core` stack) and `make watermark-live` (needs the
-  service; re-sends the oldest real order, which the watermark must drop once, and the newest, which
-  it must count once; `lsn_repeats_last_hour` grows by 2, silver absorbs both by LSN).
+  data, so `check_dashboards.py` lists those two panels as `idle` (not empty) on a quiet system, for
+  at most the 7 days of Prometheus retention since the last batch with data.
+- Live check of 2026-10-23 (per-minute counts against `silver.orders`, `make watermark-live`, memory):
+  the Stateful job row of [README](README.md).
+- Demos: `make watermark-demo` (lab topic, own table `demo.orders_per_minute`, needs only `core`)
+  and `make watermark-live` (needs the service; re-sends the oldest real order, which the watermark
+  must drop once, and the newest, which it must count once; `lsn_repeats_last_hour` grows by 2,
+  silver absorbs both by LSN).
 
 ## Maintenance
 
 Policy and reasons: ADR-025. `iceberg_maintenance` (daily 03:30) and `iceberg_orphans` (weekly,
 Sunday 04:00) are created paused and unpaused one rung at a time (the ladder in ADR-025); do not
 unpause them to "see what happens": `expire_snapshots` and `remove_orphan_files` delete files, and
-the lake has no regular backup (the one-off copy of `warehouse/` taken before the first deletion is
-described below). Since 2026-10-29 `iceberg_maintenance` is unpaused and `iceberg_orphans` is still
+the lake has no regular backup (see Backup). Since 2026-10-29 `iceberg_maintenance` is unpaused and `iceberg_orphans` is still
 paused. `iceberg_maintenance` existed before its Spark steps, so "created paused" does not hold
 them back: they run only in a run with `{"expire_and_compact": true}` (a scheduled run does
 `optimize` only), and turning them on daily is a change of the param's default with its own "ok".
-`iceberg_orphans` resolves the dry-run flag of its mapped gold tasks in `gold_orphan_commands`
-(Airflow does not render templates in values a mapped task gets from XCom). After unpausing,
-`iceberg_orphans` starts a run at once: its last due date is in the past. Rebuild the Spark image
-first (`docker compose ... --profile core build spark-bronze`): the DAG files are live as soon as
-they are saved, the job `maintenance.py` only after the image.
+After unpausing, `iceberg_orphans` starts a run at once: its last due date is in the past. Rebuild the Spark image
+first (`docker compose ... --profile core build spark-bronze`): DAG files are live when saved, the
+job `maintenance.py` only after the image.
 
-By hand, from the repo root (nothing runs by itself; `--entrypoint` skips `run-job.sh` only for
-probes, the job form is):
+By hand, from the repo root (nothing runs by itself):
 
 ```
 C="docker compose --env-file .env -f docker/compose.yaml --profile core run --rm --no-deps spark-silver"
@@ -995,122 +753,14 @@ $C maintenance rewrite-data --before-today lake.bronze.cdc_events
 
 Each call prints one JSON line (`dry_run`, the table, candidates or removed files). A refusal
 (`expire` on bronze, a term under 7 days on silver or gold, `orphans` on bronze without
-`--location-suffix metadata`, a suffix other than `metadata` or `data` anywhere, `--retain-last`
-under 1) exits 1 before a Spark session starts. To read a result: for
-`expire`, compare `select count(*) from silver.<t>."$snapshots"` before and after, and that
+`--location-suffix metadata`, a suffix other than `metadata` or `data`, `--retain-last` under 1)
+exits 1 before a Spark session starts. To read a result: for `expire`, compare `select count(*) from silver.<t>."$snapshots"` before and after, and that
 `select count(*)` of the table did not move; for `orphans`, the dry run lists what the real run
 would remove.
 
-### First live run, 2026-10-29
-
-Everything below is UTC and comes from the command output of that day. The image
-`lakehouse/spark:dev` (72e423bd) was built at 16:05 from a clean HEAD (3a213c6); its code is the
-same as `streaming/spark_jobs` (sha256 diff). Steps 5 to 10 ran as manual writes: `silver_upsert`
-and `dbt_build` paused and finished, scheduler stopped, one command, scheduler started (windows
-16:21-16:26, 16:28-16:30 and 16:33). Order of the steps:
-
-1. Baseline (16:07): `bronze_caught_up` and `bronze_offsets_ok` exit 0; 4821 objects,
-   877 765 423 bytes under `warehouse/`.
-2. Copy (16:12): `mc mirror` of `warehouse/` to `/mnt/d/lakehouse-backup/warehouse-20261029`
-   (outside the repo). The host holds 4821 files and 877 765 423 bytes (`find`, `du -sb
-   --apparent-size`), equal to `mc du --json` and `mc ls --json`. This is a one-off copy before the
-   first deletion, not a regular backup.
-3. Demo (16:13-16:15): `iceberg_demo` compacted `lake.demo.orders` from 21 files to 1
-   (156 027 to 77 927 bytes); its expire deleted 22 data files, 43 manifests and 22 manifest lists
-   and left 1 snapshot. Then `maintenance expire --days 7 demo.orders` exited 0 with all counts 0.
-4. `spark-bronze` recreated alone (16:17): the 20 other containers kept their `Created` time;
-   healthy after 26 s, 0 restarts, log `Resuming at batch 171`, and `bronze."cdc_events$properties"`
-   has `write.metadata.delete-after-commit.enabled = true`. Rows (558 629) and `max(kafka_offset)`
-   (77 659) did not move.
-5. Bronze compaction (`rewrite-data --before-today`).
-6. `silver.sellers` expire.
-7. Expire of the other eight silver tables, one run.
-8. Expire of the nine gold tables, one run.
-9. Orphans dry runs, four runs: `demo`, silver, gold, bronze with `--location-suffix metadata`.
-10. Review of the candidates (below), then the real orphans run on bronze `metadata/` only.
-11. `make replay-burst SECONDS=60` (virtual time 2026-07-16 21:33:42 to 2026-07-17 09:29:04, 233
-    events, 76 858 to 77 091 emitted, 22 060 pending), then the normal pipeline: `silver_upsert`
-    (16:40 and 16:45) and `dbt_build` (16:40) success, `dq_checks` (16:45) success with
-    `reconcile_in_flight` 0, every `reconcile_*_differing` 0 and `tables_differing{at_rest=true}` 0.
-12. `iceberg_maintenance` unpaused (16:46). First scheduled run `scheduled__2026-10-29T03:30`
-    success: `expire_and_compact=False`, so `expire_silver`, `gold_expire_commands`, `expire_gold`,
-    `compact_bronze` and `rewrite_position_deletes` were skipped and `optimize` ran for 8 tables.
-    `make reconcile` 7/7 afterwards. `iceberg_orphans` stays paused.
-
-Before and after. The row count of every table was equal before and after, and `make reconcile`
-passed 7/7 after the silver expire.
-
-| Table | Snapshots | Data files deleted | Manifests deleted | Manifest lists deleted |
-|---|---|---|---|---|
-| `bronze.cdc_events` (compaction) | 171 to 172 (one `replace`) | 589 rewritten (46 048 268 bytes) into 24 | not run | not run |
-| `silver.sellers` | 2 to 1 | 4 | 1 | 1 |
-| `silver.customers` | 4 to 1 | 12 | 3 | 3 |
-| `silver.order_items` | 31 to 13 | 68 | 40 | 18 |
-| `silver.orders` | 38 to 15 | 51 (and 111 position-delete files) | 69 | 23 |
-| `silver.payments` | 31 to 13 | 68 | 34 | 18 |
-| `silver.products` | 4 to 1 | 12 | 3 | 3 |
-| `silver.reviews` | 23 to 7 | 54 | 38 | 16 |
-| `silver.quarantine` | 5 to 1 | 3 | 6 | 4 |
-| `silver.orders_per_minute` | 15 to 15 | 0 | 0 | 0 |
-| `gold.category_translation` | 82 to 32 | 25 | 49 | 50 |
-| `gold.dim_customers` | 41 to 16 | 25 | 25 | 25 |
-| `gold.dim_products` | 41 to 16 | 25 | 25 | 25 |
-| `gold.dim_sellers` | 41 to 16 | 25 | 25 | 25 |
-| `gold.fct_order_items` | 38 to 15 | 23 | 23 | 23 |
-| `gold.fct_orders` | 41 to 16 | 25 | 25 | 25 |
-| `gold.mart_daily_sales` | 33 to 24 | 0 | 0 | 9 |
-| `gold.mart_delivery_sla` | 36 to 15 | 21 | 21 | 21 |
-| `gold.mart_seller_performance` | 36 to 15 | 21 | 21 | 21 |
-
-Only `silver.orders` had position-delete files to delete; every other silver table reported 0.
-After the expire, no table has more than 1 snapshot older than 7 days in silver (`customers`,
-`products` and `sellers`: their only snapshot), and none in gold. `silver.orders_per_minute` kept all
-15 snapshots; its last commit was 2026-10-23 19:23:02 before and after.
-
-Bronze, before and after the compaction and the real orphans run:
-
-| Measure | Before | After |
-|---|---|---|
-| Data files in partitions before today (`$files`) | 595 in 27 partitions | 30 |
-| Rows, `max(kafka_offset)` | 558 629, 77 659 | equal |
-| Kafka end offsets (md5) | | equal, `bronze_offsets_ok` 0 |
-| Objects in `bronze/data/` | 619 | 619 |
-| Objects in `bronze/metadata/` | 465 | 444 |
-| `metadata.json` objects | 122 | 101 |
-
-Orphans. Dry runs found 0 candidates for `demo`, 0 for the 9 silver tables, 0 for the 9 gold tables,
-and 21 for bronze `metadata/` (`files_truncated` false). The review before the real run: all 21 are
-`metadata/00000` to `00020` `*.metadata.json` files written 2026-09-22 19:22-19:43; none appears in
-`$metadata_log_entries` (101 rows), `$snapshots.manifest_list` (172) or `$all_manifests` (171); the
-JDBC pointer of bronze is `00121`, which is not a candidate. The real run removed 21 files, the same
-set as the dry run, and left `bronze/data/` at 619 objects.
-
-Time of each procedure, read from the first Spark log line to the end of the command, so the
-figures are approximate. No separate time was recorded for `mc mirror` and the demo; their windows
-are in the list above.
-
-| Procedure | Time |
-|---|---|
-| `spark-bronze` recreate to healthy | 26 s |
-| Bronze compaction (`rewrite-data --before-today`) | about 16 s from the first Spark log line |
-| `silver.sellers` expire | about 10 s from the first Spark log line |
-| Expire of the other eight silver tables, one run | about 34 s from the first Spark log line |
-| Expire of the nine gold tables, one run | about 40 s from the first Spark log line |
-| Orphans dry run (each of four runs) | 9 to 23 s |
-| Real orphans run, bronze `metadata/` | about 13 s from the first Spark log line |
-
-Rollback point. The owner released the JDBC rollback point on 2026-10-29 (W6-D16 in
-`docs/planning/14-closeout-spec.md`); the rows of `iceberg_catalog` were not deleted.
-
-### Orphans next to orders_per_minute, 2026-10-30
-
-The table location `s3a://lakehouse/warehouse/silver/orders` is a string prefix of
-`silver/orders_per_minute-01a169dd-...`, so a listing by prefix would see the files of the other
-table. `$C maintenance orphans silver.orders` (dry run) at 17:48 UTC, `older_than` 2026-10-23
-17:48:44: `{"candidates":0,"dry_run":true,"files":[],"files_truncated":false}`. The first snapshot
-of `orders_per_minute` (2026-10-23 17:45:11, `append`, 3 data files) is older than that and still
-live, so its files were old enough to show up: the procedure lists the table directory, not the
-string prefix.
+First live run (2026-10-29) with times and file counts, and the check that the procedure lists a
+table directory, not a string prefix: [evidence](docs/evidence.md#first-live-run-2026-10-29) and
+[orphans next to `orders_per_minute`](docs/evidence.md#orphans-next-to-orders_per_minute-2026-10-30).
 
 ### Not proven yet
 
@@ -1127,631 +777,63 @@ branch cancels the older pull request run.
 
 | Job | What it does |
 |---|---|
-| `lint-and-test` | Temurin 17 (as the Spark image) for the local SparkSession tests, `uv sync --locked`, ruff, `bash -n` on every tracked shell script, mypy, yamllint, sqlfluff, `dbt parse`, `pytest tests/unit`, compose config, gitleaks |
-| `hadolint` | one run per Dockerfile (matrix, a test compares it with `find`), fails on warning and above; accepted findings sit in the Dockerfile as `# hadolint ignore=` with the reason |
-| `alerts-test` | `make alerts-test`: promtool `check rules` of `alerts.yml` and `test rules` of `alerts_test.yml` in the pinned Prometheus image (QA-01) |
-| `spark-tests` | builds `lakehouse/spark:ci` (layer cache `type=gha`, scope `spark`) and runs `make test-spark SPARK_IMAGE=lakehouse/spark:ci`; `FAIL_ON_SKIP=1` (`tests/unit/conftest.py`) turns any skip, `pytest.skip()` and `importorskip` included, into a failure |
+| `lint-and-test` | Temurin 17, `uv sync --locked`, ruff, `bash -n` on shell scripts, mypy, yamllint, sqlfluff, `dbt parse`, `pytest tests/unit`, compose config, gitleaks |
+| `hadolint` | one run per Dockerfile (a test compares the matrix with `find`), fails on warning and above; accepted findings sit in the Dockerfile as `# hadolint ignore=` with the reason |
+| `alerts-test` | `make alerts-test` (promtool, pinned Prometheus image) |
+| `spark-tests` | builds `lakehouse/spark:ci` and runs `make test-spark SPARK_IMAGE=lakehouse/spark:ci`; `FAIL_ON_SKIP=1` (`tests/unit/conftest.py`) turns any skip into a failure |
 | `airflow-image` | builds `lakehouse/airflow:ci` (scope `airflow`), imports Airflow, trino, psycopg and pydantic-settings, runs `dbt --version` in its venv, and `make dags-check`: every DAG file imports in the image, offline, with `docker/airflow/airflow.env`; every task has an `execution_timeout` whose attempts fit in the DAG's `dagrun_timeout`, every DockerOperator removes its container with force, and the merge has its fixed name |
-| `minio-images` | builds `lakehouse/minio:ci` and `lakehouse/mc:ci` from `docker/minio/Dockerfile` (scopes `minio`, `mc`) and runs `bash scripts/check-minio-images.sh`: the release and commit each binary prints, `sh` and `wget` in both images, a throwaway MinIO healthy on the compose healthcheck, `create-bucket.sh` (minio-init) twice |
+| `minio-images` | builds `lakehouse/minio:ci` and `lakehouse/mc:ci` from `docker/minio/Dockerfile` and runs `bash scripts/check-minio-images.sh`: the release and commit each binary prints, `sh` and `wget` in both images, a throwaway MinIO healthy on the compose healthcheck, `create-bucket.sh` twice |
 
-Every job here and the smoke job run on `ubuntu-24.04`, so a new Ubuntu release, and with it the
-default Java, reaches CI only with a commit; GitHub still updates the image under the label without
-one (`Version:` in the job log; one run can see several). `ubuntu-latest` became `ubuntu-26.04`
-with Java 25 as the default, on which the local SparkSession tests of `lint-and-test` fail
-(`getSubject is not supported`). `setup-uv` installs uv 0.12.17 (without a version it takes the
-latest), the uv on the host when this was written; nothing ties the two, so a uv upgrade on the
-host needs the same `version` change in both workflows.
+Every job here and the smoke job run on `ubuntu-24.04`, so a new Ubuntu release and its default
+Java reach CI only with a commit, though GitHub still updates the image under the label
+(`Version:` in the job log) (on `ubuntu-26.04`, Java 25, the SparkSession tests fail with
+`getSubject is not supported`). `setup-uv` installs uv 0.12.17; nothing ties it to the uv on
+the host, so a host upgrade needs the same `version` change in both workflows.
 `actions/checkout` leaves no git credentials behind (`persist-credentials: false`).
 
-`.github/workflows/smoke.yml` (on demand and weekly, Monday 03:00 UTC, W6-D2; 45 minutes at most) walks the path
+`.github/workflows/smoke.yml` (on demand and weekly, Monday 03:00 UTC while the repository is active:
+GitHub pauses scheduled workflows after 60 days without activity; 45 minutes at most) walks the path
 from a clean clone on the committed sample: `make secrets` with `REPLAY_DATA=sample`, `make
 bootstrap`, a 60 s `make replay-burst`, `make verify`, a second `make bootstrap` (must say
 `replay state exists, load skipped` and end `verify ok`). It builds the Spark, Connect, MinIO and mc
 images from scratch, so it is cold every time. Run it: `gh workflow run smoke.yml --ref main`, then
 `gh run watch <id> --exit-status`. On failure it uploads `smoke-logs` (container state and the last
-200 log lines of every service). Runs 2026-10-23 (40003292011) and 2026-10-26 (40290595866, the
-Monday schedule): red at `make start`, the MinIO images are gone from quay.io and Docker Hub; they
-are built from source since ADR-026. First green run 2026-10-29 (40907438614, `workflow_dispatch`
-on `664a7e6`); the schedule (`0 3 * * 1`) is back since then.
+200 log lines of every service). Red on 2026-10-23 and 2026-10-26: the MinIO images were gone from
+quay.io and Docker Hub (built from source since ADR-026); first green run 2026-10-29 (40907438614).
+
+Repeat locally: `make test-spark`, `make dags-check`. `make test-spark` pins `pytest` and
+`jsonschema` to the versions in `uv.lock` (`tests/unit/test_makefile.py` compares them). Runs:
+`gh run list --workflow ci`.
 
 ### Pinned images and actions
 
-Every image compose takes from a registry and every `FROM` is `name:tag@sha256:<digest>` (the
-index of the multi-arch image); every third-party action is `owner/repo@<commit sha> # vX.Y.Z`.
-The tag is for the reader, the digest and the SHA are what runs. `make alerts-test` runs promtool
-from the same Prometheus digest as compose (`PROMETHEUS_IMAGE` in the Makefile).
-`tests/unit/test_pinning.py` fails on:
-- a tag alone in compose, in a `FROM`, in a `COPY --from` or in a `RUN --mount ...,from=`;
-- a `lakehouse/*` image no service builds, or one without `pull_policy: never`;
-- a `pip install` in a Dockerfile of a bare package name or of a `==` with a wildcard;
-- an action without a SHA or without its version in the comment;
-- a promtool image in the Makefile that is not the one compose runs.
+Every registry image and every `FROM` is `name:tag@sha256:<digest>`, every third-party action
+`owner/repo@<commit sha> # vX.Y.Z`; `tests/unit/test_pinning.py` fails on a tag alone. How to change
+a version and what is not covered: [docs/supply-chain.md](docs/supply-chain.md).
 
-How it is kept:
-- Changing a version: edit the tag and the digest together. Digest of an image already pulled:
-  `docker image inspect --format '{{json .RepoDigests}}' <image>:<tag>`; otherwise the `Digest:`
-  at the top of `docker buildx imagetools inspect <image>:<tag>`. A registry may serve another
-  digest under the same tag today (`postgres:17` does), so the pinned one is the one that ran.
-  For an action: `gh api repos/<owner>/<repo>/git/ref/tags/<tag>` (and `git/tags/<sha>` when the
-  tag is annotated) gives the commit; the comment names the exact tag that points at it. Nothing
-  moves a digest or a SHA by itself (no Dependabot, no Renovate): updates are by hand.
-- `airflow/Dockerfile` also names `pydantic-settings`, `trino` and `psycopg`: the versions the
-  constraints file of the base image carries. Another base image means other numbers there; pip
-  stops the build if they disagree.
-- `lakehouse/*` images carry no digest: compose builds them (`--build`), and `pull_policy: never`
-  keeps compose from asking a registry for one that is missing, because `lakehouse` on Docker Hub
-  is not ours (ADR-026). The `FROM` of each of them carries a digest, so a rebuild keeps its base.
-
-On a running stack this commit changes the config hash of 11 services. The command that next
-converges one of them recreates it; volumes stay:
-- `make start` (and `make bootstrap`, which runs it): `postgres-oltp`, `kafka`, `postgres-meta`
-  (Lakekeeper catalog and Airflow metadata) and `trino`;
-- `make up PROFILE=orchestrate` and `make up PROFILE=bi`: `postgres-meta`, and `superset` on its
-  first start;
-- `make lakekeeper-bootstrap` (`compose run` without `--no-deps`): `postgres-meta`, through
-  `lakekeeper-migrate`;
-- `make replay-live`: `postgres-oltp`, which `oltp-replayer` depends on;
-- `make up PROFILE=obs`: `prometheus`, `grafana`, `kafka-exporter`, `postgres-exporter`,
-  `statsd-exporter`;
-- `make up PROFILE=tools`: `kafka-ui` on its first start.
-
-Recreating `postgres-oltp`, `kafka`, `postgres-meta` or `trino` on a live stack is a restart of
-the source, of the log, of the catalog and the Airflow metadata, of the dbt queries in flight: each
-needs its own "ok". `superset` and `kafka-ui` had no container and no local image then (since 2026-11-06 `superset` is
-built locally, [Superset](#superset-profile-bi)), their digests came from the registry and they
-were pulled on their first start. The digests of the other
-nine are the ones in the local store on 2026-10-30, so nothing is pulled for them.
-
-The rebuild that `--build` runs after this commit:
-- The `RUN pip install` text in `airflow/Dockerfile` changed, so BuildKit builds that layer and
-  the ones after it again, the dbt venv among them; its transitive dependencies are not pinned
-  (only the four dbt packages are), so they may resolve to newer versions. The three Airflow
-  containers are then recreated from the new image.
-- `container-exporter` (`make up PROFILE=obs`) and `oltp-replayer` (`make replay-live`) get the
-  `python:3.12-slim` of 2026-10-30, not the base the running replayer (2026-09-21) and exporter
-  (2026-10-23) were built from.
-- The `FROM` of the Connect and Spark images only gained the digest of the base they already have,
-  so their layers should come from the cache (expected, not run: no build was done).
-
-Not covered:
-- the jars of `streaming/Dockerfile` are checked against a `.sha1` from the same origin;
-- pip installs have no `--require-hashes`, and the transitive dependencies of the dbt venv float;
-- `rev:` in `.pre-commit-config.yaml` is a tag;
-- the DockerOperator of `silver_upsert` pulls `lakehouse/spark:dev` from a registry when the image
-  is missing locally (`pull_policy` is compose's, not the operator's).
-
-### MinIO and mc images (ADR-026)
-
-`docker/minio/Dockerfile` builds both from the source of the tags of ADR-004
-(`RELEASE.2025-09-07T16-13-09Z`, `RELEASE.2025-08-13T08-35-41Z`): `git clone` of the tag, a check
-that `HEAD` is the commit written in the `ARG`, `CGO_ENABLED=0`, explicit `-ldflags`, Go
-`1.24.6-bookworm` and `alpine:3.22` pinned by digest. `docker compose` builds them (`minio` target
-`minio`, `minio-init` target `mc`) as `lakehouse/minio:<tag>` and `lakehouse/mc:<tag>`.
-- Check built images: `bash scripts/check-minio-images.sh lakehouse/minio:<tag> lakehouse/mc:<tag>`
-  (a throwaway container, no port, the live stack is not touched).
-- Changing a tag: the `ARG` pair (tag and commit, `git ls-remote <repo> 'refs/tags/<tag>^{}'`), the
-  `image:` line in compose and the two constants in `tests/unit/test_minio_image.py`.
-- A host short of memory: `--build-arg GOFLAGS=-p=2` (`docker compose build --build-arg
-  GOFLAGS=-p=2 minio minio-init`). The first build on 2026-10-27 with that flag (an earlier
-  revision of the same Dockerfile; the compile step took 137 s) took about 4 minutes for `minio`
-  including the pull of the Go image and under half a minute for `mc` after it; 40 s for `minio`
-  when only the ldflags changed (the Go build cache stays in the builder). A cold CI run is not
-  measured yet: `gh run view <id>` of the first `minio-images` job.
-- The healthcheck is `wget -q --spider` because the runtime has no `curl`; `pull_policy: never`
-  keeps compose from trying Docker Hub, where `lakehouse` is somebody else's namespace.
-- A compose command that creates containers (`make start`, `make up`, `compose up`) reads the
-  compose file of the working tree: from the moment it names `lakehouse/minio:<tag>` it builds
-  `minio` and `minio-init` (`make start` has `--build` and `minio` is a dependency of
-  `spark-bronze`) and recreates them when the image id differs from the running container's. The
-  data volume does not change. On a live stack that is a separate step with its own "ok".
-- Rollback: the whole compose block of `minio` and `minio-init` as it was in git (`image:
-  quay.io/minio/...`, no `build:` and no `pull_policy`, healthcheck `curl -sf ...`), not the
-  `image:` line alone: the upstream image has no `wget`, `minio` would stay unhealthy and
-  everything that waits for `minio-init` with it. The images of ADR-004 stay in the local store;
-  do not prune them (`~/lakehouse-image-backup/minio-images.tar` is the copy).
-
-Repeat locally: `make test-spark` (213 tests in CI run 40011971965, 2026-10-23), `make dags-check`.
-`make test-spark` pins `pytest` and `jsonschema` to the versions in `uv.lock`
-(`tests/unit/test_makefile.py` compares them). Runs: `gh run list --workflow ci`.
+Under the containerd image store the `.Image` of a container is the digest of the index and changes
+with every build, even from cache. To see which image a container runs, compare
+`docker inspect -f '{{json .ImageManifestDescriptor}}' <container>` with `docker image ls --tree`.
 
 ## Failure scenarios
 
-Each scenario is a `make chaos-<name>` target plus a written answer to five questions:
-what happened, what monitoring shows, which data is at risk, how the system recovers,
-why nothing is lost or duplicated (or where it can be). Filled in as scenarios are run.
+Each scenario is a `make chaos-<name>` target plus a written answer to five questions; the text of
+every scenario is in [docs/failure-scenarios.md](docs/failure-scenarios.md). `bronze_offsets_ok` in
+`scripts/chaos/lib.sh` looks for gaps only between the first and the last offset of a partition.
 
-| # | Scenario | Target | Status |
+| # | Scenario | Target | Date |
 |---|---|---|---|
-| 1 | Spark bronze killed mid-batch | `chaos-spark-kill` | done 2026-10-07 (re-run) |
-| 2a | Kafka Connect restart | `chaos-connect-restart` | done 2026-10-07 (re-run) |
-| 2b | Kafka Connect killed | `MODE=kill make chaos-connect-restart` | done 2026-10-07 (re-run) |
-| 3 | Duplicate events from source | `chaos-duplicates` | done 2026-10-07 UTC |
-| 4 | Late events | `chaos-late` | done 2026-10-07 UTC |
-| 5 | PostgreSQL restart | `chaos-postgres-restart` | done 2026-10-23 |
-| 6 | Connector down for 30 minutes (WAL growth) | `chaos-connect-pause` | done 2026-10-23 |
-| 7 | Corrupted event in topic | `chaos-poison-event` | done 2026-10-23 (re-run through the Airflow merge); alert is the owner's Modify gate |
-| 8 | Kafka down | `chaos-kafka-down` | done 2026-10-23 |
-| 9 | Airflow task failure (dbt test) | `chaos-break-dbt-test` | done 2026-10-18 |
-| 10 (optional) | Partial processing (Trino memory) | `chaos-trino-memory` | planned (week 3) |
-| 10b | Silver merge killed between two tables (`lakehouse-silver-merge`, through the `silver_upsert` DAG; pauses `silver_upsert`, `dbt_build`, `dq_checks`, plays a 30 s burst, unpauses `silver_upsert` and does not trigger it (its cleanup then triggers `dbt_build` once if it paused it): the run the scheduler creates (at once for the missed interval, or on the next `*/5` border, so up to 6 min of waiting) is the one killed, right after the first table in its log; the retry of the merge task must bring silver level with Postgres and is proved by more than one attempt of that task in that run, otherwise the result is inconclusive; `dbt_build` stays paused during the run, so gold lags until the cleanup triggers it (`airflow dags trigger dbt_build`; Airflow queues no Asset event for a paused DAG); never removes a leftover container) | `chaos-silver-kill` | done 2026-11-06 |
-
-### Template
-
-```
-### <n>. <Scenario>
-
-What happened:
-What monitoring shows: (metric, alert, time to detect)
-Data at risk:
-Recovery: (automatic / manual, steps, time to recover)
-Why no loss or duplication: (or where it is possible)
-Verification SQL:
-```
-
-Every scenario prints its own verification; the helpers it uses (`bronze_offsets_report`,
-`bronze_caught_up`, ...) live in `scripts/chaos/lib.sh`. The file sets `set -euo pipefail` and
-exports `.env`, so run a helper from the repo root in a child shell, not sourced into your own:
-`bash -c '. scripts/chaos/lib.sh && bronze_offsets_report'`. A scenario that plays a replay
-burst on the host stops before it touches anything, its script exiting 2, while another replayer
-answers on `127.0.0.1:8000` (the `oltp-replayer` container or `make replay-start`): the burst
-could not bind the port, and that replayer would keep playing at its own `REPLAY_SPEED`.
-
-### 1. Spark bronze killed mid-batch
-
-`make chaos-spark-kill` plays about 30 virtual hours (150 s at 720x, `CHAOS_REPLAY_SPEED`), waits
-until the Spark UI reports a running job, `docker kill`s `spark-bronze` and starts it 5 s later.
-It then reads `Resuming at batch N` from the new log: equal committed and available offsets mean
-the kill landed between batches, and the script exits 1 as inconclusive; otherwise it prints
-`Spark replayed batch N`. After the replayer burst ends and bronze catches up with Kafka it fails
-on any duplicate or missing offset and on any epoch one query committed twice.
-
-What happened: the driver JVM died with a micro-batch in flight. Spark had written `offsets/N` to
-the checkpoint but not `commits/N`, and Iceberg had no snapshot for epoch N. On 2026-10-07 the
-kill came 4 s after `offsets/80` was written, while the first stage of batch 80 (ShuffleMapStage
-0) was still reading Kafka: the write stage (ResultStage 1) was never submitted, so no data file
-reached MinIO.
-What monitoring shows: the container exits and stays down until it is started again (`docker
-kill` counts as a manual stop, the restart policy does not apply). The `:4041` endpoint goes away
-with the driver, so since W4 Prometheus scrapes it, the scrape
-fails (`up` = 0) and Prometheus marks `spark_streaming_last_batch_timestamp` stale: Grafana shows
-no data, not an old timestamp.
-`SparkNoBatch5m` (week 4) written as `time() - spark_streaming_last_batch_timestamp > 300` alone
-would never fire here, so it also needs `absent(spark_streaming_last_batch_timestamp)`, for 5
-minutes. After `docker start` the log says `Resuming at batch N`.
-Data at risk: the batch in flight, 158 records in batch 80 on 2026-10-07 (`added-records` of its
-snapshot). None is lost: Kafka keeps the records within retention, and bronze only misses the
-batch until it is replayed.
-Recovery: automatic after the container starts: Spark replays batch N from `offsets/N`. On
-2026-10-07 the kill landed at 18:09:44 during batch 80 and the container started at 18:09:49; the
-query logged `Resuming at batch 80` at 18:10:03, the replayed batch 80 committed at 18:10:12, 28 s
-after the kill, with the same query id, and batch 81 followed. The container reported healthy at
-18:10:17, about 28 s after the start (the script polls every 3 s). The first run, on 2026-09-26,
-landed the same way (batch 47, 1 s after `offsets/47`, before the write stage) and also committed
-the replayed batch 28 s after the kill.
-Why no loss or duplication: the offsets come from the checkpoint, so nothing is skipped; a
-replayed batch that Iceberg already committed is skipped by epoch (`Skipping epoch N`), because
-the sink stores `spark.sql.streaming.queryId` and `epochId` in every snapshot summary. Both live
-kills landed before the write stage, so no skip was needed and no `Skipping epoch` line appeared;
-the commit-window case is reproduced deterministically by `tests/unit/test_iceberg_sink.py`. On
-2026-10-07 the script ended with `ok`: no duplicate or missing offset in any of the 21 topic
-partitions and no epoch committed twice. A kill during the write stage leaves the files already
-written in MinIO as orphans until `remove_orphan_files` (week 5); neither run left any, since the
-write stage never started.
-Verification SQL (0 in both columns for every topic partition):
-
-```
-select topic, kafka_partition, count(*) - count(distinct kafka_offset) as duplicates,
-       max(kafka_offset) - min(kafka_offset) + 1 - count(distinct kafka_offset) as missing
-from bronze.cdc_events group by 1, 2 order by 1, 2;
-```
-
-### 2a. Kafka Connect restart
-
-`make chaos-connect-restart` plays about 36 virtual hours (180 s at 720x) and 90 s into it runs
-`docker restart lakehouse-kafka-connect-1`. It waits until the connector reports RUNNING and
-`shop_slot` streams to a new walsender, lets the burst end and bronze catch up, and exits 1 as
-inconclusive unless CDC events were produced both in the minute before the restart and after it.
-Then it prints the events repeated with the same LSN, runs silver and compares live row counts
-with Postgres (`reconcile`, which fails on any difference).
-
-What happened: the worker got SIGTERM. On the way down it waited for the producer's acks and stored
-the offset of the last acked record in `connect-offsets` (`Committing offsets for 1305 acknowledged
-messages` on 2026-10-07); Debezium flushed that offset's last commit LSN to the replication slot,
-which is behind the stored change LSN (offset `lsn=0/4F7298D0`, `lastCommitLsn=0/4F7221F8`, and
-Postgres logged `Streaming transactions committing after 0/4F7221F8`). After the restart Postgres
-re-sent the transactions committing after the slot position, and Debezium dropped everything up to
-the stored offset (`identified as already processed`, then `switching off the filtering` at
-`0/4F72B4D0`).
-What monitoring shows: `make connector-status` is briefly unavailable, then RUNNING; the
-Connect log shows `Committing offsets for N acknowledged messages` just before `Stopping down
-connector`. Bronze stops growing for the restart and catches up afterwards.
-Data at risk: none. The replayer kept writing; Postgres kept the WAL for the slot.
-Recovery: automatic, about 32 s on 2026-10-07 (SIGTERM at 18:14:19, `Kafka Connect stopped` at
-18:14:20.4, `Processing messages` at 18:14:50.7); about 40 s on 2026-09-26.
-Why no loss or duplication: the final offset commit covered every record Kafka had acked, and on
-resume Debezium filters whatever Postgres re-sends up to that offset, so nothing reached Kafka
-twice. That holds while the stop fits Docker's 10 s stop timeout and the final commit fits
-`offset.flush.timeout.ms` (5 s); otherwise expect repeats as in 2b. On 2026-10-07, with 1429 CDC
-events produced in the minute before the restart and 1593 after it, 0 events repeated with the
-same LSN, and live row counts of all seven silver tables matched Postgres; the 2026-09-26 run also
-gave 0.
-
-### 2b. Kafka Connect killed
-
-`MODE=kill make chaos-connect-restart` does the same with `docker kill` and, 5 s later, `docker
-start`. It also exits 1 as inconclusive when the kill repeated no event, which means it came
-right after an offset flush.
-
-What happened: no shutdown hook ran. Connect stores source offsets every 60 s
-(`offset.flush.interval.ms`), so on restart it resumes from the last stored offset: Postgres
-re-sends from the slot's last confirmed position, Debezium skips up to the stored offset, and every
-event emitted after the stored offset is sent a second time with the same LSN.
-What monitoring shows: the container is gone until someone starts it (a manual kill is not
-restarted by the policy). A kill shorter than the `for: 1m` of `ConnectorNotRunning` does not trip
-it; `ContainerRestarting` fires for `kafka-connect` (the start time moves, checked 2026-10-23
-for Postgres and Kafka in scenarios 5 and 8). In bronze, repeated `(source_table,
-key, lsn)`: the second copy arrives after the restart, the first can be up to 60 s older than the
-kill.
-Data at risk: none lost. Repeats only.
-Recovery: `docker start lakehouse-kafka-connect-1`; the connector resumes by itself (on 2026-10-07
-`Processing messages` at 18:20:30.0, 26 s after the start at 18:20:03.6).
-Why no loss or duplication: nothing is lost because both positions are behind what reached
-Kafka. The repeats land in bronze, which is at-least-once by contract, and silver's MERGE keeps
-one row per key and ignores an equal LSN (ADR-021). On 2026-10-07 the kill came about 9 s after
-the last offset flush (`Committing offsets for 728 acknowledged messages` at 18:19:49.2 in the
-Connect log, walsender connection reset at 18:19:57.9 in the postgres-oltp log): 253 events
-arrived twice (orders 173 on 152 keys, order_items 40, payments 39, reviews 1), their first copies
-produced between 18:19:48.8 (not covered by that flush) and 18:19:57.4, and live row counts of all
-seven silver tables still matched Postgres. On 2026-09-26 a kill about 2 s after the flush
-repeated 11 events: the count follows the time since the last flush, up to 60 s of changes.
-Verification SQL (the first copy can be in bronze up to 60 s before the kill, so the window starts
-90 s before it; `make chaos-connect-restart` uses the run start instead, and on 2026-10-07 both
-gave the same 253 events):
-
-```
-select source_table, count(distinct key) as keys_repeated, count(*) as events_repeated,
-       sum(copies - 1) as extra_events
-from (select source_table, key, lsn, count(*) as copies from bronze.cdc_events
-      where ingest_ts >= timestamp '<kill time, UTC>' - interval '90' second and lsn is not null
-      group by 1, 2, 3 having count(*) > 1)
-group by 1;
-```
-
-### 3. Duplicate events from the source
-
-`make chaos-duplicates` stops before it touches anything while another replayer answers on `:8000`
-(the script exits 2, make prints `Error 2`; a failed check prints `Error 1`), waits until bronze has
-caught up with Kafka so that the window holds only this run, prints the window start, and plays
-about one virtual day (120 s at 720x) with `REPLAY_DUPLICATE_RATIO=0.1`. Once bronze has caught up
-again it prints, per table, the UPDATEs, the no-op UPDATEs (`before = after`) with their share of
-status UPDATEs, and the changes that arrived twice with the same LSN. It fails when orders got no
-no-op UPDATE (the burst proved nothing) or when any change arrived twice with the same LSN (a
-delivery repeat mixed in). Then it runs silver and fails unless silver holds, for every order whose
-last event is a repeat, that repeat's LSN and status, and unless live row counts match Postgres.
-
-What happened: the replayer picks `REPLAY_DUPLICATE_RATIO` of the orders (md5 of
-`duplicate:<order_id>`) and runs every status UPDATE of a picked order twice, with the same values,
-in one transaction. Postgres writes a second tuple version, so Debezium emits a second event with a
-new LSN and `before` = `after`: a real change that changes nothing. On 2026-10-07 (UTC) the burst
-moved the virtual clock from 2026-07-08 10:06 to 2026-07-09 10:03 (`make replay-status`), and bronze
-took 2267 CDC events in the window (opened 2026-10-07 20:31:07 UTC).
-What monitoring shows: the replayer counts the repeats (`replayer_events_total{kind="duplicate"}` on
-its `/metrics`, `:8000` while the burst runs); nothing downstream reacts, by design.
-`lakehouse_dq_lsn_repeats_last_hour` (`dq_checks`, repeats by `(source_table, key, lsn)`)
-measures delivery repeats (chaos 2b) only: a source repeat is a new WAL record with a new LSN, so it
-never counts there and shows instead as `op = 'u'` with `before = after`. The same check by hand is
-`lsn_duplicates_since` in `scripts/chaos/lib.sh`.
-Data at risk: none in silver. Bronze grows by the repeats (95 of the 2267 events in that run), and a
-consumer that counts bronze events as business changes (status changes per day, say) counts each
-repeat as one more: filter `before = after` out or read silver.
-Recovery: nothing to recover; the next silver run absorbs the repeats. In that run the whole script
-(burst, both catch-ups, silver, checks) took 3 min 11 s.
-Why no loss or duplication: the repeat commits in the same transaction as its original, so a silver
-batch usually holds both: `latest_per_key` keeps the repeat (higher LSN, same values) and MERGE
-writes the row once. Only if a batch boundary splits the pair does MERGE rewrite the row with
-identical values and a newer `_last_lsn` (one more row version in merge-on-read `silver.orders`, no
-data change). Either way silver ends equal to Postgres. In that run orders had 1344 events and 1067
-UPDATEs: 972 status changes and 95 no-op repeats, 9.8% of status UPDATEs, on 90 of the 926 orders
-updated (85 with one repeat, 5 with two, one per status change); order_items (309 events), payments
-(288) and reviews (326) had no UPDATE. 0 changes arrived twice with the same LSN, silver held the
-repeat's LSN and status for all 90 orders whose last event is a repeat, and live row counts of all
-seven silver tables matched Postgres (orders 93 860). The share is close to 10% because 90 picked of
-926 is close to the expected 92.6: the ratio picks orders, not UPDATEs. The first run (burst on
-2026-09-26, silver and `reconcile` ok on 2026-10-05 after the laptop slept) predates the asserts and
-printed 18 no-op of 325 orders events, 5.5% of all orders events, a denominator the script no longer
-uses; on status UPDATEs that is 18 of 120, 15.0%, on 16 of 114 orders: the fewer orders a burst
-updates, the further the share can drift from the ratio.
-Verification SQL (window start from the script's `window:` line; add an upper bound when later runs
-followed, `ingest_ts < timestamp '2026-10-07 20:33:25'` for the numbers above, since bronze caught
-up at 20:33:24):
-
-```
-select source_table, count(*) as events, count_if(op = 'u') as updates,
-       count_if(op = 'u' and before = after) as no_op_updates,
-       cast(100.0 * count_if(op = 'u' and before = after)
-            / nullif(count_if(op = 'u' and before <> after), 0) as decimal(5, 1))
-         as pct_of_status_updates,
-       count(distinct key) filter (where op = 'u') as keys_updated,
-       count(distinct key) filter (where op = 'u' and before = after) as keys_repeated
-from bronze.cdc_events
-where ingest_ts >= timestamp '<window start, UTC>'
-group by 1 order by 1;
-```
-
-### 4. Late events
-
-`make chaos-late` stops before it touches anything while another replayer answers on `:8000` (the
-script exits 2), and before the burst when `shop-connector` or its task is not RUNNING or
-`spark-bronze` is not healthy, naming the runbook (the script exits 1); `make` itself exits 2 on any
-failure and shows the script's status as `Error 2` or `Error 1`. It prints the window start, plays
-about one virtual day (120 s at 720x), waits until bronze has caught up and runs silver. It then
-picks an order whose oldest change in the window (insert or update) has a newer one by LSN, and
-fails unless silver already holds a higher `_last_lsn` for that order: at an equal one the row would
-read the same afterwards and prove nothing, and with no row, a null or a lower one, MERGE would take
-the re-sent change and the script would fail for the wrong reason. It reads that change back from
-Kafka by partition and offset, produces it again with the same key, waits until bronze holds one
-more copy of that LSN and runs silver again. It fails unless that run merged orders events (a run
-that never read the record would also leave the row as it was) and unless silver's `order_status`
-and `_last_lsn` for the order match before and after.
-
-What happened: an older change of an order reached bronze after silver had applied a newer one.
-Debezium does this after a kill (2b): everything sent since the last offset flush comes again with
-the same LSN, behind newer changes that silver may already hold; a graceful restart (2a) re-sends
-nothing. The script produces the record by hand, so the run does not depend on where a kill lands.
-On 2026-10-07 (UTC) the burst moved the virtual clock from 2026-07-09 10:03 to 2026-07-10 10:00
-(`make replay-status`), and bronze took 1180 events in the window (opened 2026-10-07 20:56:27 UTC),
-the re-sent record included. Of the 350 orders the burst changed, 180 had more than one change, so
-the pick is rarely short of candidates. It picked order `008819c6d5f6da6fa5cd9d50ca927cf4`: its
-insert (`op = 'c'`, `created`, LSN 1401450968) and its update to `approved` (LSN 1401679552) came in
-one bronze batch, and the first silver run left the row at `approved` with `_last_lsn` 1401679552.
-The script re-sent the insert at 20:59:17 UTC. What monitoring shows: nothing reacts, by design.
-Bronze takes one more record, and the second silver run logs an orders merge (`batch N: <k> events
-merged into lake.silver.orders`) while the row stays. The repeat check by `(source_table, key, lsn)`
-(`lsn_duplicates_since`, and the series `lakehouse_dq_lsn_repeats_last_hour` in `dq_checks`) counts
-the re-sent record as one delivery repeat, as in 2b. In that run bronze took the record in at
-20:59:20 UTC, and the second silver run logged `batch 15: 1 events merged into lake.silver.orders in
-2.4 s`. The count was then the orders events the silver batch read from bronze (before quarantine
-and before keeping one row per key), not rows MERGE changed. Since 2026-11-20 it counts the events
-left after quarantine, still before keeping one row per key; a batch with none logs `batch N:
-nothing to merge into lake.silver.<t>` and commits no snapshot. The snapshot that run committed had
-`changed-partition-count` 0, no `added-records` and the same `total-records` (98812) as the first
-run's. `lsn_duplicates_since` over the window reported orders with 1 key repeated and 1 extra event.
-Data at risk: none in silver. Bronze keeps the re-sent record for good, at a new offset with the old
-LSN: a consumer that reads bronze in offset or ingest order rather than by LSN sees the order go
-back to its older status. Recovery: nothing to recover; the MERGE guard drops the event. In that run
-the whole script (burst, catch-up, both silver runs, checks) took 3 min 12.6 s. Why no loss or
-duplication: silver keeps one row per key, and MERGE updates a matched row only when `t._last_lsn is
-null or s._last_lsn > t._last_lsn` (ADR-021; a null marks a row from an incremental snapshot read).
-The re-sent change has a lower LSN than the row, so the row and its `_last_lsn` stay; an equal LSN
-(a plain repeat, 2b) is skipped the same way. In that run bronze held LSN 1401450968 twice in
-partition 1, both `created` with the same key and `after`: offset 74825, ingested at 20:57:40 UTC,
-and the re-sent copy at offset 74855, at 20:59:20 UTC. Silver read `approved` with `_last_lsn`
-1401679552 before and after, and the row's `_updated_at`, 20:59:03 UTC, is from the first silver
-run, before the re-send.
-
-Two meanings of "late". This scenario is late arrival: a change reaches the lake out of LSN order,
-which here only a delivery repeat produces, and silver guards against it. `REPLAY_LATE_RATIO` with
-`REPLAY_LATE_DELAY_SECONDS` is the other meaning: for that share of orders (md5 of
-`late:<order_id>`) the replayer pushes the `delivered` update back by the delay in virtual time. The
-change is late in event time for the windowed job (W5-T01, watermark), but it commits later, reaches
-Kafka in order with a higher LSN, and gives silver nothing to guard against.
-Verification SQL (order and stale LSN from the script's `re-sending` line):
-
-```
-select kafka_partition, kafka_offset, lsn,
-       json_extract_scalar(after, '$.order_status') as status, ingest_ts
-from bronze.cdc_events where lsn = <stale lsn> and source_table = 'orders';
-
-select order_status, _last_lsn, _updated_at from silver.orders where order_id = '<order id>';
-
--- right after the script: the second silver run's snapshot changes no partition, adds no record
-select committed_at, summary['changed-partition-count'] as changed_partitions,
-       element_at(summary, 'added-records') as added_records,
-       summary['total-records'] as total_records
-from silver."orders$snapshots" order by committed_at desc limit 2;
-```
-
-### 5. PostgreSQL restart
-
-```
-make chaos-postgres-restart   # core + obs up, no replay running
-```
-
-What happened (2026-10-23): `docker compose restart postgres-oltp` with the connector streaming
-and bronze caught up; the slot `shop_slot` stood at `0/5A7E0660`, walsender pid 16292. Postgres was
-`healthy` 13 s later and the connector streamed from a new walsender 13 s later too, by itself:
-the Debezium task retried and was never `FAILED`. The script then played a 30 s replay burst
-(after the restart: the host replayer writes to Postgres and would die with it); bronze caught up 28 s
-after the burst.
-What monitoring shows: `ContainerRestarting` for `postgres-oltp` firing 15 s after the restart
-(16:53:20 restart, 16:53:35 firing). The connector panel stays green; the restart is too short for
-`ConnectorNotRunning` (`for: 1m`), and nothing else notices. If the task does not come back, the
-script stops with the name of `docs/runbooks/connector-failed.md` and does not restart the task
-itself, so the run shows the system's own answer.
-Data at risk: none. The slot and its WAL survive a restart of Postgres, and the connector resumes
-from `confirmed_flush_lsn`; events it had sent but not yet confirmed can be sent again with the same
-LSN, and silver absorbs them (scenario 2b).
-Recovery: automatic, 13 s.
-Why no loss or duplication: the slot is durable in Postgres, offsets are in `connect-offsets`, bronze
-keeps one row per Kafka offset (`bronze_offsets_ok`), silver merges by key and LSN.
-Verification: the script ends with `bronze_offsets_ok`, `merge_silver` (the `silver_upsert` DAG while
-the scheduler runs) and `reconcile`: 7 of 7 tables ok.
-
-### 6. Connector stopped for 30 minutes (WAL growth)
-
-```
-make chaos-connect-pause   # HOLD=1800 s by default; core + obs up, no replay running
-```
-
-What happened (2026-10-23), two runs of two versions of the script. The 30-minute run (18:21:55)
-was an uncommitted version that padded the WAL with `pg_logical_emit_message`; that stopped CDC
-(below), so its "bronze caught up 19 s after the resume, `reconcile` 7 of 7" measured bronze
-against a Kafka that had stopped growing, and its recovery was by hand: the topic, the producer
-setting, a recreated Connect. `PUT /connectors/shop-connector/stop` (not `pause`: a paused task keeps
-its walsender and the slot stays active, W4-D11) turned the slot inactive 4 s later; a 30 s burst
-and padding took it from 11 MB to 80.9 MB. The committed script (`f606670`) ran once, with a hold
-of 60 s (19:14), and did the same with 83.9 MB held; after the resume and a 15 s burst the connector had
-confirmed everything (28 kB unconfirmed) and `restart_lsn` retained 3.9 MB.
-What monitoring shows: `ConnectorNotRunning` 95 s after the stop (75 s in the rerun) and
-`SlotWalRetainedHigh` 326 s after it (`for: 5m` plus the scrape; both runs). `dq_checks` also went
-red with "differs at rest": bronze is quiet because nothing arrives, while the source writes. Since W6-T07
-it says `in flight` for the whole stall and raises `CdcStalledSourceWrites` after about 20 minutes.
-Run 2026-10-29 (full 1800 s hold, `make chaos-connect-pause`, exit 0): connector stopped
-17:47:02 to 18:17:06 UTC; `dq_checks` at 18:00 and 18:15 green with "in flight: CDC
-stands, no verdict"; `CdcStalledSourceWrites` firing at 18:20:04; after the resume nothing lost and
-silver matching Postgres (rows, keys, sums) in all 7 tables.
-Data at risk: none while the slot lives; Postgres keeps every WAL file it has not confirmed
-(`max_slot_wal_keep_size = -1`), so the disk of the VM is the limit, and nothing but this alert
-watches it (runbook `docs/runbooks/slot-wal-growth.md`). Replay alone writes ~1.1 MB of WAL per
-virtual hour; the 64 MiB threshold is reached in about 2.5 virtual days of events.
-Recovery: automatic once the connector runs (`resume`), minutes; proven with the committed script
-for the full 1800 s hold on 2026-10-29 (above); an interrupted run is still to do. A script killed
-mid-hold (INT, TERM, HUP, not KILL) resumes the connector from a trap: the STOPPED state survives a
-Connect restart, so run it in the background, never under a tool timeout that sends SIGKILL.
-Why no loss or duplication: the slot, `connect-offsets` and the Kafka offsets in bronze; checked
-by `bronze_offsets_ok` and `reconcile`.
-How the WAL is added, and what not to do: replay is too slow, so the script adds a transaction
-and `pg_switch_wal()` per round (one 16 MB segment each; Debezium forwards nothing of it). The first
-run used `pg_logical_emit_message` with 4 MB records instead, and that stopped CDC: Debezium decodes
-logical messages and publishes them to `oltp.message`, a topic that does not exist (topic
-auto-creation is off), and then hit the 1 MB `max.request.size` of the Connect producer. CDC stood
-from about 18:52 to 19:00 with no loss; fixed by creating `oltp.message` (max message 8 MB,
-retention 1 hour) and `CONNECT_PRODUCER_MAX_REQUEST_SIZE=8388608` in `docker/compose.yaml`, and the
-connector drained 66 MB in seconds. The recovery also tried `pg_replication_slot_advance`, which would
-have skipped the records; a permission check refused it. The setting stays,
-and `connect/register.sh` now creates the topic (with `segment.ms` of an hour; the topic made by
-hand got the same on 2026-10-29 with `kafka-configs.sh --alter --add-config segment.ms=3600000`,
-W6-T08, when it was empty). The limit is on the encoded record:
-JsonConverter writes the bytes as base64, so a message over about 6.3 MB still fails the task
-(`RecordTooLargeException`, see `docs/runbooks/connector-failed.md`). Do not use logical messages.
-
-### 7. Corrupted event in topic
-
-```
-make chaos-poison-event   # core up; with the Airflow scheduler running the merge is the silver_upsert DAG
-```
-
-What happened: one record that is not a Debezium envelope (`not json at all {poison-<ts>`) is
-produced into `oltp.shop.orders`. Bronze keeps it as raw text (`raw` set, `op` null). The next
-`silver_upsert` run routes it to `silver.quarantine` (`reason = unparsed_envelope`, topic, partition,
-offset and payload kept) and carries on with the rest of the batch; a second run does not
-quarantine it again.
-What monitoring shows: the number of quarantined rows in the last hour is a line of the
-`dq_checks` log (`dq quarantined_last_hour=<n>`, task `report`). It is deliberately not exported
-to Prometheus and has no alert: `quarantine_rows_total` and its alert are the owner's Modify gate
-(W4-D8, `02-learning-gates.md`). The `lakehouse_dq_*` series cover duplicates, repeats and
-reconciliation, not quarantine. Detection today is manual: `select reason, count(*) from
-silver.quarantine group by 1`.
-Data at risk: none. The record stays in bronze and in quarantine with its payload.
-Recovery: nothing to recover; a human reads the payload and decides.
-Why no loss or duplication: bronze is append-only and keeps the raw value; the quarantine key is
-(topic, partition, offset), so a rerun merges onto the same row.
-Verification: the script ends with one quarantine row for its marker after the first merge and
-still one after the second.
-
-### 8. Kafka down for 6 minutes
-
-```
-make chaos-kafka-down   # KAFKA_DOWN=360 by default; core + obs up, no replay running
-```
-
-What happened (2026-10-23): a 120 s replay burst started; 33 s into it `kafka` was stopped at
-17:09:09 and kept down for 360 s, then started. Kafka was `healthy` 20 s after the start, the
-connector `RUNNING` 20 s after (Connect had kept running and retried), bronze caught up 25 s
-after. Spark did not wait: with the container stopped, the name `kafka` no longer resolves on the
-compose network, the Kafka source fails with `No resolvable bootstrap urls given in
-bootstrap.servers`, the query ends with an error and Docker restarts the driver about every 20 s
-from 17:10:24 until Kafka was back at 17:15:10: 15 restarts (`RestartCount` 15). Each restart
-resumed from the checkpoint.
-What monitoring shows: `ContainerRestarting` for `kafka` and for `spark-bronze`, and
-`ConnectorNotRunning`. `SparkNoBatch5m` did **not** fire: the series
-`spark_streaming_last_batch_timestamp{query="bronze_cdc_ingest"}` was absent in one piece from
-17:10:23 to 17:15:38 UTC, and Kafka was back before the 5 minutes of `for` of the `gone` rule were
-over (`ALERTS` in the TSDB: `gone` pending from about 17:10:49 to 17:15:34, never firing), so a crash-looping driver is not seen through the last-batch age. The signal for it is
-`SparkRestartLoop` (week 6; the rule was not loaded then, see Alerts above) and, as it was that day,
-`ContainerRestarting`. A `dq_checks` run at 17:15 failed
-with `silver differs from Postgres at rest`: bronze had been quiet for more than the 5 minutes that
-count as "at rest", because the source could not deliver, while Postgres kept writing; that red run
-raised `AirflowDagFailed`. It is a true signal (the pipeline is not delivering), through a check
-that was written for another cause. Since W6-T07 a run stays red here when the slot moved in the
-same 15 minutes before Kafka stopped (offset commit, heartbeat); otherwise it says `in flight`. The
-stall (6 minutes) is shorter than the 20 minutes `CdcStalledSourceWrites` needs, so this scenario
-does not fire it; chaos 6 does (shown live on 2026-10-29, scenario 6).
-Data at risk: none while the outage is shorter than Kafka retention (24 h) and the slot lives.
-Connect holds what it cannot produce, Postgres keeps the WAL. Longer than 24 h: scenario "Bronze
-ingest" (`failOnDataLoss=true`).
-Recovery: automatic, 25 s after Kafka returned.
-Why no loss or duplication: offsets are per topic partition in Kafka and in the checkpoint; the 21
-partitions hold no duplicate and no missing offset after the outage (`bronze_offsets_report`),
-silver matches Postgres (rows, keys, sums) (7 of 7 ok).
-
-### 9. Airflow task failure (dbt test)
-
-```
-make chaos-break-dbt-test   # orchestrate up, dbt_build unpaused, no replay running
-```
-
-What happened: `dbt_build` ran with the conf `{"dbt_vars": "{chaos_break_test: true}"}`. The
-singular test `assert_chaos_break_test` on `fct_orders` returned every order under that switch and
-failed.
-What monitoring shows: `dbt_build` red in the Airflow UI; the task log names the test
-(`Failure in test assert_chaos_break_test`). Alert `AirflowDagFailed` fired 17 s after the red run
-ended (2026-10-23: run ended 16:39:47, the counter appeared at the 16:39:50 scrape, the alert at
-16:40:05; 15 s evaluation plus the scrape). Seen in the UI when the run ends, 16 s after the trigger.
-Data at risk: none. `fct_orders` was rebuilt before its test ran; every model after it was skipped,
-so the marts kept their previous snapshot (`mart_daily_sales`: 9 snapshots before
-and after).
-Recovery: manual. Remove the cause (here the switch) and trigger `dbt_build`; the next silver merge
-triggers it too. The run without the switch was green.
-Why no loss or duplication: `dbt build` skips the children of a failed test, and a mart is either
-replaced atomically (`CREATE OR REPLACE`) or not touched.
-Verification SQL:
-
-```
-select committed_at, operation from gold."mart_daily_sales$snapshots"
-order by committed_at desc limit 3;
-```
-
-### 10b. Silver merge killed between two tables
-
-```
-make chaos-silver-kill   # waits up to 6 min for the run the scheduler creates
-```
-
-What happened (2026-11-06): the script paused `silver_upsert`, `dbt_build` and `dq_checks`, played a
-30 s burst and unpaused `silver_upsert` at 12:07:07 without triggering it. The scheduler created
-`scheduled__2026-11-06T12:10:00+00:00`, started at 12:10:00 (REST). The script killed
-`lakehouse-silver-merge` at 12:10:23, right after the first of the 4 tables with events
-(`order_items`, 97 events in 2.9 s). The task failed with `DockerContainerFailedException`
-(`StatusCode` 137) and, with `retries: 1` and `retry_delay` of one minute
-(`airflow/dags/silver_upsert.py:38-39`), started attempt 2 at 12:11:24. The run ended `success` at
-12:11:50 (REST; task `merge`, `try 2`, attempt 2 from 12:11:24 to 12:11:49 UTC).
-What monitoring shows: `ContainerRestarting` for `lakehouse-silver-merge`, `activeAt` 12:11:34 UTC:
-attempt 2 started a container with the same name, and the start time moved inside the 15 minute
-window of the rule. Since the rule was changed to compose names that end in a number, the merge no
-longer gives `ContainerRestarting`; the retry shows in Airflow as `try_number` 2.
-`AirflowDagFailed` did not fire, because the run ended `success`. The failed
-attempt is visible only in the task log and in the try number of the task.
-Data at risk: none. Right after the kill silver was partly merged: 3 tables differed from Postgres
-(`orders` 96258 against 96346, `payments` 100623 against 100715, `reviews` keys), `order_items` was
-level (109178).
-Recovery: automatic, by the Airflow retry. From the kill (12:10:23) to silver level with Postgres
-(12:11:49): about 86 s, of which one minute is the retry delay.
-Why no loss or duplication: bronze is append-only, so attempt 2 could read the same events again. It merged
-`order_items` again (97 events, silver stays at 109178 rows with the same values, the MERGE is
-keyed by primary key), then `orders` (155 events), `payments` (92) and `reviews` (2).
-Verification: the script ends with `silver-kill ok` only if all of these hold after the retry: the
-run state is `success`; `reconcile` is 7 of 7 (rows, keys, sums, values ok); every Kafka offset is in
-bronze exactly once; `silver.quarantine` did not grow (4 rows before the burst); the Variable equals
-the last bronze snapshot; task `merge` of that run is `success` with more than one try
-(`scripts/chaos/silver-kill.sh:195-231`). A failed check after the retry ends with `FAIL: ...` and
-exit 1. The script reports an inconclusive result only before or around the kill: another run is
-already running or queued, the merge ended before its first table, the kill came too late to
-catch it, or the kill came after the last table with events. Exit 0 on
-2026-11-06; `make verify-fast` at 12:13 UTC: `verify ok`, 7 of 7. `dbt_build` stayed paused during
-the run and its Asset event was lost (see "Airflow"), so gold lagged silver until `dbt_build` was
-run by hand; since the audit fix the `cleanup` of the script triggers `dbt_build` once after it
-lifts its pause (`scripts/chaos/silver-kill.sh:46-59`).
+| 1 | [Spark bronze killed mid-batch](docs/failure-scenarios.md#1-spark-bronze-killed-mid-batch) | `chaos-spark-kill` | 2026-10-07 (re-run) |
+| 2a | [Kafka Connect restart](docs/failure-scenarios.md#2a-kafka-connect-restart) | `chaos-connect-restart` | 2026-10-07 (re-run) |
+| 2b | [Kafka Connect killed](docs/failure-scenarios.md#2b-kafka-connect-killed) | `MODE=kill make chaos-connect-restart` | 2026-10-07 (re-run) |
+| 3 | [Duplicate events from source](docs/failure-scenarios.md#3-duplicate-events-from-the-source) | `chaos-duplicates` | 2026-10-07 |
+| 4 | [Late events](docs/failure-scenarios.md#4-late-events) | `chaos-late` | 2026-10-07 |
+| 5 | [PostgreSQL restart](docs/failure-scenarios.md#5-postgresql-restart) | `chaos-postgres-restart` | 2026-10-23 |
+| 6 | [Connector down for 30 minutes (WAL growth)](docs/failure-scenarios.md#6-connector-stopped-for-30-minutes-wal-growth) | `chaos-connect-pause` | 2026-10-23 |
+| 7 | [Corrupted event in topic](docs/failure-scenarios.md#7-corrupted-event-in-topic) | `chaos-poison-event` | 2026-10-23 (re-run through the Airflow merge) |
+| 8 | [Kafka down](docs/failure-scenarios.md#8-kafka-down-for-6-minutes) | `chaos-kafka-down` | 2026-10-23 |
+| 9 | [Airflow task failure (dbt test)](docs/failure-scenarios.md#9-airflow-task-failure-dbt-test) | `chaos-break-dbt-test` | 2026-10-18 |
+| 10b | [Silver merge killed between two tables](docs/failure-scenarios.md#10b-silver-merge-killed-between-two-tables) | `chaos-silver-kill` | 2026-11-06 |
 
 ## Runbooks
 
@@ -1769,14 +851,12 @@ lifts its pause (`scripts/chaos/silver-kill.sh:46-59`).
 
 ## Backup
 
-Local laptop, nothing irreplaceable: the dataset is re-downloadable, the platform is
-re-creatable from the repo. `make nuke && make bootstrap` is the restore procedure and is itself
+Local laptop, nothing irreplaceable: the dataset is re-downloadable, the platform is re-creatable. `make nuke && make bootstrap` is the restore procedure and is itself
 a test that the repo is complete. There is no regular backup; the one-off copy of `warehouse/`
-taken before the first maintenance run is described in "Maintenance".
+taken before the first maintenance run is on `/mnt/d/lakehouse-backup/warehouse-20261029`.
 
-No RPO or RTO is defined. What a rebuild loses: the replay position (virtual clock and pending
-events), the Airflow history, Grafana state outside the provisioned dashboards, and any CDC still
-in Kafka (24 h retention). What each piece of state has:
+No RPO or RTO is defined. A rebuild loses the replay position, the Airflow history, Grafana state
+outside the provisioned dashboards, and any CDC still in Kafka (24 h retention). What each piece of state has:
 
 | State | Copy | Restore tested |
 |---|---|---|
@@ -1792,5 +872,7 @@ cannot be read. Keep a copy of `.env` outside the repo (owner's step, never comm
 
 Not proven live: losing a Spark checkpoint (silver only by the unit test
 `test_a_lost_checkpoint_rereads_bronze_and_silver_keeps_its_values`, see the silver section),
-MinIO or Lakekeeper down while a job writes, a full disk, killing `spark-silver` mid-merge, and a
-restore from the copy above.
+MinIO or Lakekeeper down while a job writes, a full disk, and a restore from the copy above. A
+checkpoint restores only together with the catalog it was written against. Anonymous volumes left
+by recreated containers (`docker volume ls -q -f dangling=true`) take a few MB; removing them is
+the owner's call.

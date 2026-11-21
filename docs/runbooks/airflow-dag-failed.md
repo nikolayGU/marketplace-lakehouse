@@ -14,7 +14,11 @@ Prometheus starts (and after a host sleep) is not caught; it is visible in Airfl
    `Heartbeat recovered after <n> seconds` just before the failure:
    `docker compose --env-file .env -f docker/compose.yaml logs --tail=2000 airflow-scheduler | grep 'Heartbeat recovered'`.
    Found: it is not a pipeline fault. Trigger the DAG again (`airflow dags trigger <dag_id>`).
-   Why it fails and the Windows setting that stops it: `../../OPERATIONS.md#airflow`.
+   After the wake Trino has abandoned its query (`ABANDONED_QUERY`), the scheduler fails task
+   instances without a heartbeat, and the task's API token has expired (`Invalid auth token`). A
+   sleep longer than a DAG's `dagrun_timeout` also fails its run by timeout on wake. Keep Windows
+   sleep off while the stack runs: `powercfg /change standby-timeout-ac 0`, the same for
+   `hibernate-timeout-ac`.
 3. `silver_upsert`: the `merge` task log has the Spark error. `409` or
    `name "/lakehouse-silver-merge" is already in use`: a second writer, or a container left after a
    killed scheduler. `docker ps -a --filter 'name=^/lakehouse-silver-merge$' --format '{{.Status}}'`:
@@ -27,7 +31,8 @@ Prometheus starts (and after a host sleep) is not caught; it is visible in Airfl
    the children of a failed test, and the marts keep their previous snapshot. Remove the cause,
    then `airflow dags trigger dbt_build`; the task has no retries.
 5. `dq_checks`: a red task is a verdict or a failed query, not a Prometheus problem. Go to
-   `dq-checks.md`; how to read each red task is in `../../OPERATIONS.md#airflow`.
+   `dq-checks.md`; how to read each red task is in
+   [A red dq_checks task](dq-checks.md#a-red-dq_checks-task).
 6. `iceberg_maintenance`, `iceberg_orphans`: read the task log; these DAGs use the pools
    `lake_writers` (shared with `silver_upsert`) and `gold_writers` (shared with `dbt_build`). Do not run `expire_snapshots`,
    `remove_orphan_files` or a non-dry run by hand to fix a red task: both are on the blast-radius

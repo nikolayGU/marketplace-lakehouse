@@ -26,5 +26,4 @@ shows up to 15 minutes after the lag begins.
 7. Never run `make silver` by hand while the scheduler is up: two writers on one checkpoint.
    `make silver` refuses; trigger the DAG instead (`airflow dags trigger silver_upsert`).
 
-Reproduce: pause `silver_upsert`, `make replay-burst SECONDS=60`, wait (OPERATIONS.md,
-"Observability").
+Reproduce: pause `silver_upsert`, `make replay-burst SECONDS=60`, wait (`../evidence.md#alerts-and-time-to-fire`).

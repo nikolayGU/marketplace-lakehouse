@@ -49,7 +49,7 @@ seven tables present) and end with `verify ok`; `make verify` first runs one sil
 run that this page records: `verify ok`, 2026-10-29 19:16 UTC, before commit `46f5282` (the W6-T11 check, [Trino access control](#trino-access-control)).
 `dq_checks` repeats the comparison every 15 minutes and also compares row fingerprints source to
 silver and silver to gold (`reconcile_values`); its run at 16:45 on 2026-10-29 had every
-`reconcile_*_differing` at 0 and `reconcile_in_flight` at 0 ([OPERATIONS, Maintenance step 11](../OPERATIONS.md#first-live-run-2026-10-29)).
+`reconcile_*_differing` at 0 and `reconcile_in_flight` at 0 ([First live run, step 11](#first-live-run-2026-10-29)).
 
 ## Probe: MinIO stopped
 
@@ -57,7 +57,9 @@ A live probe of the third `verify` check, not a chaos scenario (commit `2b0fce1`
 `docker stop lakehouse-minio-1` at 16:54:53 UTC, then `VERIFY_WAIT=60 timeout -k 5 120 make
 verify-fast`: exit 2 after 11.7 s with `verify failed: Trino and catalog lake answer, but the object
 store (MinIO) fails: curl: (6) Could not resolve host: minio`. `docker start` at 16:55:15, so MinIO
-was down 22 s; healthy at 16:55:27, and `verify-fast` ended `verify ok`. Why the third probe exists
+was down 22 s; healthy at 16:55:27, and `verify-fast` ended `verify ok`. With Lakekeeper stopped
+(2026-11-04) the refusal took 11 s, about 9 s of it the Trino REST client giving up; with
+`TRINO_PROBE_WAIT` below about 10 the same fault reads as `does not answer within N s`. Why the third probe exists
 and what a paused MinIO would read as: [OPERATIONS, Daily commands](../OPERATIONS.md#daily-commands).
 
 ## Failure scenarios
@@ -68,57 +70,140 @@ what happened, what monitoring shows, data at risk, recovery, why nothing is los
 
 | # | Scenario | Date | Measured | Write-up |
 |---|---|---|---|---|
-| 1 | Spark bronze killed mid-batch | 2026-10-07 | Kill 18:09:44 during batch 80 (158 records), replayed batch committed 18:10:12, 28 s after the kill, same query id; 0 duplicate or missing offsets in 21 topic partitions, no epoch committed twice | [1](../OPERATIONS.md#1-spark-bronze-killed-mid-batch) |
-| 2a | Kafka Connect restart | 2026-10-07 | Recovered in about 32 s; 1429 CDC events in the minute before the restart, 1593 after; 0 events repeated with the same LSN; silver matches Postgres (rows, keys, sums) for 7 tables | [2a](../OPERATIONS.md#2a-kafka-connect-restart) |
-| 2b | Kafka Connect killed | 2026-10-07 | Connector resumed 26 s after `docker start`; 253 events arrived twice (orders 173, order_items 40, payments 39, reviews 1), all absorbed; silver matches Postgres (rows, keys, sums) for 7 tables | [2b](../OPERATIONS.md#2b-kafka-connect-killed) |
-| 3 | Duplicate events from the source | 2026-10-07 | 2267 CDC events in the window, 95 no-op repeats (9.8% of status UPDATEs, 90 of 926 orders); 0 changes arrived twice with the same LSN; silver matches Postgres (rows, keys, sums); script 3 min 11 s | [3](../OPERATIONS.md#3-duplicate-events-from-the-source) |
-| 4 | Late events | 2026-10-07 | An old change re-sent after a newer one; silver kept `approved` and `_last_lsn` 1401679552 before and after (the MERGE guard dropped it); bronze kept the copy at a new offset; script 3 min 12.6 s | [4](../OPERATIONS.md#4-late-events) |
-| 5 | PostgreSQL restart | 2026-10-23 | Postgres healthy in 13 s, connector streamed again 13 s later without a failed task; bronze caught up 28 s after a 30 s burst; `ContainerRestarting` firing 15 s after the restart; `reconcile` 7 of 7 | [5](../OPERATIONS.md#5-postgresql-restart) |
-| 6 | Connector stopped for 30 minutes (WAL growth) | 2026-10-23, 2026-10-29 | 2026-10-23: `ConnectorNotRunning` 95 s after the stop, `SlotWalRetainedHigh` 326 s after it, 80.9 MB held. 2026-10-29 (committed script, full hold): connector stopped 17:47:02 to 18:17:06, `dq_checks` at 18:00 and 18:15 green with `in flight: CDC stands, no verdict`, `CdcStalledSourceWrites` firing 18:20:04, then silver matches Postgres (rows, keys, sums) 7 of 7, exit 0. Sources for the 2026-10-29 run: the result of W6-T07 in [the W6 spec](planning/14-closeout-spec.md) and the approval log entry of 29.10 18:22 in [HANDOFF](HANDOFF.md) (ru) | [6](../OPERATIONS.md#6-connector-stopped-for-30-minutes-wal-growth) |
-| 7 | Corrupted event in topic | 2026-10-23 | One non-envelope record: one `silver.quarantine` row after the first merge, still one after the second; the rest of the batch merged | [7](../OPERATIONS.md#7-corrupted-event-in-topic) |
-| 8 | Kafka down for 6 minutes | 2026-10-23 | Kafka healthy 20 s after the start, connector `RUNNING` after 20 s, bronze caught up after 25 s; `spark-bronze` restarted 15 times, resumed from the checkpoint each time; 21 partitions without duplicate or missing offset; silver matches Postgres (rows, keys, sums) 7 of 7; `SparkNoBatch5m` did not fire (see Alerts) | [8](../OPERATIONS.md#8-kafka-down-for-6-minutes) |
-| 9 | Airflow task failure (dbt test) | 2026-10-18 (run), 2026-10-23 (alert) | `dbt_build` red on a broken test, children skipped, `mart_daily_sales` kept its 9 snapshots; `AirflowDagFailed` 17 s after the red run ended | [9](../OPERATIONS.md#9-airflow-task-failure-dbt-test) |
-| 10b | Silver merge killed between two tables | 2026-11-06 | `lakehouse-silver-merge` killed 12:10:23 after the first of 4 tables (`order_items`, 97 events); 3 tables differed from Postgres right after; the Airflow retry (`merge` try 2, 12:11:24 to 12:11:49) brought silver level about 86 s after the kill; run `success` 12:11:50 (REST), so `AirflowDagFailed` did not fire; `ContainerRestarting` firing (`activeAt` 12:11:34); `reconcile` 7 of 7 | [10b](../OPERATIONS.md#10b-silver-merge-killed-between-two-tables) |
+| 1 | Spark bronze killed mid-batch | 2026-10-07 | Kill 18:09:44 during batch 80 (158 records), replayed batch committed 18:10:12, 28 s after the kill, same query id; 0 duplicate or missing offsets in 21 topic partitions, no epoch committed twice | [1](failure-scenarios.md#1-spark-bronze-killed-mid-batch) |
+| 2a | Kafka Connect restart | 2026-10-07 | Recovered in about 32 s; 1429 CDC events in the minute before the restart, 1593 after; 0 events repeated with the same LSN; silver matches Postgres (rows, keys, sums) for 7 tables | [2a](failure-scenarios.md#2a-kafka-connect-restart) |
+| 2b | Kafka Connect killed | 2026-10-07 | Connector resumed 26 s after `docker start`; 253 events arrived twice (orders 173, order_items 40, payments 39, reviews 1), all absorbed; silver matches Postgres (rows, keys, sums) for 7 tables | [2b](failure-scenarios.md#2b-kafka-connect-killed) |
+| 3 | Duplicate events from the source | 2026-10-07 | 2267 CDC events in the window, 95 no-op repeats (9.8% of status UPDATEs, 90 of 926 orders); 0 changes arrived twice with the same LSN; silver matches Postgres (rows, keys, sums); script 3 min 11 s | [3](failure-scenarios.md#3-duplicate-events-from-the-source) |
+| 4 | Late events | 2026-10-07 | An old change re-sent after a newer one; silver kept `approved` and `_last_lsn` 1401679552 before and after (the MERGE guard dropped it); bronze kept the copy at a new offset; script 3 min 12.6 s | [4](failure-scenarios.md#4-late-events) |
+| 5 | PostgreSQL restart | 2026-10-23 | Postgres healthy in 13 s, connector streamed again 13 s later without a failed task; bronze caught up 28 s after a 30 s burst; `ContainerRestarting` firing 15 s after the restart; `reconcile` 7 of 7 | [5](failure-scenarios.md#5-postgresql-restart) |
+| 6 | Connector stopped for 30 minutes (WAL growth) | 2026-10-23, 2026-10-29 | 2026-10-23: `ConnectorNotRunning` 95 s after the stop, `SlotWalRetainedHigh` 326 s after it, 80.9 MB held. 2026-10-29 (committed script, full hold): connector stopped 17:47:02 to 18:17:06, `dq_checks` at 18:00 and 18:15 green with `in flight: CDC stands, no verdict`, `CdcStalledSourceWrites` firing 18:20:04, then silver matches Postgres (rows, keys, sums) 7 of 7, exit 0. Sources for the 2026-10-29 run: the result of W6-T07 in [the W6 spec](planning/14-closeout-spec.md) and the approval log entry of 29.10 18:22 in [HANDOFF](HANDOFF.md) (ru) | [6](failure-scenarios.md#6-connector-stopped-for-30-minutes-wal-growth) |
+| 7 | Corrupted event in topic | 2026-10-23 | One non-envelope record: one `silver.quarantine` row after the first merge, still one after the second; the rest of the batch merged | [7](failure-scenarios.md#7-corrupted-event-in-topic) |
+| 8 | Kafka down for 6 minutes | 2026-10-23 | Kafka healthy 20 s after the start, connector `RUNNING` after 20 s, bronze caught up after 25 s; `spark-bronze` restarted 15 times, resumed from the checkpoint each time; 21 partitions without duplicate or missing offset; silver matches Postgres (rows, keys, sums) 7 of 7; `SparkNoBatch5m` did not fire (see Alerts) | [8](failure-scenarios.md#8-kafka-down-for-6-minutes) |
+| 9 | Airflow task failure (dbt test) | 2026-10-18 (run), 2026-10-23 (alert) | `dbt_build` red on a broken test, children skipped, `mart_daily_sales` kept its 9 snapshots; `AirflowDagFailed` 17 s after the red run ended | [9](failure-scenarios.md#9-airflow-task-failure-dbt-test) |
+| 10b | Silver merge killed between two tables | 2026-11-06 | `lakehouse-silver-merge` killed 12:10:23 after the first of 4 tables (`order_items`, 97 events); 3 tables differed from Postgres right after; the Airflow retry (`merge` try 2, 12:11:24 to 12:11:49) brought silver level about 86 s after the kill; run `success` 12:11:50 (REST), so `AirflowDagFailed` did not fire; `ContainerRestarting` firing (`activeAt` 12:11:34); `reconcile` 7 of 7 | [10b](failure-scenarios.md#10b-silver-merge-killed-between-two-tables) |
 
-Scenario 10 (partial processing, Trino memory) is optional and `planned`; 10b is in the table above. The 2026-10-23 run of
+The 2026-10-23 run of
 scenario 6 used an uncommitted script version whose logical-message padding of the WAL stopped CDC for about 8 minutes
 with no loss; it is described in the write-up, together with the fix.
 
 ## Maintenance, before and after
 
-First live run of the Iceberg maintenance procedures, 2026-10-29, steps and raw numbers in
-[OPERATIONS, "First live run, 2026-10-29"](../OPERATIONS.md#first-live-run-2026-10-29) and ADR-025 in
-[DECISIONS.md](../DECISIONS.md). A one-off copy of `warehouse/` (4821 objects, 877 765 423 bytes,
-equal to the source) was taken before the first deletion; it is not a regular backup.
-
-| Measure | Before | After |
-|---|---|---|
-| `bronze.cdc_events` data files in partitions before today | 595 in 27 partitions | 30 (589 files rewritten into 24) |
-| `bronze.cdc_events` rows, `max(kafka_offset)` | 558 629, 77 659 | equal; Kafka end offsets equal, `bronze_offsets_ok` 0 |
-| Bronze `metadata.json` objects, `bronze/metadata/` objects | 122, 465 | 101, 444 (21 orphan files removed; the dry run listed the same 21) |
-| `silver.orders` snapshots | 38 | 15 (51 data files and 111 position-delete files deleted) |
-| `silver.order_items`, `silver.payments` snapshots | 31, 31 | 13, 13 |
-| `gold.fct_orders`, `gold.dim_customers` snapshots | 41, 41 | 16, 16 |
-| `lake.demo.orders` (sandbox) files | 21 (156 027 bytes) | 1 (77 927 bytes) |
-| Row count of every silver and gold table | | equal; `make reconcile` 7 of 7 after the silver expire |
-
-Time of each procedure, from the first Spark log line to the end of the command (approximate):
-bronze compaction 16 s, expire of the eight other silver tables in one run 34 s, expire of the
-nine gold tables 40 s, an orphans dry run 9 to 23 s, the real orphans run 13 s. `spark-bronze` was
-recreated alone and was healthy 26 s later, `Resuming at batch 171`. The pipeline after the live
-steps was green: `silver_upsert`, `dbt_build` and `dq_checks` on 2026-10-29 16:40 to 16:45, and
-the first scheduled `iceberg_maintenance` run ran `optimize` on 8 tables with the Spark steps
-skipped, by design.
+Design of the procedures: ADR-025 in [DECISIONS.md](../DECISIONS.md).
 
 The MinIO image swap of the same day (the images are built from source, ADR-026): bucket 4045
 objects and 482 441 040 bytes before and after (`mc du --json`), `mc admin info` version
 2025-09-07T16:13:09Z before and after, `make verify-fast` `verify ok`
 ([W6-T00 result](planning/14-closeout-spec.md)).
 
-The orphans dry run of `silver.orders` on 2026-10-30 17:48 UTC found 0 candidates while files of
-`orders_per_minute` (its location starts with the same string, `silver/orders`) were older than the
-7-day cutoff: the procedure does not take the other table's files for orphans
-([OPERATIONS, Orphans next to orders_per_minute](../OPERATIONS.md#orphans-next-to-orders_per_minute-2026-10-30)).
+### First live run, 2026-10-29
+
+Everything below is UTC and comes from the command output of that day. The image
+`lakehouse/spark:dev` (72e423bd) was built at 16:05 from a clean HEAD (3a213c6); its code is the
+same as `streaming/spark_jobs` (sha256 diff). Steps 5 to 10 ran as manual writes: `silver_upsert`
+and `dbt_build` paused and finished, scheduler stopped, one command, scheduler started (windows
+16:21-16:26, 16:28-16:30 and 16:33). Order of the steps:
+
+1. Baseline (16:07): `bronze_caught_up` and `bronze_offsets_ok` exit 0; 4821 objects,
+   877 765 423 bytes under `warehouse/`.
+2. Copy (16:12): `mc mirror` of `warehouse/` to `/mnt/d/lakehouse-backup/warehouse-20261029`
+   (outside the repo). The host holds 4821 files and 877 765 423 bytes (`find`, `du -sb
+   --apparent-size`), equal to `mc du --json` and `mc ls --json`. This is a one-off copy before the
+   first deletion, not a regular backup.
+3. Demo (16:13-16:15): `iceberg_demo` compacted `lake.demo.orders` from 21 files to 1
+   (156 027 to 77 927 bytes); its expire deleted 22 data files, 43 manifests and 22 manifest lists
+   and left 1 snapshot. Then `maintenance expire --days 7 demo.orders` exited 0 with all counts 0.
+4. `spark-bronze` recreated alone (16:17): the 20 other containers kept their `Created` time;
+   healthy after 26 s, 0 restarts, log `Resuming at batch 171`, and `bronze."cdc_events$properties"`
+   has `write.metadata.delete-after-commit.enabled = true`. Rows (558 629) and `max(kafka_offset)`
+   (77 659) did not move.
+5. Bronze compaction (`rewrite-data --before-today`).
+6. `silver.sellers` expire.
+7. Expire of the other eight silver tables, one run.
+8. Expire of the nine gold tables, one run.
+9. Orphans dry runs, four runs: `demo`, silver, gold, bronze with `--location-suffix metadata`.
+10. Review of the candidates (below), then the real orphans run on bronze `metadata/` only.
+11. `make replay-burst SECONDS=60` (virtual time 2026-07-16 21:33:42 to 2026-07-17 09:29:04, 233
+    events, 76 858 to 77 091 emitted, 22 060 pending), then the normal pipeline: `silver_upsert`
+    (16:40 and 16:45) and `dbt_build` (16:40) success, `dq_checks` (16:45) success with
+    `reconcile_in_flight` 0, every `reconcile_*_differing` 0 and `tables_differing{at_rest=true}` 0.
+12. `iceberg_maintenance` unpaused (16:46). First scheduled run `scheduled__2026-10-29T03:30`
+    success: `expire_and_compact=False`, so `expire_silver`, `gold_expire_commands`, `expire_gold`,
+    `compact_bronze` and `rewrite_position_deletes` were skipped and `optimize` ran for 8 tables.
+    `make reconcile` 7/7 afterwards. `iceberg_orphans` stays paused.
+
+Before and after. The row count of every table was equal before and after, and `make reconcile`
+passed 7/7 after the silver expire.
+
+| Table | Snapshots | Data files deleted | Manifests deleted | Manifest lists deleted |
+|---|---|---|---|---|
+| `bronze.cdc_events` (compaction) | 171 to 172 (one `replace`) | 589 rewritten (46 048 268 bytes) into 24 | not run | not run |
+| `silver.sellers` | 2 to 1 | 4 | 1 | 1 |
+| `silver.customers` | 4 to 1 | 12 | 3 | 3 |
+| `silver.order_items` | 31 to 13 | 68 | 40 | 18 |
+| `silver.orders` | 38 to 15 | 51 (and 111 position-delete files) | 69 | 23 |
+| `silver.payments` | 31 to 13 | 68 | 34 | 18 |
+| `silver.products` | 4 to 1 | 12 | 3 | 3 |
+| `silver.reviews` | 23 to 7 | 54 | 38 | 16 |
+| `silver.quarantine` | 5 to 1 | 3 | 6 | 4 |
+| `silver.orders_per_minute` | 15 to 15 | 0 | 0 | 0 |
+| `gold.category_translation` | 82 to 32 | 25 | 49 | 50 |
+| `gold.dim_customers` | 41 to 16 | 25 | 25 | 25 |
+| `gold.dim_products` | 41 to 16 | 25 | 25 | 25 |
+| `gold.dim_sellers` | 41 to 16 | 25 | 25 | 25 |
+| `gold.fct_order_items` | 38 to 15 | 23 | 23 | 23 |
+| `gold.fct_orders` | 41 to 16 | 25 | 25 | 25 |
+| `gold.mart_daily_sales` | 33 to 24 | 0 | 0 | 9 |
+| `gold.mart_delivery_sla` | 36 to 15 | 21 | 21 | 21 |
+| `gold.mart_seller_performance` | 36 to 15 | 21 | 21 | 21 |
+
+Only `silver.orders` had position-delete files to delete; every other silver table reported 0.
+After the expire, no table has more than 1 snapshot older than 7 days in silver (`customers`,
+`products` and `sellers`: their only snapshot), and none in gold. `silver.orders_per_minute` kept all
+15 snapshots; its last commit was 2026-10-23 19:23:02 before and after.
+
+Bronze, before and after the compaction and the real orphans run:
+
+| Measure | Before | After |
+|---|---|---|
+| Data files in partitions before today (`$files`) | 595 in 27 partitions | 30 |
+| Rows, `max(kafka_offset)` | 558 629, 77 659 | equal |
+| Kafka end offsets (md5) | | equal, `bronze_offsets_ok` 0 |
+| Objects in `bronze/data/` | 619 | 619 |
+| Objects in `bronze/metadata/` | 465 | 444 |
+| `metadata.json` objects | 122 | 101 |
+
+Orphans. Dry runs found 0 candidates for `demo`, 0 for the 9 silver tables, 0 for the 9 gold tables,
+and 21 for bronze `metadata/` (`files_truncated` false). The review before the real run: all 21 are
+`metadata/00000` to `00020` `*.metadata.json` files written 2026-09-22 19:22-19:43; none appears in
+`$metadata_log_entries` (101 rows), `$snapshots.manifest_list` (172) or `$all_manifests` (171); the
+JDBC pointer of bronze is `00121`, which is not a candidate. The real run removed 21 files, the same
+set as the dry run, and left `bronze/data/` at 619 objects.
+
+Time of each procedure, read from the first Spark log line to the end of the command, so the
+figures are approximate. No separate time was recorded for `mc mirror` and the demo; their windows
+are in the list above.
+
+| Procedure | Time |
+|---|---|
+| `spark-bronze` recreate to healthy | 26 s |
+| Bronze compaction (`rewrite-data --before-today`) | about 16 s from the first Spark log line |
+| `silver.sellers` expire | about 10 s from the first Spark log line |
+| Expire of the other eight silver tables, one run | about 34 s from the first Spark log line |
+| Expire of the nine gold tables, one run | about 40 s from the first Spark log line |
+| Orphans dry run (each of four runs) | 9 to 23 s |
+| Real orphans run, bronze `metadata/` | about 13 s from the first Spark log line |
+
+Rollback point. The owner released the JDBC rollback point on 2026-10-29; the rows of `iceberg_catalog` were not deleted.
+
+### Orphans next to orders_per_minute, 2026-10-30
+
+The table location `s3a://lakehouse/warehouse/silver/orders` is a string prefix of
+`silver/orders_per_minute-01a169dd-...`, so a listing by prefix would see the files of the other
+table. `$C maintenance orphans silver.orders` (dry run) at 17:48 UTC, `older_than` 2026-10-23
+17:48:44: `{"candidates":0,"dry_run":true,"files":[],"files_truncated":false}`. The first snapshot
+of `orders_per_minute` (2026-10-23 17:45:11, `append`, 3 data files) is older than that and still
+live, so its files were old enough to show up: the procedure lists the table directory, not the
+string prefix.
 
 ## Alerts and time to fire
 
@@ -131,13 +216,13 @@ in [OPERATIONS, Alerts](../OPERATIONS.md#alerts).
 |---|---|---|
 | `ConnectorNotRunning` | live, scenario 6 (2026-10-23) | 95 s after the connector stop |
 | `SlotWalRetainedHigh` | live, scenario 6 (2026-10-23) | 326 s after the stop, 80 MB held |
-| `SparkNoBatch5m` | live, `spark-bronze` stopped (2026-10-23) | 315 s after the stop |
-| `FreshnessAbove15m` | live, `silver_upsert` paused (2026-10-23) | 1561 s after bronze caught up |
+| `SparkNoBatch5m` | live, `spark-bronze` stopped (2026-10-23) | 315 s after the stop (`cause="gone"`) |
+| `FreshnessAbove15m` | live, `silver_upsert` paused, burst (2026-10-23) | 1561 s after bronze caught up (900 s plus up to 15 min until the next `dq_checks`) |
 | `AirflowDagFailed` | live, scenario 9 (2026-10-23) | 17 s after the red run ended |
 | `ContainerRestarting` | live, scenarios 5 and 8 (2026-10-23) | 15 s after the restart |
-| `CdcStalledSourceWrites` | live, scenario 6 (2026-10-29) | firing 18:20:04; `cdc_stalled` was 1 from 18:01 (W6-T07 result in [the W6 spec](planning/14-closeout-spec.md), [HANDOFF](HANDOFF.md) log 29.10 18:22) |
-| `SparkRestartLoop` | rule run over the stored data of scenario 8, not a live firing | true from 17:11:15, 51 s after the first restart (17:10:24) |
-| `SlotWalHeldIdle`, `DqChecksStale`, `ScrapeTargetDown`, `SilverGoldNotCompared`, `GoldStaleAtRest` | promtool only | not shown live |
+| `CdcStalledSourceWrites` | promtool (two runs, one run, short history); live, scenario 6 (2026-10-29) | firing 18:20:04, 33 min after the stop (17:47:02 to 18:20:04): two `dq_checks` runs with stalled 1, then the 20 min window; `cdc_stalled` was 1 from 18:01 (W6-T07 result in [the W6 spec](planning/14-closeout-spec.md), [HANDOFF](HANDOFF.md) log 29.10 18:22) |
+| `SparkRestartLoop` | rule run over the stored data of scenario 8 (TSDB replay), not a live firing | true from 17:11:15, 51 s after the first restart (17:10:24); the 2026-10-23 rule was not loaded then |
+| `FreshnessAbove15m` with `cause="unknown"`, `SlotWalHeldIdle`, `DqChecksStale`, `ScrapeTargetDown`, `SilverGoldNotCompared`, `GoldStaleAtRest` | promtool only | not shown live |
 
 `GoldStaleAtRest` (audit of 2026-11-06) exists because of a finding that was live: Airflow 3.3 queues
 no Asset event for a paused DAG (`airflow/assets/manager.py:354` in the image), so the `lake.silver`
@@ -148,7 +233,7 @@ and `expire_silver` after `optimize` can remove the newest data snapshot; both o
 
 `SparkNoBatch5m` did not fire in scenario 8: a crash-looping driver dies before its first batch and
 Kafka came back inside the 5 minutes of the `gone` rule. That gap is why `SparkRestartLoop` exists
-([OPERATIONS, scenario 8](../OPERATIONS.md#8-kafka-down-for-6-minutes)).
+([failure scenario 8](failure-scenarios.md#8-kafka-down-for-6-minutes)).
 
 ## CI and smoke
 
