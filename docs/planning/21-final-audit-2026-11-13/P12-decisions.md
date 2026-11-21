@@ -1,6 +1,6 @@
 # P12. DECISIONS: ADR-027..ADR-030, сжатие до 40 KB, устаревшие ADR
 
-Статус: не начат. Сессия на Opus: `/task docs/planning/21-final-audit-2026-11-13/P12-decisions.md`.
+Статус: исполнен 21.11, `ed4dae9`. Сессия на Opus: `/task docs/planning/21-final-audit-2026-11-13/P12-decisions.md`.
 
 ## Цель
 
@@ -238,4 +238,79 @@ LC_ALL=C awk '/^## /{if(n)print n,b;n=$2;b=0} n{b+=length($0)+1} END{print n,b}'
 
 ## Итог
 
-По разделу 6 `13-harness.md`; для P13: якоря «Decision measurements» и где легли замеры ADR-007.
+Сессия 21.11.2026, рутина сессии «да» в аргументе `/task`; тексты ADR-027..ADR-030 показаны
+владельцу одним сообщением, «ок на все четыре ADR». Действий C нет, стенд не трогали (один
+`select` снапшотов `mart_daily_sales`). Коммит `ed4dae9` `docs: decisions compressed under 40 kb,
+bi access, security model and gold recorded`, 3 файла (только Markdown, гейт без отметок), push
+`9959565..ed4dae9`. DECISIONS писал оркестратор, раздел evidence `docs-writer` по брифу с
+диапазонами HEAD, ревью `reviewer`, предмет `документ`.
+
+Вход (21.11, HEAD `9959565`), расхождения с пакетом:
+- `DECISIONS.md` 63 378 байт (P06 добавил абзац «Removed, 2026-11-20» в ADR-005, 15 567); номера
+  строк после ADR-005 сдвинуты на +6, диапазоны брифа пересчитаны.
+- `check_docs.py . links` на HEAD `broken: 3`, не 1 (те же три в `docs/planning`, что после P11;
+  `P12-decisions.md:160` остаётся: путь в файле пакета относителен его папки). Критерий принят как
+  «без новых битых».
+- `docs/evidence.md`: строка «ADR-001 to ADR-026» на `:392`, не `:307`.
+- Откат ADR-026 не ушёл ссылкой: раздел «MinIO and mc images» теперь в `docs/supply-chain.md` и
+  сам ссылается на ADR-026 за откатом; в ADR-026 откат остался двумя строками.
+- ADR-004: «the web console on :9001 is used to browse the bucket», не «only browses»: «только
+  просмотр» не проверено (OPERATIONS «MinIO console» говорит «Look, do not delete»).
+- ADR-006: статус поддержки Spark 3.5 не записан, источника нет (как и требовал пакет).
+- Подтверждено: тег `RELEASE.2025-10-15T17-29-55Z` (`git ls-remote`), CVE-2025-62506 high,
+  patched в нём (`gh api .../security-advisories`); `mart_daily_sales$snapshots`: `delete`
+  16:20:50.521 и `append` 16:20:50.759 (2026-11-06); функции Trino: `system.builtin` разрешены
+  всегда (документация Trino через context7).
+
+| Критерий | Проверка -> вывод (21.11, дерево перед коммитом) |
+|---|---|
+| размер | `wc -c DECISIONS.md` -> 39036; `SIZES \| awk '$2>2560'` -> пусто (максимум ADR-025 2549, ADR-021 2430) |
+| число ADR | `grep -c '^## ADR-'` -> 25 |
+| заменённые | индекс: ADR-014 «superseded by ADR-027», ADR-017 «superseded by ADR-024» |
+| MinIO | grep `last community\|no console\|removed the web console\|as the console` -> пусто; `CVE-2025-62506` -> 1 |
+| слова процесса и ID | оба grep пакета и `00-mini` -> пусто; в разделе `Decision measurements` evidence тоже пусто |
+| `root on the host` | 1 строка, ADR-029 |
+| якоря | `## Decision measurements` evidence:356; `### Cutover, 2026-10-08` есть; входящие якоря interview-notes живы (проверщик `reviewer`) |
+| числа | скрипт «Ничего не потеряно» -> `['03']`: часть снятого ID `W4-T03` |
+| ссылки | `check_docs.py . links` -> `checked: 333, broken: 3`, все в `docs/planning`, как на HEAD |
+| 00-mini | `sed -n 1,5p ... \| grep -c 'история'` -> 1 |
+| тесты | `make check` -> `2233 passed, 149 skipped` (до правок второго круга, они только Markdown) |
+| ревью | круг 1 «принять с замечаниями» (1 средняя, 7 низких), круг 2 «принять с замечаниями» (2 низких, обе ниже); дерево круга 2 `3405a60` |
+| CI | `gh run view 44897128117` на `ed4dae9` -> `success`, 12 из 12 job |
+
+Сделано:
+- `DECISIONS.md` 63 378 -> 39 036 байт: индекс одной фразой на ADR; новые ADR-027..ADR-030 (тексты
+  владельца дословно) и разделы ADR-003, ADR-006, ADR-012; строки ADR-002, ADR-015; профили ADR-016
+  (8); ADR-011 строка об Asset на паузе; ADR-020 альтернативы decimal; ADR-026 строка CVE и пины;
+  куски ADR-005 (c), «No authentication», сокет ADR-011 и ADR-023 сведены в ADR-029.
+- `docs/evidence.md`, `## Decision measurements`: 12 подразделов (ADR-004, 005, 007, 010, 011, 013,
+  019, 020, 023, 024, 025, 026), дословно; сняты ID карточек и решений и слова процесса («ladder»,
+  «its own "ok"», «then in `CLAUDE.md`...»), «W3 then builds gold» -> «Gold is then built»; ссылки
+  на `failure-scenarios.md`, OPERATIONS «Lakekeeper», «Maintenance, before and after»; навигация,
+  «ADR-001 to ADR-030».
+- `docs/planning/00-mini-architecture-review.md`: строка статуса «история».
+
+Удалено без переноса (устарело или повторяет другой ADR):
+- ADR-001 «license must be checked» (лицензия в README); ADR-004 «removed the web console», «no
+  console», «will not receive upstream fixes» (вместо неё ADR-026, строка CVE).
+- ADR-005 HEAD:187-192 «Consequences until the cutover».
+- ADR-011 «Maintenance in week 3» (ADR-025), «owner's Modify gate», «`AIRFLOW_ADMIN_PASSWORD` is
+  gone from `.env.example`» (заметка о переходе).
+- ADR-016 «weeks 3-6», `D1`, `D2`; ADR-021 повтор ADR-009 о `_deleted`, «(W5-T05)».
+- ADR-026 строки статуса о ревью; «The CVEs of the 2025-09 tag stay» (строка CVE); «README and
+  OPERATIONS say "built from source"».
+
+Для P13:
+- Якоря замеров: `docs/evidence.md#decision-measurements`, подразделы `#adr-NNN-...`; замеры и
+  проверки ADR-007, в том числе «So bronze is exactly once across Spark restarts», лежат в
+  `#adr-007-duplicates-across-restarts` (AR-03 правит формулировку там).
+- Комментарии compose `docker/compose.yaml:566-567`, `:738` «root on the host in effect
+  (ADR-011)»: этот текст теперь в ADR-029 (замечание 8 `reviewer`, compose вне границ P12).
+- `README.md:20` «ADR-001 to ADR-026».
+
+Замечено, не исправлено (владельцу):
+- ADR-029 (текст одобрен дословно) называет держателями root-ключа MinIO Spark, Trino и
+  Lakekeeper; его держит и `airflow-scheduler` (`docker/airflow/airflow.env:34-36`), который
+  передаёт ключ `spark-silver`. Правка одной фразы по «ок» владельца.
+- В `docs/evidence.md` две перенесённые строки длиннее 100 символов (:477, :541), как ещё 52 на
+  HEAD; стиль.

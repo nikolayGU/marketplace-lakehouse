@@ -179,7 +179,7 @@ Stop-хук видят её как чужой незакоммиченный к�
 | `P10-history-in-code.md` | ID карточек и даты из кода и конфигов, тест на будущее | DC-04 (R-66) | B, пауза DAG на время правки `airflow/dags` и `dbt` | P05..P09 | M | исполнен 21.11, `826a9e3` |
 | **Этап 3. Документы** | | | | | | |
 | `P11-operations.md` | OPERATIONS около 63 KiB с оглавлением, `docs/failure-scenarios.md`, `docs/supply-chain.md`, SLI и пороги | OB-04, OB-05, OB-08, PF-25, PF-27, PF-30, PF-53, PF-54, части GB-02, OR-05, IN-13, IN-15 | A | P10 | L | исполнен 21.11, `bc96615` |
-| `P12-decisions.md` | ADR-027..ADR-030, сжатие DECISIONS до 40 KB, устаревшие ADR | AR-01 (строки DECISIONS), AR-02, AR-04, AR-05, AR-08 | A; тексты новых ADR на «ок» | P10, P11 | M | не начат |
+| `P12-decisions.md` | ADR-027..ADR-030, сжатие DECISIONS до 40 KB, устаревшие ADR | AR-01 (строки DECISIONS), AR-02, AR-04, AR-05, AR-08 | A; тексты новых ADR на «ок» | P10, P11 | M | исполнен 21.11, `ed4dae9` |
 | `P13-readme-architecture.md` | README до 10 KB, ARCHITECTURE (гарантии доставки, диаграмма, Production gap), Security model, evidence, interview-notes, README компонентов | DC-01..DC-03, DC-05..DC-08, DC-12..DC-19, AR-01 (README и комментарии), AR-03, AR-06, AR-09, GB-02, IN-04, IN-12, IN-15, QA-09, DP-07, DP-09, DP-10, OR-05 (часть), Б6 (строкой) | A; комментарии compose и Dockerfile B (В-07..В-09, В-25, В-26) | P11, P12 и все пакеты кода | L | не начат |
 | `P14-freeze.md` | `docs/harness.md`, тест гигиены документов, чистка `docs/planning`, GitHub, финальная приёмка | HR-07, DC-09..DC-11, DC-20, DC-21, H-8 | A и B; GitHub C (В-10, В-11, В-21, В-23) | все | M | не начат |
 
