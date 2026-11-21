@@ -96,6 +96,16 @@ together at 6.0 GiB at rest on 2026-11-10.
 
 All ports and profiles: [OPERATIONS.md](OPERATIONS.md#ports-all-on-127001). Full dataset: `make data`.
 
+The quick start ends at silver. Gold and the dashboard are one more step: `make dbt-build` (seed,
+run and test `lake.gold` through Trino), then `make up PROFILE=bi` for Superset. Run
+`make dbt-build` by hand only with Airflow down, or with `dbt_build` paused and no
+`iceberg_maintenance` run in flight: gold takes one writer at a time. With the `orchestrate`
+profile the `dbt_build` DAG builds gold after every merge of `silver_upsert` once both DAGs are
+unpaused (DAGs start paused); on a stack at rest trigger it once:
+[OPERATIONS, Airflow](OPERATIONS.md#airflow). This step is not covered by `smoke.yml` and is not
+proven on the sample: the gold runs in [evidence](docs/evidence.md) were on the full dataset. To
+stop and start the whole stack, see [OPERATIONS, Daily commands](OPERATIONS.md#daily-commands).
+
 ## Business layer
 
 Gold models answer daily sales and GMV, top categories by GMV, delivery SLA by state and
@@ -137,8 +147,12 @@ A local lab, not a hardened system (ADR-029).
 - Every port is bound to `127.0.0.1` (`BIND_IP`). Do not change it.
 - No login on Kafka, Kafka Connect, Lakekeeper, Trino, Prometheus, Airflow (every visitor is admin)
   and the Superset MCP endpoint.
-- Shared accounts: one MinIO key pair for Spark, Trino and Lakekeeper; one `postgres-meta`
-  superuser for Lakekeeper, Superset and Airflow.
+- Shared accounts: the MinIO root key pair for Spark, Trino, Lakekeeper and the three Airflow
+  containers (api-server, scheduler, dag-processor); one `postgres-meta` superuser for Lakekeeper,
+  Superset and Airflow; the superuser of the source database (`OLTP_USER`, also the image's
+  `POSTGRES_USER`) for the replayer, postgres-exporter and Airflow.
+- MinIO and Lakekeeper run as root inside their containers (`docker top`, 2026-11-21). No container
+  drops capabilities or sets `no-new-privileges`.
 - The Airflow scheduler and container-exporter mount `docker.sock`.
 - The Debezium password is visible in plain text through the Kafka Connect REST API.
 - MinIO is built without the 2025-10-15 tag that fixes CVE-2025-62506 (accepted, ADR-026).

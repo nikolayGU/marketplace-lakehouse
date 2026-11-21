@@ -39,9 +39,9 @@ Spark image and jobs.
 
 Unit tests that build a SparkSession need a JVM and skip without one. The host has no Java;
 `make test-spark` runs the Spark test files (`SPARK_TESTS` in the Makefile) inside
-`lakehouse/spark:dev` instead (`make test-spark SPARK_IMAGE=lakehouse/spark:ci` in CI); a new
-Spark test file has to be added to that list. Inside the image a skipped test fails the run
-(`-p no:skipping`).
+`lakehouse/spark:dev` (built by `make start`) instead
+(`make test-spark SPARK_IMAGE=lakehouse/spark:ci` in CI); a new Spark test file has to be added to
+that list. Inside the image a skipped test fails the run (`-p no:skipping`).
 
 ## orders_per_minute
 

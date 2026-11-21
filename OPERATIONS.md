@@ -155,6 +155,27 @@ make iceberg-demo    # snapshots, time travel, rollback, compaction, expiration
 (read only), so its rollback and `expire_snapshots` never reach bronze or silver. It needs
 `silver.orders` with at least 1 100 live rows (`make silver` first).
 
+Stop and start the whole stack:
+
+```
+# every profile; the containers are removed, the volumes stay
+make down PROFILE=core,query,orchestrate,obs,bi,stateful,tools,jobs
+make start                                    # core and trino
+make up PROFILE=orchestrate,obs,bi,stateful   # only the profiles that were up; never jobs
+make verify-fast                              # read only; ends `verify ok`
+```
+
+A bare `make down` stops only `core`: `PROFILE` defaults to `core`. `PROFILE='*'` does not work in
+`down` and `up`: `PROFILE_FLAGS` inserts the name unquoted and the shell expands the star (`status`
+and `nuke` quote `'*'` themselves). Never pass `jobs` to `make up`: its only service is
+`spark-silver`, the silver merge, which runs through `make silver` or the `silver_upsert` DAG.
+Data lives in the named volumes (`postgres_oltp`, `postgres_meta`, `kafka`, `minio`, `prometheus`,
+`grafana`, `superset`) and the Spark checkpoints in MinIO. `make down` keeps the volumes; only
+`make nuke` removes them. After the start `spark-bronze` continues from its checkpoint
+(`Resuming at batch N`, see Bronze ingest), and the DAG pause state is kept in `postgres-meta`.
+With the profile list above `make -n down` prints one `docker compose ... down` with a
+`--profile` flag for each of the eight profiles (2026-11-21).
+
 ## Bronze ingest
 
 `spark-bronze` runs `spark_jobs/bronze_cdc_ingest.py`: every `oltp.shop.*` topic into
@@ -168,7 +189,8 @@ which happens on an empty topic too.
 - `startingOffsets=earliest` applies only to a fresh checkpoint. If the job is down longer than
   Kafka retention (24 h), `failOnDataLoss=true` fails the query instead of skipping offsets, and
   Docker restarts it into the same failure: a restart loop (`RestartCount` growing, `OffsetOutOfRange`
-  or "data loss" in the log). Recovery is a decision, not a restart: see the Kafka gate.
+  or "data loss" in the log). Recovery is a decision, not a restart: `make cdc-snapshot` (below in
+  this list) and step 2 of the runbook [spark-stalled](docs/runbooks/spark-stalled.md).
 - Unhealthy means no progress or idle event for 120 s: the query is stuck, typically on MinIO
   or `postgres-meta`. The container keeps running; read `make logs S=spark-bronze`.
 - Consumer down longer than retention, or bronze started after the history left Kafka:
@@ -410,7 +432,11 @@ the Iceberg data and metadata files of bronze, silver and gold. Look, do not del
 Optional BI over the gold marts, with an MCP endpoint. `make up PROFILE=bi` on top of
 `core` and `query` (swap `orchestrate` for `bi` to stay lean); three services, all built from
 `docker/superset/Dockerfile` (Superset 6.1.0 plus the drivers `psycopg2-binary`, `trino` and
-`fastmcp`, pinned by `constraints.txt`):
+`fastmcp`, pinned by `constraints.txt`). The dashboard reads `lake_ro.gold` (bundle datasets:
+`docker/superset/dashboards/datasets/`), so build gold first: `make dbt-build`, or, with Airflow
+up, unpause `dbt_build` and trigger it once (`airflow dags trigger dbt_build` in the scheduler
+container). By itself it runs only after a merge of `silver_upsert`, see [Airflow](#airflow).
+Without gold the tables the charts read do not exist yet.
 
 | Service | Port | Limit | Does |
 |---|---|---|---|
@@ -724,7 +750,7 @@ minutes (the cadence of `dq_checks`); that is not a bug.
   data, so `check_dashboards.py` lists those two panels as `idle` (not empty) on a quiet system, for
   at most the 7 days of Prometheus retention since the last batch with data.
 - Live check of 2026-10-23 (per-minute counts against `silver.orders`, `make watermark-live`, memory):
-  the Stateful job row of [README](README.md).
+  the Stateful job row of [evidence](docs/evidence.md#status).
 - Demos: `make watermark-demo` (lab topic, own table `demo.orders_per_minute`, needs only `core`)
   and `make watermark-live` (needs the service; re-sends the oldest real order, which the watermark
   must drop once, and the newest, which it must count once; `lsn_repeats_last_hour` grows by 2,

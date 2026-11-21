@@ -37,7 +37,11 @@ Three classes skip on a plain host and run in CI:
 
 `make test-spark` runs the Spark tests in the Spark image (`SPARK_TESTS` in the Makefile lists the
 files, `SPARK_IMAGE` picks the image, CI uses `lakehouse/spark:ci`). Inside the image a skip fails
-the run, so the MERGE, quarantine and epoch tests cannot be skipped silently.
+the run, so the MERGE, quarantine and epoch tests cannot be skipped silently. The image is local:
+`make start` (so `make bootstrap`) builds `lakehouse/spark:dev`, and `make dags-check` needs
+`lakehouse/airflow:dev`, which `make up PROFILE=orchestrate` builds. Without the image `docker run`
+tries to pull it from Docker Hub, where the `lakehouse` namespace is not ours (ADR-026): build the
+image first.
 
 ## Live stack only
 

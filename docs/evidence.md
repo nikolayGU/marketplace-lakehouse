@@ -877,6 +877,9 @@ Decision details:
 - A live schema change (migration 003, `sales_channel`): the owner's Modify gate, not done.
 - Trino authentication: not done. Access control limits the `grafana` user, but the user
   name is only a label ([OPERATIONS, Access control](../OPERATIONS.md#access-control)).
+- Full stop and start of the whole stack with `make down PROFILE=<all profiles>`: the command
+  follows from the Makefile (`make -n`) and was not run on the live stack. Per-profile
+  `make down PROFILE=obs` and a repeated `make start` were run.
 
 ## How it was built
 

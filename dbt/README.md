@@ -4,6 +4,12 @@ dbt-trino project `marketplace` over `lake.silver`, writing every model to `lake
 Lakekeeper). Run it from the repo root: `make dbt-parse` (no warehouse), `make dbt-build` (seed,
 run, test; needs `make start`).
 
+With the `orchestrate` profile up, this directory is mounted read only into Airflow as `/opt/dbt`,
+and the `dbt_build` DAG runs it after every merge of `silver_upsert`: a saved model edit reaches
+`lake.gold` with the next run. Pause `dbt_build` before editing models, and run `make dbt-build`
+by hand only while it is paused and no `iceberg_maintenance` run is in flight (its gold tasks
+share the `gold_writers` pool with `dbt_build`).
+
 - `models/staging`: `stg_<table>` views over the seven silver tables. Columns renamed, no filter:
   deleted rows stay with `is_deleted`, and each consumer decides
   ([ADR-009](../DECISIONS.md)). `updated_at` is when silver merged the row, not a business time.
