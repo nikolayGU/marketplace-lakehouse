@@ -114,7 +114,7 @@ and says `in flight` instead of a false failure while CDC stands.
 CI has 6 jobs: `lint-and-test` (`setup-java` Java 17 for the local Spark tests, `ruff`, `mypy`,
 `sqlfluff`, `yamllint`, `dbt parse`, `pytest tests/unit`, `gitleaks`), `hadolint`, `alerts-test`,
 `spark-tests`, `airflow-image` and `minio-images`; last green run
-[44897525916](../../actions/runs/44897525916). `smoke.yml` walks the clean-clone path on the
+[44899782065](../../actions/runs/44899782065). `smoke.yml` walks the clean-clone path on the
 sample but stops at silver: gold, the Asset chain, `dq_checks` and the dashboards are proven by the
 dated manual runs in [evidence](docs/evidence.md#ci-and-smoke), not by CI.
 

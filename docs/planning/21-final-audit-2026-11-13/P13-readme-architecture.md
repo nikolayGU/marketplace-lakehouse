@@ -1,6 +1,6 @@
 # P13. Витрина: README, ARCHITECTURE, evidence, interview-notes, README компонентов
 
-Статус: не начат. Opus, `/task docs/planning/21-final-audit-2026-11-13/P13-readme-architecture.md`.
+Статус: исполнен 21.11, `3f303a6`. Opus, `/task docs/planning/21-final-audit-2026-11-13/P13-readme-architecture.md`.
 
 ## Цель
 
@@ -255,3 +255,66 @@ README больше 10 KiB: резать Stack и What is proven, не Security 
   везде, IN-12 оставляет для `mc`: здесь «last `mc` tag», grep пуст.
 
 ## Итог
+
+Сессия 21.11.2026, рутина сессии «да» в аргументе `/task`; решения владельца: В-07 да, В-08 «а»,
+В-09 да, В-25 да, В-26 да. Скриншота `docs/img/superset-marketplace.png` в дереве не было (поиск по
+репо, Downloads, Desktop, Pictures, OneDrive, `/mnt/d/lakehouse-backup`); владелец: «сам сделай».
+Снят оркестратором 2026-11-21 11:32 UTC: контейнер `mcr.microsoft.com/playwright/python:v1.48.0-jammy`
+в сети `lakehouse_lake`, вход `admin`, пароль только из `--env-file .env` в окружение контейнера,
+не печатался и не читался агентом; `?standalone=1`, 1600x2145, `charts 13 errors 0`. Коммит
+`3f303a6` `docs: readme rewritten as a showcase, delivery guarantees, production gap and security
+model`, 20 файлов, push `dbf0a72..3f303a6`. Писали: README, ARCHITECTURE, evidence и
+interview-notes, README компонентов и OPERATIONS четыре брифа `docs-writer` (R, A, E, K
+параллельно, разные файлы); комментарии compose, Dockerfile, `.env.example`, шапка
+`docs/planning/README.md`, SVG, скриншот, `git rm LEARNING.md` и исправления ревью оркестратор;
+статус версий `scout` (веб), страницы Spark и dbt перечитаны отдельно.
+
+Вход (21.11, HEAD `dbf0a72`), расхождения с пакетом:
+- Факты в `<scratchpad>/p13-facts.md`: графиков 13, правил 16 (13 имён), DAG 5, сервисов 27,
+  профилей 8, job CI 6, ADR 30, вопросов 30, chaos 10; dbt `run_results.json` 2026-11-20T20:13:06Z
+  pass 61, success 18, warn 4, no-op 2; CI 44897525916 success на `dbf0a72`; smoke 44176185272
+  success 2026-11-17. `S3_ACCESS_KEY}` в compose 5, не 7 (после P06).
+- Текст комментария MinIO из пакета («the later 2025-10-15 tag») роняет
+  `test_no_history_in_code` (дата в коде): записан полным именем тега
+  `RELEASE.2025-10-15T17-29-55Z`. Хеш `config --hash '*'` до и после равен.
+- `lake_ro.properties:1-2` уже называет `superset` (P08): шаг не нужен. `AGENTS.md:128` и
+  `docs/agent-rules.md:65` о `LEARNING.md` уже не говорят (P04): шаг 7 только `git rm` и шапка.
+- Текст гарантий пакета говорил «`orders` merged before `order_items`»: по коду наоборот,
+  `sorted(...)` в `silver_upsert.py:289` даёт `order_items` первым; исправлено по ревью.
+- Производительность: Prometheus за 7 дней не видит ни bronze-батча, ни `merge`, а `dbt_build`
+  один (серия с 2026-11-20, `increase()` 0). Длительности из `task_instance` Airflow: merge 23
+  запуска, медиана 28.5 с, p90 65.3, max 75.1 (18.10-06.11); `dbt_build` 26, 25.0/36.4/40.8;
+  `reconcile_values` 273, 6.9/11.3/32.4. Объёмы Trino `$files`: bronze 559 742 строки, 68 файлов,
+  41.7 MiB.
+- Статус версий (`scout`, первичные страницы, 21.11): Lakekeeper 0.15.1, Iceberg 1.12.0,
+  dbt-core 1.12 (1.10 deprecated), Kafka 4.4.0, Debezium 3.7.1, Trino 484, Airflow 3.4.0; Superset
+  6.1.0 актуален; Spark 3.5 security-only до 11.2027, PostgreSQL 17 до 11.2029. Spark и dbt
+  перечитаны оркестратором, остальные строки только по отчёту `scout`.
+
+| Критерий | Проверка -> вывод (21.11, дерево перед коммитом `d78fd62`) |
+|---|---|
+| README | `wc -c` -> 9799; `grep -c '^## '` -> 11 |
+| запреты README, docker | оба grep -> пусто |
+| запреты ARCHITECTURE, interview-notes, якорь | оба grep -> пусто |
+| разделы ARCHITECTURE, SVG | 2; `grep -c postgres-meta docs/img/architecture.svg` -> 1 (экспорт mermaid-cli 11.4.2, `cmp` с экспортом текущего блока у ревьюера) |
+| Java 17, restore, ADR-007 | 2; 2; 0 |
+| Security model, loopback | 2; 1 |
+| evidence | Status и Performance 2; `stops at silver` README 1, evidence 1; `previous quarter` 0 |
+| interview-notes, LEARNING | 36; `test ! -e LEARNING.md`; `git grep LEARNING` вне planning и HANDOFF пусто |
+| компоненты | grep POSTing, W1-T05, `-w agent` пусто; tests/README 4 |
+| OPERATIONS | `connect-configs` 1; 64768 байт |
+| check_docs | `links` -> `checked: 383, broken: 3`, все в `docs/planning`, как на HEAD (не 1: см. «Итог» P12); `fileline` PASTEND/MISSING 0; `dashes` вне planning пусто; `names` SURNAME только в `docs/planning/15-audit-p5-review/` (P14); `ai` только «How it was built» (README, evidence), MCP, JMX agent |
+| тесты, verify | `make check` -> `2233 passed, 149 skipped`; `make verify-fast` -> `verify ok`, 7 таблиц rows, keys, sums, values ok (fast stamp `37dd515`) |
+| ревью | круг 1: код «принять», документы «принять с замечаниями» (6 средних, 3 низких), исправлены все средние и две низкие; круг 2: «принять», документы 1 низкая (ниже); дерево `d78fd62` |
+| CI | `gh run view 44899782065` -> `success`, 12 из 12 job, `3f303a6`, 2026-11-21 11:38 UTC; этот id в README коммитом итога |
+
+Не проверено: строки статуса версий кроме Spark и dbt (веб, только `scout`); строка Superset MCP в
+evidence Status (2026-11-06, проверка на дашборде v1, на v2 не повторялась).
+
+Осталось (низкое и стиль):
+- `tests/README.md`: в карте нет `test_alerts`, `test_no_history_in_code`, `test_spark_jvm`.
+- `docs/evidence.md`, «How it was built» хранит ID карточек (W6-T01, W5-T05b): раздел-исключение,
+  его переписывает P14 (`docs/harness.md`).
+- interview-notes Q35: порядок шагов к проду помечен как мнение; Q36 ожидание узкого места
+  помечено «not measured».
+- `scripts/README.md`: две строки длиннее 100 символов (стиль).

@@ -4,37 +4,23 @@
 Новый раздел пишется сверху. Тест держит файл в 20 480 байт: прежние разделы уходят дословно в
 `docs/planning/archive/` (раздел «История»), «Итог» пакетов остаётся в их файлах.
 
-## Состояние на 21.11.2026: P12 исполнен, DECISIONS
+## Состояние на 21.11.2026: P13 исполнен, витрина README и ARCHITECTURE
 
-Пакет `docs/planning/21-final-audit-2026-11-13/P12-decisions.md` закрыт коммитом `ed4dae9`:
-`DECISIONS.md` 63 378 -> 39 036 байт, ни один ADR не больше 2 560; новые ADR-027 (Superset и
-MCP), ADR-028 (`lake_ro`, ACL Trino), ADR-029 (модель безопасности), ADR-030 (gold) по «ок»
-владельца на тексты; разделы ADR-003, 006, 012; ADR-014 и ADR-017 заменены; ложные строки MinIO
-сняты, CVE-2025-62506 названа. Замеры и проверки дословно в `docs/evidence.md`, раздел
-«Decision measurements» (12 подразделов).
-Проверки: пункты «Готово, когда» зелёные (ссылки `broken: 3`, все в `docs/planning`, как на
-HEAD; числа `['03']`, часть снятого ID); `make check` `2233 passed, 149 skipped`; `reviewer`
-два круга, «принять с замечаниями»; CI `success` (run 44897128117). Детали: «Итог» пакета.
+Пакет `docs/planning/21-final-audit-2026-11-13/P13-readme-architecture.md` закрыт коммитом
+`3f303a6`: README 19 736 -> 9 799 байт (What is proven, Stack с версиями, Security model, Java 17,
+smoke stops at silver), ARCHITECTURE с `postgres-meta` на схеме, «Delivery guarantees:
+effectively-once» и «Production gap» (статус версий 21.11), evidence со «Status» и «Performance on
+the laptop» (история Airflow), interview-notes 36 вопросов и Lessons, README компонентов,
+OPERATIONS (Login, `connect-configs`); `LEARNING.md` удалён (В-08 «а»); скриншот Superset снят
+оркестратором по «сам сделай» (пароль через `--env-file`, не читался).
+Проверки: «Готово, когда» зелёные (ссылки `broken: 3`, все в `docs/planning`, как на HEAD);
+`make check` `2233 passed, 149 skipped`; `make verify-fast` `verify ok`; `reviewer` два круга, код
+«принять», документы «принять с замечаниями»; CI `success` 12 из 12 job (run 44899782065 на `3f303a6`). Детали: «Итог» пакета.
 
-Стенд и бэклог: P01-P12 исполнены, следующий P13 (README, ARCHITECTURE); бэклог только
-`docs/planning/21-final-audit-2026-11-13/README.md`, раздел 4. Стенд не трогали (один `select`).
-Реплей на 20.11 `virtual_now` 2026-07-18 06:02:03, осталось 21 701 событие.
-
-## Состояние на 21.11.2026: P11 исполнен, OPERATIONS
-
-Пакет `docs/planning/21-final-audit-2026-11-13/P11-operations.md` закрыт коммитом `bc96615`:
-`OPERATIONS.md` 138 072 -> 64 111 байт, оглавление из 17 пунктов, `### SLIs and thresholds`;
-сценарии в новом `docs/failure-scenarios.md` (в OPERATIONS таблица-указатель), цепочка поставки
-в новом `docs/supply-chain.md`, замеры обслуживания в `docs/evidence.md`, серии, проверка
-дашбордов и заметки в `observability/README.md`, чтение красного `dq_checks` в
-`docs/runbooks/dq-checks.md` (по гейту снапшотов P05); ложные строки сняты, окна гейта описаны.
-Проверки: все пункты «Готово, когда» зелёные (ссылки: `broken: 3`, все в `docs/planning`, как на
-HEAD); `make check` `2233 passed, 149 skipped`; `reviewer` два круга, «принять с замечаниями»
-(низкие закрыты); CI `success` (run 44895265334). Детали: «Итог» пакета.
-
-Стенд и бэклог: P01-P11 исполнены, следующий P12 (DECISIONS); бэклог только
-`docs/planning/21-final-audit-2026-11-13/README.md`, раздел 4. Стенд не трогали. Реплей на 20.11
-`virtual_now` 2026-07-18 06:02:03, осталось 21 701 событие. Bronze без коммитов с 06.11.
+Стенд и бэклог: P01-P13 исполнены, следующий P14 (заморозка); бэклог только
+`docs/planning/21-final-audit-2026-11-13/README.md`, раздел 4. Стенд: только чтение (select,
+GET, `verify-fast`, скриншот). Реплей на 20.11 `virtual_now` 2026-07-18 06:02:03, осталось
+21 701 событие.
 
 ## Открыто
 
@@ -43,7 +29,6 @@ HEAD); `make check` `2233 passed, 149 skipped`; `reviewer` два круга, «
   auto, и как спрашивать класс C в auto.
 - `dbt/` смонтирован в живой Airflow (`/opt/dbt`), как и `airflow/dags/`: правка моделей при
   паузе `dbt_build` (`git show 1349e24:docs/NEXT_SESSION.md`, строка 120).
-- Скриншот дашборда Superset для README (В-07, до P13) даёт владелец.
 - ADR-029: ключ S3 root держит и `airflow-scheduler` (`airflow.env:34-36`), текст его не
   называет; правка одной фразы по «ок» владельца («Итог» P12).
 - P06, по желанию владельца: строки `CATALOG_TYPE`, `CATALOG_DB` в `.env` ничем не читаются.
@@ -57,6 +42,7 @@ HEAD); `make check` `2233 passed, 149 skipped`; `reviewer` два круга, «
 
 | Дата UTC | Действие | Кто дал | Где видно |
 |---|---|---|---|
+| 21.11 ~11:40 | P13: скриншот Superset снять самому («сам сделай»); коммит `3f303a6` после гейта, push `dbf0a72..3f303a6`; коммит итога и push | владелец в Claude Code; рутина сессии | «Итог» P13 |
 | 21.11 ~11:04 | P12: коммит `ed4dae9` после гейта (только Markdown), push `9959565..ed4dae9`; коммит итога и push | рутина сессии | `git log`, «Итог» P12 |
 | 21.11 ~10:55 | P12: «ок на все четыре ADR» (тексты ADR-027..ADR-030 дословно) | владелец в Claude Code | «Итог» P12 |
 | 21.11 ~10:45 | P12: рутина сессии «да» | владелец, аргумент `/task` | «Итог» P12 |
@@ -114,7 +100,7 @@ HEAD); `make check` `2233 passed, 149 skipped`; `reviewer` два круга, «
 
 ## История
 
-- 13.11-21.11.2026 (Д2.5, финальный аудит, пакеты P01-P07, P09, P10):
+- 13.11-21.11.2026 (Д2.5, финальный аудит, пакеты P01-P07, P09-P12):
   `docs/planning/archive/HANDOFF-2026-11-13-to-2026-11-19.md`.
 - 27.10-10.11.2026 (закрытие проекта, аудиты 30.10 и 06.11, ревью 10.11, «Действия владельца»,
   журнал «ок» по 06.11 включительно): `docs/planning/archive/HANDOFF-2026-10-27-to-2026-11-10.md`.
