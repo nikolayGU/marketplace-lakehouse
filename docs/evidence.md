@@ -4,11 +4,97 @@ What was run, when, and what it showed. Every number carries a date (UTC unless 
 source: a section of [OPERATIONS.md](../OPERATIONS.md), a file, a GitHub run or a command that
 anyone with the stack up can repeat. Anything not run live is marked `not proven`.
 
-Contents: [Reconciliation](#reconciliation-source-against-silver) |
+Contents: [Status](#status) | [Performance](#performance-on-the-laptop) | [Reconciliation](#reconciliation-source-against-silver) |
 [MinIO probe](#probe-minio-stopped) | [Failure scenarios](#failure-scenarios) | [Maintenance](#maintenance-before-and-after) |
 [Alerts](#alerts-and-time-to-fire) | [CI and smoke](#ci-and-smoke) | [Dashboard](#dashboard) |
 [Trino access control](#trino-access-control) | [Superset and local access](#superset-and-local-access) |
 [Decision measurements](#decision-measurements) | [Not proven](#not-proven-yet) | [How it was built](#how-it-was-built)
+
+## Status
+
+`done`: code and a check exist. `measured`: numbers from a live run, with the date. `not done
+(<reason>)`: not built or not run, with the reason. Every row links to its evidence. The failure
+scenarios are in [their own table](#failure-scenarios); scenario 10, partial processing under Trino
+memory pressure, is not done (optional; the `make chaos-trino-memory` target is not written).
+
+| Component | Status | Evidence |
+|---|---|---|
+| CDC: Postgres, Debezium, Kafka, bronze (at-least-once, resumes from the checkpoint) | measured | Spark kill resumed 28 s after the kill, 0 duplicate or missing offsets in 21 partitions (2026-10-07): [scenario 1](failure-scenarios.md#1-spark-bronze-killed-mid-batch) |
+| Silver: typed state, soft deletes, MERGE guarded by LSN | measured | `make reconcile` 7 of 7 tables match Postgres on rows, keys and decimal sums, 2026-10-29: [reconciliation](#reconciliation-source-against-silver) |
+| Gold: dbt staging, intermediate, marts on Trino | measured | `dbt build` of 2026-11-20 20:13 UTC (`dbt/target/run_results.json`): pass 61, success 18, warn 4, error 0; models in [`dbt/models`](../dbt/models) |
+| Orchestration: Airflow DAGs `silver_upsert`, `dbt_build`, `dq_checks`, `iceberg_maintenance`, `iceberg_orphans` | done | [`airflow/dags`](../airflow/dags), `make dags-check` in CI; live runs 2026-10-29 in [maintenance](#maintenance-before-and-after) |
+| Stateful job `orders_per_minute` (watermark, update mode) | measured | 2026-10-23: per-minute counts against `count(*)` of `silver.orders` over a 60 s burst, 164 windows, 0 differing; `make watermark-live` dropped the late order once (`dropped 0 -> 1`); 495 MiB at rest, 842 MiB while reading 24 h of the topic: [OPERATIONS](../OPERATIONS.md#stateful-job), [ADR-024](../DECISIONS.md) |
+| Data quality: reconcile, `dq_checks`, quarantine | measured | `dq_checks` 2026-10-29 16:45: every `reconcile_*_differing` 0; one poison record, one quarantine row (2026-10-23): [scenario 7](failure-scenarios.md#7-corrupted-event-in-topic) |
+| Iceberg maintenance (compaction, expire, orphans) | measured | 2026-10-29: bronze files before today 595 to 30, `silver.orders` 38 to 15 snapshots, row counts equal: [maintenance](#maintenance-before-and-after) |
+| MinIO and `mc` built from source (ADR-026) | measured | live swap 2026-10-29, 4045 objects and 482 441 040 bytes before and after: [maintenance](#maintenance-before-and-after) |
+| Observability: Prometheus, Grafana "Pipeline health" and "Infra" | done | [`observability`](../observability), panels listed in [OPERATIONS](../OPERATIONS.md#dashboards), checked by `scripts/obs/check_dashboards.py` |
+| Alerts: 16 rules | measured | 7 alerts shown firing live with time to fire, the rest by promtool (`make alerts-test`, `SUCCESS: 16 rules found`, 2026-11-06; `GoldStaleAtRest` is promtool only): [alerts](#alerts-and-time-to-fire) |
+| Business dashboard `Marketplace` in Superset (profile `bi`, 13 charts, ADR-027) | measured | `check.py` of 2026-11-13: all 13 charts return rows; KPI tiles of 2026-11-12: [Superset dashboard v2](#superset-dashboard-v2); the view: [dashboard](#dashboard) |
+| Grafana dashboard `Marketplace` (4 panels) on `lake_ro.gold` | measured | 96 163 orders equal `count(*)` of `fct_orders` (2026-10-29, panels then on `lake.gold`); after the switch to `lake_ro.gold` `check_dashboards.py` prints `queries ok: 39` (all dashboards, 19:16): [dashboard](#dashboard) |
+| Superset MCP endpoint | measured | 2026-11-06 15:52 UTC: the MCP service rejects a foreign Host (421) and Origin (403) and answers on loopback (200): [Superset and local access](#superset-and-local-access), [OPERATIONS](../OPERATIONS.md#superset-profile-bi) |
+| Trino access control: `grafana` and `superset` read `lake_ro.gold` only | measured | 2026-10-29 19:15, after a Trino restart: `grafana` selects `lake_ro.gold.fct_orders`; `lake_ro.silver`, catalogs `lake` and `system`, `create table` and `optimize` get Access Denied; `dbt`, `trino`, `airflow` still read `lake.silver.orders`: [Trino access control](#trino-access-control). Residual risks (no authentication): [OPERATIONS](../OPERATIONS.md#access-control) |
+| CI: six jobs | done | `lint-and-test`, `hadolint`, `alerts-test`, `spark-tests`, `airflow-image`, `minio-images` in `ci.yml`; green run [ci 44897525916](../../../actions/runs/44897525916) on HEAD `dbf0a72`, 2026-11-21: [CI and smoke](#ci-and-smoke) |
+| Clean-clone path (`smoke.yml`) | measured | green on 2026-10-29: [run 40907438614](../../../actions/runs/40907438614) (10 min 1 s, HEAD `664a7e6`), [run 40916528470](../../../actions/runs/40916528470) (9 min 14 s, HEAD `f71eab2`) and [run 40934001854](../../../actions/runs/40934001854) (10 min 52 s, HEAD `6ca7224`); latest run [44176185272](../../../actions/runs/44176185272) green, HEAD `a21020a`, 2026-11-17 |
+| Performance numbers | measured | 2026-11-21 11:15 UTC: [Performance on the laptop](#performance-on-the-laptop) |
+| `iceberg_orphans` on its weekly schedule | not done (paused by decision, ADR-025) | [not proven yet](#not-proven-yet) |
+| `rewrite-position-deletes` on `silver.orders` | not done (failed on 2026-10-23, the scheduled run skipped it since) | [not proven yet](#not-proven-yet) |
+| 24 hour unattended run | not done (cancelled by the owner on 2026-11-04) | [not proven yet](#not-proven-yet) |
+| Interview notes: 36 questions, each with a project example and a link | done | [interview notes](interview-notes.md) |
+
+## Performance on the laptop
+
+One 16 GB laptop, measured on 2026-11-21 at about 11:15 UTC. These are
+durations read from history at the moment of the question, not a load test.
+
+Prometheus keeps 7 days (`--storage.tsdb.retention.time=7d`, `docker/compose.yaml:613`). In the
+7-day window ending 2026-11-21 11:15 UTC it shows no `merge` task and one `dbt_build` (2026-11-20, a
+new series, so `increase()` reads 0), so these durations come from the Airflow history and not from
+Prometheus. The two probes:
+`increase(spark_streaming_input_rows_total{query="bronze_cdc_ingest"}[7d])` returned an empty result
+(no bronze batch in the window) and
+`increase(airflow_task_duration_seconds_count{task_id=~"merge|dbt_build"}[7d])` returned
+`dbt_build 0`. The duration of one bronze batch is not measured here: a new batch needs
+`make replay-burst`, which spends the replay budget and needs a separate approval.
+
+Airflow history, successful task instances only, all dates in the table are UTC. Run on
+2026-11-21 11:15 UTC against the `airflow` database in `postgres-meta`:
+
+```
+select dag_id, task_id, count(*),
+       percentile_cont(0.5) within group (order by duration),
+       percentile_cont(0.9) within group (order by duration),
+       max(duration), min(start_date)::date, max(start_date)::date
+from task_instance
+where state = 'success'
+  and (dag_id, task_id) in (('silver_upsert','merge'), ('dbt_build','dbt_build'),
+                            ('dq_checks','reconcile_values'))
+group by 1, 2;
+```
+
+| DAG, task | Runs | Median, s | p90, s | Max, s | Window (first to last day) |
+|---|---|---|---|---|---|
+| `silver_upsert`, `merge` (one Spark `AvailableNow` container, all 7 tables) | 23 | 28.5 | 65.3 | 75.1 | 2026-10-18 to 2026-11-06 |
+| `dbt_build`, `dbt_build` (`dbt build`, all models and tests) | 26 | 25.0 | 36.4 | 40.8 | 2026-10-18 to 2026-11-20 |
+| `dq_checks`, `reconcile_values` (fingerprints, source against silver and silver against gold) | 273 | 6.9 | 11.3 | 32.4 | 2026-10-23 to 2026-11-21 |
+
+Volumes, `count(*)` and `sum(file_size_in_bytes)` from `"<table>$files"` in Trino (`make trino`),
+2026-11-21 11:15 UTC, current snapshot:
+
+| Table | Rows | Data files | MiB |
+|---|---|---|---|
+| `bronze.cdc_events` | 559 742 | 68 | 41.7 |
+| `silver.orders` | 96 358 | 23 | 5.4 |
+| `silver.order_items` | 109 244 | 1 | 3.8 |
+| `silver.payments` | 100 727 | 1 | 1.9 |
+| `silver.customers` | 99 441 | 1 | 3.5 |
+| `silver.products` | 32 951 | 1 | 0.8 |
+| `silver.reviews` | 93 516 | 1 | 4.7 |
+| `silver.sellers` | 3 095 | 1 | 0.1 |
+| `gold.fct_orders` | 96 358 | 1 | 7.9 |
+| `gold.mart_daily_sales` | 5 643 | 80 | 0.2 |
+
+Not measured: the delay from a write in Postgres to a row in gold end to end, and the duration of a
+bronze batch.
 
 ## Reconciliation: source against silver
 
@@ -28,7 +114,7 @@ reviews      postgres    93494  silver    93494  rows ok   keys ok   sums -
 sellers      postgres     3095  silver     3095  rows ok   keys ok   sums -
 ```
 
-With the `values` column (the row fingerprint, commit `8164afe`, audit B2): `make verify-fast` of
+With the `values` column (the row fingerprint, commit `8164afe`): `make verify-fast` of
 2026-10-30 16:37 UTC, HEAD `ea64b6e` (stamp `fast at 2026-10-30T16:37:13Z`). `verify-fast` only
 reads: it does not run `make silver`. The block above stays as the record before the fingerprint.
 Output as printed:
@@ -44,9 +130,9 @@ sellers      postgres     3095  silver     3095  rows ok   keys ok   sums -  val
 verify ok
 ```
 
-Both `verify` targets add the bronze check to `reconcile` (every Kafka offset exactly once, all
+Both `verify` targets add the bronze check to `reconcile` (no Kafka offset twice and no gap between the first and the last offset bronze took per partition, all
 seven tables present) and end with `verify ok`; `make verify` first runs one silver merge. A full
-run that this page records: `verify ok`, 2026-10-29 19:16 UTC, before commit `46f5282` (the W6-T11 check, [Trino access control](#trino-access-control)).
+run that this page records: `verify ok`, 2026-10-29 19:16 UTC, before commit `46f5282` (the access-control check, [Trino access control](#trino-access-control)).
 `dq_checks` repeats the comparison every 15 minutes and also compares row fingerprints source to
 silver and silver to gold (`reconcile_values`); its run at 16:45 on 2026-10-29 had every
 `reconcile_*_differing` at 0 and `reconcile_in_flight` at 0 ([First live run, step 11](#first-live-run-2026-10-29)).
@@ -76,7 +162,7 @@ what happened, what monitoring shows, data at risk, recovery, why nothing is los
 | 3 | Duplicate events from the source | 2026-10-07 | 2267 CDC events in the window, 95 no-op repeats (9.8% of status UPDATEs, 90 of 926 orders); 0 changes arrived twice with the same LSN; silver matches Postgres (rows, keys, sums); script 3 min 11 s | [3](failure-scenarios.md#3-duplicate-events-from-the-source) |
 | 4 | Late events | 2026-10-07 | An old change re-sent after a newer one; silver kept `approved` and `_last_lsn` 1401679552 before and after (the MERGE guard dropped it); bronze kept the copy at a new offset; script 3 min 12.6 s | [4](failure-scenarios.md#4-late-events) |
 | 5 | PostgreSQL restart | 2026-10-23 | Postgres healthy in 13 s, connector streamed again 13 s later without a failed task; bronze caught up 28 s after a 30 s burst; `ContainerRestarting` firing 15 s after the restart; `reconcile` 7 of 7 | [5](failure-scenarios.md#5-postgresql-restart) |
-| 6 | Connector stopped for 30 minutes (WAL growth) | 2026-10-23, 2026-10-29 | 2026-10-23: `ConnectorNotRunning` 95 s after the stop, `SlotWalRetainedHigh` 326 s after it, 80.9 MB held. 2026-10-29 (committed script, full hold): connector stopped 17:47:02 to 18:17:06, `dq_checks` at 18:00 and 18:15 green with `in flight: CDC stands, no verdict`, `CdcStalledSourceWrites` firing 18:20:04, then silver matches Postgres (rows, keys, sums) 7 of 7, exit 0. Sources for the 2026-10-29 run: the result of W6-T07 in [the W6 spec](planning/14-closeout-spec.md) and the approval log entry of 29.10 18:22 in [HANDOFF](HANDOFF.md) (ru) | [6](failure-scenarios.md#6-connector-stopped-for-30-minutes-wal-growth) |
+| 6 | Connector stopped for 30 minutes (WAL growth) | 2026-10-23, 2026-10-29 | 2026-10-23: `ConnectorNotRunning` 95 s after the stop, `SlotWalRetainedHigh` 326 s after it, 80.9 MB held. 2026-10-29 (committed script, full hold): connector stopped 17:47:02 to 18:17:06, `dq_checks` at 18:00 and 18:15 green with `in flight: CDC stands, no verdict`, `CdcStalledSourceWrites` firing 18:20:04, then silver matches Postgres (rows, keys, sums) 7 of 7, exit 0. Sources for the 2026-10-29 run: the closeout spec, result of the connector-stall check, and the approval log entry of 29.10 18:22 in HANDOFF (records in Russian: [spec](planning/14-closeout-spec.md), [HANDOFF](HANDOFF.md)) | [6](failure-scenarios.md#6-connector-stopped-for-30-minutes-wal-growth) |
 | 7 | Corrupted event in topic | 2026-10-23 | One non-envelope record: one `silver.quarantine` row after the first merge, still one after the second; the rest of the batch merged | [7](failure-scenarios.md#7-corrupted-event-in-topic) |
 | 8 | Kafka down for 6 minutes | 2026-10-23 | Kafka healthy 20 s after the start, connector `RUNNING` after 20 s, bronze caught up after 25 s; `spark-bronze` restarted 15 times, resumed from the checkpoint each time; 21 partitions without duplicate or missing offset; silver matches Postgres (rows, keys, sums) 7 of 7; `SparkNoBatch5m` did not fire (see Alerts) | [8](failure-scenarios.md#8-kafka-down-for-6-minutes) |
 | 9 | Airflow task failure (dbt test) | 2026-10-18 (run), 2026-10-23 (alert) | `dbt_build` red on a broken test, children skipped, `mart_daily_sales` kept its 9 snapshots; `AirflowDagFailed` 17 s after the red run ended | [9](failure-scenarios.md#9-airflow-task-failure-dbt-test) |
@@ -93,7 +179,7 @@ Design of the procedures: ADR-025 in [DECISIONS.md](../DECISIONS.md).
 The MinIO image swap of the same day (the images are built from source, ADR-026): bucket 4045
 objects and 482 441 040 bytes before and after (`mc du --json`), `mc admin info` version
 2025-09-07T16:13:09Z before and after, `make verify-fast` `verify ok`
-([W6-T00 result](planning/14-closeout-spec.md)).
+(record in Russian: [closeout spec](planning/14-closeout-spec.md)).
 
 ### First live run, 2026-10-29
 
@@ -220,7 +306,7 @@ in [OPERATIONS, Alerts](../OPERATIONS.md#alerts).
 | `FreshnessAbove15m` | live, `silver_upsert` paused, burst (2026-10-23) | 1561 s after bronze caught up (900 s plus up to 15 min until the next `dq_checks`) |
 | `AirflowDagFailed` | live, scenario 9 (2026-10-23) | 17 s after the red run ended |
 | `ContainerRestarting` | live, scenarios 5 and 8 (2026-10-23) | 15 s after the restart |
-| `CdcStalledSourceWrites` | promtool (two runs, one run, short history); live, scenario 6 (2026-10-29) | firing 18:20:04, 33 min after the stop (17:47:02 to 18:20:04): two `dq_checks` runs with stalled 1, then the 20 min window; `cdc_stalled` was 1 from 18:01 (W6-T07 result in [the W6 spec](planning/14-closeout-spec.md), [HANDOFF](HANDOFF.md) log 29.10 18:22) |
+| `CdcStalledSourceWrites` | promtool (two runs, one run, short history); live, scenario 6 (2026-10-29) | firing 18:20:04, 33 min after the stop (17:47:02 to 18:20:04): two `dq_checks` runs with stalled 1, then the 20 min window; `cdc_stalled` was 1 from 18:01 (records in Russian: [closeout spec](planning/14-closeout-spec.md), [HANDOFF](HANDOFF.md) log 29.10 18:22) |
 | `SparkRestartLoop` | rule run over the stored data of scenario 8 (TSDB replay), not a live firing | true from 17:11:15, 51 s after the first restart (17:10:24); the 2026-10-23 rule was not loaded then |
 | `FreshnessAbove15m` with `cause="unknown"`, `SlotWalHeldIdle`, `DqChecksStale`, `ScrapeTargetDown`, `SilverGoldNotCompared`, `GoldStaleAtRest` | promtool only | not shown live |
 
@@ -239,6 +325,8 @@ Kafka came back inside the 5 minutes of the `gone` rule. That gap is why `SparkR
 
 | Run | What | Result |
 |---|---|---|
+| [ci 44897525916](../../../actions/runs/44897525916) | HEAD `dbf0a72`, 2026-11-21, six jobs | success |
+| [smoke 44176185272](../../../actions/runs/44176185272) | HEAD `a21020a`, 2026-11-17 | success |
 | [ci 40934002684](../../../actions/runs/40934002684) | push to `main`, HEAD `6ca7224`, 2026-10-29 | success |
 | [ci 40924192138](../../../actions/runs/40924192138) | push, `649cb68`, 2026-10-29 | success |
 | [smoke 40907438614](../../../actions/runs/40907438614) | `workflow_dispatch`, `664a7e6`, 2026-10-29, first green run on the source-built MinIO images | success, 10 min 1 s |
@@ -247,34 +335,48 @@ Kafka came back inside the 5 minutes of the `gone` rule. That gap is why `SparkR
 | [ci 40897412910](../../../actions/runs/40897412910) | push, `f206596`, 2026-10-29 | failure, job `spark-tests` only (below) |
 | [smoke 40290595866](../../../actions/runs/40290595866) | Monday schedule, 2026-10-26 | failure at `make start`: the MinIO images were gone from quay.io and Docker Hub |
 
+`ci.yml` has six jobs: `lint-and-test`, `hadolint`, `alerts-test`, `spark-tests`, `airflow-image` and
+`minio-images` ([OPERATIONS, CI](../OPERATIONS.md#ci) says what each runs). CI runs `dbt parse` and
+static checks of the SQL; `dbt build`, DAG runs, chaos and the dashboards are proven on the live stack
+only.
+
 `smoke.yml` walks the clean-clone path on the committed sample: `make secrets`, `make bootstrap`, a
 60 s `make replay-burst`, `make verify`, and a second `make bootstrap` that must say `replay state
 exists, load skipped` and end `verify ok`. It builds the Spark, Connect, MinIO and `mc` images from
-scratch, so it is cold every time. The weekly schedule (Monday 03:00 UTC) is back since the first
-green run; its scheduled runs are green: [smoke 41430931906](../../../actions/runs/41430931906) on
-2026-11-02 (HEAD `4b65cd7`) and [smoke 42606043447](../../../actions/runs/42606043447) on 2026-11-09
-(HEAD `4169df6`).
+scratch, so it is cold every time. Smoke stops at silver; gold, the Asset chain, `dq_checks` and the dashboards are proven by the dated manual runs above.
+
+Schedule: `.github/workflows/smoke.yml` runs on `workflow_dispatch` and on the cron `0 3 * * 1`
+(Monday 03:00 UTC), back since the first green run. Weekly while the repository is active: GitHub
+pauses scheduled workflows in a public repository after 60 days without activity (GitHub docs,
+"Disabling and enabling a workflow"), so after the freeze the schedule stops by itself and the last
+green run stays the record: [smoke 44176185272](../../../actions/runs/44176185272), 2026-11-17. Its
+scheduled runs were green: [smoke 41430931906](../../../actions/runs/41430931906) on 2026-11-02 (HEAD
+`4b65cd7`) and [smoke 42606043447](../../../actions/runs/42606043447) on 2026-11-09 (HEAD `4169df6`).
 
 The red `spark-tests` run is a defect that CI caught and local checks did not: a test held a fixed
 clock (`2026-10-23 03:30 UTC`) and failed on every run after 2026-10-24 03:30 UTC. The fix (the
 real clock) is in `eebb639`, green in [ci 40901323188](../../../actions/runs/40901323188).
 
-Checks of record: `make check` 1879 passed, commit `22a8748`, 2026-11-10, local
-([HANDOFF](HANDOFF.md); Spark tests skip on a host without a JVM); the Spark tests in the image,
-239 passed, job `spark-tests` of [ci 42848376843](../../../actions/runs/42848376843) on `63e5650`,
-2026-11-10 (a skip there is a failure). Job list and what each runs:
-[OPERATIONS, CI](../OPERATIONS.md#ci).
+Test counts are not kept on this page, they go stale; the record is the green run of 2026-11-21 above.
+The Spark tests need Java 17 and skip on a host without it; in the image (`make test-spark`) a skip is
+a failure.
 
 ## Dashboard
 
-The "Marketplace" dashboard (Grafana, Trino datasource plugin 1.4.1) shows four panels over
-gold only: daily sales, GMV by category, delivery SLA by state, cancellations. The panels read
-`lake_ro.gold` since W6-T11 (commit `46f5282`, [below](#trino-access-control)); the screenshot of
-2026-10-29 18:44 UTC and the checks below were taken before that switch, when they read `lake.gold`:
+The business dashboard `Marketplace` is in Superset: 13 charts over the `lake_ro.gold` marts as
+Trino user `superset` (ADR-027, [checks below](#superset-dashboard-v2)). The current view:
 
-![Marketplace dashboard](img/marketplace-dashboard.png)
+![Superset dashboard Marketplace, 13 charts, 2026-11-21 11:32 UTC](img/superset-marketplace.png)
 
-Checks of 2026-10-29, before the switch ([W6-T01 result](planning/14-closeout-spec.md), [OPERATIONS, Dashboards](../OPERATIONS.md#dashboards)):
+The Grafana dashboard `Marketplace` stays as a lighter view of the same marts: four panels over
+gold only (daily sales, GMV by category, delivery SLA by state, cancellations), Trino datasource
+plugin 1.4.1. Its panels read `lake_ro.gold` since the access-control change (commit `46f5282`,
+[below](#trino-access-control)); the screenshot of 2026-10-29 18:44 UTC and the checks below were
+taken before that switch, when they read `lake.gold`:
+
+![Grafana dashboard Marketplace, 2026-10-29](img/marketplace-dashboard.png)
+
+Checks of 2026-10-29 of the Grafana dashboard, before the switch ([OPERATIONS, Dashboards](../OPERATIONS.md#dashboards); record in Russian: [closeout spec](planning/14-closeout-spec.md)):
 
 - `uv run python scripts/obs/check_dashboards.py observability/grafana/dashboards/marketplace.json`
   prints `queries ok: 4`; through `/api/ds/query` the panels returned 600, 10, 27 and 600 rows.
@@ -289,10 +391,10 @@ Checks of 2026-10-29, before the switch ([W6-T01 result](planning/14-closeout-sp
 
 ## Trino access control
 
-W6-D17, card W6-T11, commit `46f5282`. Trino has file-based access control
+Commit `46f5282`. Trino has file-based access control
 (`docker/trino/etc/access-control.properties`, `docker/trino/etc/rules.json`) and a second catalog
 `lake_ro` (`docker/trino/etc/catalog/lake_ro.properties`, `iceberg.security=read_only`) over the
-same warehouse. The `grafana` user, used by the Grafana datasource and by `check_dashboards.py`,
+same warehouse. The `grafana` user (since 2026-11-06 `superset` too, [below](#superset-and-local-access)), used by the Grafana datasource and by `check_dashboards.py`,
 reads `lake_ro.gold` only. Live probes of 2026-10-29 after `docker restart lakehouse-trino-1` at
 19:15, run as the user named:
 
@@ -341,17 +443,17 @@ peak was not measured).
 The dashboard `Marketplace` in Superset has 13 charts in the Harbor palette (bundle in
 [`docker/superset/dashboards`](../docker/superset/dashboards), notes in
 [OPERATIONS, Superset](../OPERATIONS.md#superset-profile-bi)). KPI tiles of 2026-11-12, read through
-`/api/v1/chart/data` with `SUPERSET_DATA_ANCHOR=2026-07-01`, "Last quarter" against the previous
-quarter:
+`/api/v1/chart/data` with `SUPERSET_DATA_ANCHOR=2026-07-01`, "Last quarter" (2026-04-01 to
+2026-06-30) against the previous 91 days (2025-12-31 to 2026-03-31):
 
-| KPI | Last quarter | Previous quarter |
+| KPI | Last quarter | Previous 91 days |
 |---|---|---|
 | GMV | 2 687 103.87 | 2 863 849.49 |
 | Orders | 18 991 | 21 355 |
 | On-time delivery | 96.6% | 87.5% |
 
 `docker exec lakehouse-superset-1 python /app/check.py` on 2026-11-13: all 13 charts return rows.
-The tile "Data through" shows 18 Jul 2026. Screenshot: `planned`.
+The tile "Data through" shows 18 Jul 2026. The view of the dashboard: [Dashboard](#dashboard).
 
 ## Decision measurements
 
@@ -560,8 +662,8 @@ new checkpoint (new query id) appends every file again. On the live stack `make 
 killed the driver during batch 80 on 2026-10-07 (batch 47 on 2026-09-26), both times before the
 write stage; after `docker start` Spark replayed the batch, and the script found every Kafka
 offset in bronze exactly once, with no gaps, and no epoch committed twice.
-So bronze is exactly once across Spark restarts that keep the checkpoint, and at-least-once
-across Debezium re-sends and checkpoint loss.
+So bronze has no offset twice and no gap across Spark restarts that keep the checkpoint, and is
+at-least-once across Debezium re-sends and checkpoint loss.
 
 In the runs measured so far Debezium re-sent events only after a hard stop. A `docker restart` of
 Connect (SIGTERM) waits up to `offset.flush.timeout.ms` (5 s) for producer acks, stores the offset
@@ -773,8 +875,7 @@ Decision details:
   checkpoint on the live tables would rewrite about 506 thousand rows without an LSN (owner
   decision, 2026-11-04).
 - A live schema change (migration 003, `sales_channel`): the owner's Modify gate, not done.
-- The learning gates in [LEARNING.md](../LEARNING.md): `planned`.
-- Trino authentication: not done. Access control (W6-T11) limits the `grafana` user, but the user
+- Trino authentication: not done. Access control limits the `grafana` user, but the user
   name is only a label ([OPERATIONS, Access control](../OPERATIONS.md#access-control)).
 
 ## How it was built
@@ -823,8 +924,8 @@ accepted. Examples, each with its record in [the W6 spec](planning/14-closeout-s
   scenario 6 on 2026-10-29, above.
 - First live maintenance (W5-T05b), plan review round 0 "return", 1 high: the rows of the JDBC
   catalog point to snapshots from before the catalog switch of 2026-10-08, and expire and orphan
-  removal delete those files, so the rollback point would have been lost silently. Result: decision
-  W6-D16 and a copy of `warehouse/` as the first step of the procedure.
+  removal delete those files, so the rollback point would have been lost silently. Result: a decision
+  to take a copy of `warehouse/` as the first step of the procedure.
 - Harness (v0.3), round 0 "return", 1 high: a late "return" verdict without a tree id left an
   earlier "accept" valid. Accepted and fixed in round 1 ([HANDOFF](HANDOFF.md), 2026-10-29).
 - Not found by review: the fixed-clock test that broke CI (see [CI and smoke](#ci-and-smoke)).

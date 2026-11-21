@@ -9,11 +9,11 @@
   Trino does not answer `select 1`, catalog `lake` (Lakekeeper) does not answer `show schemas`, or
   MinIO does not answer a health check run in the trino container (not a table query: Trino
   caches metadata), within `TRINO_PROBE_WAIT` seconds (default 20) + 2 s each. `--no-merge`
-  (`make verify-fast`) skips the merge. On success writes `.verify-stamp` (`agent_state.py`).
+  (`make verify-fast`) skips the merge. On success it stamps the git tree as it was when verify started (a file edited during the run is not covered) in `.verify-stamp` (`agent_state.py`); `verify-fast` keeps a `full` stamp that already covers the tree; a stamp that fails to write does not fail verify.
 - `report.sh` (`make report`): git state, the verify, check and review stamps, containers and the
   replay clock for a session report. Reads only.
 - `agent_state.py`: the three gate stamps, each a mode plus the git tree id of the working tree,
-  which the agent hooks in `.claude/hooks/` check before a commit. `.verify-stamp`: `make verify`
+  which the commit-gate hooks in `.claude/hooks/` check before a commit (how the project was built: [evidence](../docs/evidence.md#how-it-was-built)). `.verify-stamp`: `make verify`
   and `make verify-fast`. `.check-stamp`: `make check`. `.review-stamp`: the hook `review_stamp.py`,
   from the verdict line of the `reviewer` report. `python3 scripts/agent_state.py tree <root>`
   prints the tree id, `show [verify|check|review] <root>` describes a stamp.

@@ -167,8 +167,9 @@ services:
 
   minio:
     <<: *common
-    # ADR-026: the last community release, built from the source of its tag (no registry serves
-    # it any more). The runtime is alpine, which has wget and no curl.
+    # ADR-026: built from the source of a pinned community release (RELEASE.2025-09-07T16-13-09Z;
+    # the later tag RELEASE.2025-10-15T17-29-55Z is not taken; no registry serves it). The
+    # runtime is alpine, which has wget and no curl.
     build:
       context: ./minio
       target: minio

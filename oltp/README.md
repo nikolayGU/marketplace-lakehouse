@@ -28,7 +28,7 @@ then updated to `approved`, `shipped`, `delivered` at the source timestamps, the
 status the dataset actually ends on. Cancelled-before-shipping orders have their items deleted,
 and a thin deterministic slice of reviews is withdrawn, so silver sees genuine deletes.
 
-Schema evolution (W2-T07): `migrations/evolution/003_orders_sales_channel.sql` adds a nullable
+Schema evolution: `migrations/evolution/003_orders_sales_channel.sql` adds a nullable
 `shop.orders.sales_channel` (`web`, `app` or `marketplace`) in the middle of the stream.
 `make migrate` reads only `migrations/*.sql` and never sees it. `start` applies it once its
 virtual clock reaches `REPLAY_SCHEMA_EVOLUTION_AT`: an ISO timestamp without a zone, in the same

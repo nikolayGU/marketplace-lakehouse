@@ -1,13 +1,15 @@
 # Interview notes
 
-Thirty questions a data engineer interviewer can ask about this project, each with a short general
+Thirty-six questions a data engineer interviewer can ask about this project, each with a short general
 answer and a concrete example from the repository. Numbers carry the date of the live run they come
 from, with the source in the link.
 
-Contents: [Kafka and CDC](#kafka-and-cdc) (5), [Spark Structured Streaming](#spark-structured-streaming) (5),
-[Iceberg](#iceberg) (4), [Idempotency and exactly-once](#idempotency-and-exactly-once) (4),
-[Data quality](#data-quality) (4), [Observability](#observability) (4),
-[System design](#system-design-oltp-to-lakehouse-with-correct-end-state) (4).
+Contents: [Kafka and CDC](#kafka-and-cdc) (questions 1-5), [Spark Structured Streaming](#spark-structured-streaming) (6-10),
+[Iceberg](#iceberg) (11-14), [Idempotency and exactly-once](#idempotency-and-exactly-once) (15-18),
+[Data quality](#data-quality) (19-22), [Observability](#observability) (23-26),
+[System design](#system-design-oltp-to-lakehouse-with-correct-end-state) (27-30),
+[Analytics and BI](#analytics-and-bi) (31-32), [Testing and CI](#testing-and-ci) (33-34),
+[Production](#production) (35-36), [Lessons from the failure runs](#lessons-from-the-failure-runs).
 
 ## Kafka and CDC
 
@@ -242,19 +244,28 @@ bronze and silver tables are protected and Lakekeeper answers 409 to a drop.
 
 No single component is. Debezium and Kafka are at-least-once, and Spark can re-run a batch after a
 crash. The end state is still correct because the sinks that matter are idempotent: re-applying the
-same change leaves the same result. A good answer names where the guarantee holds and where it does
-not.
+same change leaves the same result. A good answer names where the guarantee holds, where it does
+not, and what it depends on.
 
-In this project: bronze is at-least-once by contract. Chaos scenario 1 found no repeated and no
-missing Kafka offset after a Spark restart that kept the checkpoint. Both live kills landed before
-the write stage, so the skip of an already committed epoch is shown by a unit test (question 16). A
-Debezium re-send after a kill still lands in bronze
-twice (253 events on 2026-10-07, question 2). Silver is where no-duplicates is enforced; dbt
-incremental models merge on a unique key
-([ARCHITECTURE.md, "Where exactly-once comes from"](../ARCHITECTURE.md#where-exactly-once-comes-from);
-[ADR-007](../DECISIONS.md#adr-007-bronze-streaming-append-silver-batch-merge)). The evidence is the
-chaos scenarios in [OPERATIONS.md, Failure scenarios](../OPERATIONS.md#failure-scenarios): they check
-bronze offsets for repeats and gaps and silver against Postgres with `reconcile`.
+In this project: end to end the pipeline is effectively-once: at-least-once delivery plus idempotent
+sinks, not a transactional exactly-once. Silver equals the source as long as Kafka retention (24 h or
+2 GiB per partition) and the replication slot outlive any consumer outage, the source has one writer
+per key (ADR-021), and a restored Spark checkpoint matches its table. Silver keeps the newest event
+per key (highest LSN; a snapshot read without one loses to any streamed change): a repeated streamed
+event is a no-op, a repeated snapshot read rewrites its row with the same values. Silver commits
+table by table, so a reader can see `order_items` merged before `orders`. Gold marts are rebuilt
+tables; `mart_daily_sales` replaces whole purchase dates (`delete+insert`). Bronze is checked for no
+offset twice and no gap between the first and the last offset it took; the start of the topics that
+Kafka retention removed before bronze existed came back as a snapshot (ADR-019). The full text and
+the preconditions: [ARCHITECTURE.md, Delivery guarantees](../ARCHITECTURE.md#delivery-guarantees-effectively-once).
+
+The evidence: chaos scenario 1 found no repeated and no missing Kafka offset after a Spark restart
+that kept the checkpoint. Both live kills landed before the write stage, so the skip of an already
+committed epoch is shown by a unit test (question 16). A Debezium re-send after a kill still lands in
+bronze twice (253 events on 2026-10-07, question 2). The chaos scenarios in
+[OPERATIONS.md, Failure scenarios](../OPERATIONS.md#failure-scenarios) check bronze offsets for
+repeats and gaps and silver against Postgres with `reconcile`
+([ADR-007](../DECISIONS.md#adr-007-bronze-streaming-append-silver-batch-merge)).
 
 **16. How does the Iceberg streaming sink skip an already committed batch?**
 
@@ -410,7 +421,7 @@ The case it misses was found by a scenario: with Kafka stopped for 6 minutes on 
 restarted 15 times and `SparkNoBatch5m` did not fire: the last-batch series was absent in one piece
 (17:10:23 to 17:15:38 UTC) and Kafka was back before the 5 minutes of `for` of the `gone` rule were
 over. `ContainerRestarting` fired instead ([failure scenario 8](failure-scenarios.md#8-kafka-down-for-6-minutes)).
-A week-6 rule, `SparkRestartLoop`, targets exactly that case; it is proven by promtool and by a
+A later rule, `SparkRestartLoop`, targets exactly that case; it is proven by promtool and by a
 retro run over the stored 2026-10-23 data (true from 51 s after the first restart), not shown firing
 live ([OPERATIONS.md, Alerts](../OPERATIONS.md#alerts), "Limits worth knowing" below the table).
 
@@ -467,7 +478,7 @@ dbt and gold maintenance ([airflow/dags/silver_upsert.py:35](../airflow/dags/sil
 [ADR-011](../DECISIONS.md#adr-011-airflow-3-localexecutor-dbt-through-bashoperator-spark-through-dockeroperator);
 [ADR-025](../DECISIONS.md#adr-025-iceberg-maintenance-policy)). The bronze stream is a Compose service.
 
-Since the audit commit `e2ae619`, every task has an `execution_timeout` (the silver merge 10
+Since commit `e2ae619`, every task has an `execution_timeout` (the silver merge 10
 minutes) and every DAG a `dagrun_timeout` (`silver_upsert` 30 minutes)
 ([airflow/dags/silver_upsert.py:35-40](../airflow/dags/silver_upsert.py)). The merge container has
 the fixed name `lakehouse-silver-merge` ([airflow/dags/silver_upsert.py:56](../airflow/dags/silver_upsert.py)),
@@ -507,8 +518,128 @@ reachable from every container on the `lake` network
 ([ADR-005, cutover](../DECISIONS.md#cutover-2026-10-08);
 [OPERATIONS.md, Ports](../OPERATIONS.md#ports-all-on-127001);
 [OPERATIONS.md, Access control](../OPERATIONS.md#access-control)). Trino access control only limits the
-`grafana` user to `lake_ro.gold`, and the user name is only a label
+`grafana` and `superset` users to `lake_ro.gold`, and the user name is only a label
 ([evidence, Trino access control](evidence.md#trino-access-control);
 [ARCHITECTURE.md, data flow](../ARCHITECTURE.md#data-flow), item 9).
 I would first change the guard to `source.sequence`, since it is the only limit that can produce a
-wrong row rather than a slow one.
+wrong row rather than a slow one. What a production deployment needs on top, in one table:
+[ARCHITECTURE.md, Production gap](../ARCHITECTURE.md#production-gap) (question 35).
+
+
+## Analytics and BI
+
+**31. How do you define a metric and the grain of a mart so that two dashboards cannot disagree?**
+
+Fix the grain (what one row is), define each metric once, and compute it from the table whose grain
+fits it. A sum over a table with a finer or a repeated grain double counts quietly. Then check the
+dashboard figure against the source with a query that does not use the mart.
+
+In this project: `mart_daily_sales` has the grain purchase date and seller state, and an order counts
+in the state of every seller among its items
+([dbt/models/intermediate/int_daily_sales.sql:1](../dbt/models/intermediate/int_daily_sales.sql)).
+Summing its `orders_count` gave 96 650 while `count(*)` on `fct_orders` gave 96 163 (2026-10-29); the
+review found it before the first dashboard was accepted. Orders and cancellations now come from
+`fct_orders`, GMV from the mart, and the category panel added up to `sum(gmv)`, 13 086 460.39
+([evidence, Dashboard](evidence.md#dashboard); [OPERATIONS, Dashboards](../OPERATIONS.md#dashboards)).
+Dates of the marts start from `order_purchase_timestamp`, not from the processing time
+(`_updated_at`).
+
+**32. How does a BI tool read the warehouse without being able to damage it?**
+
+Give it its own identity, a catalog it can only read, and the marts layer only. Enforce this in the
+engine, not in the BI tool, and test the rules.
+
+In this project: Superset (and Grafana) connect to Trino as a user that sees `lake_ro`, a second
+catalog over the same warehouse with `iceberg.security=read_only`, and within it only `gold` tables
+named `fct_`, `dim_` or `mart_` ([docker/trino/etc/catalog/lake_ro.properties:1](../docker/trino/etc/catalog/lake_ro.properties),
+[docker/trino/etc/rules.json](../docker/trino/etc/rules.json); the Superset database is imported with
+`allow_dml: false`, [docker/superset/dashboards/databases/Lakehouse_Trino_lake_ro.yaml:8](../docker/superset/dashboards/databases/Lakehouse_Trino_lake_ro.yaml)).
+Live probes of 2026-10-29 as the `grafana` user: `lake_ro.gold.fct_orders` 96 258, while
+`lake_ro.silver`, catalog `lake`, `create table` and `optimize` got Access Denied
+([evidence, Trino access control](evidence.md#trino-access-control); the rules are checked by
+[tests/unit/test_trino_access.py:149](../tests/unit/test_trino_access.py)). The limit is stated: Trino has no
+authentication, so the user name is a label ([OPERATIONS.md, Access control](../OPERATIONS.md#access-control)).
+
+## Testing and CI
+
+**33. How do you show that a test can fail, and not only that it passes?**
+
+Make the failure happen and watch the check go red: a test that never failed proves nothing. Treat a
+skipped test as a failure where the test is the only guard, and look at what CI caught that local runs
+missed.
+
+In this project: `make chaos-break-dbt-test` breaks a test on `fct_orders` on purpose, `dbt_build`
+turns red, the children are skipped and the marts keep their previous snapshot
+([scripts/chaos/break-dbt-test.sh](../scripts/chaos/break-dbt-test.sh);
+[failure scenario 9](failure-scenarios.md#9-airflow-task-failure-dbt-test)). Alert rules are tested
+with the failure cases first ([observability/prometheus/alerts_test.yml:1](../observability/prometheus/alerts_test.yml)).
+`FAIL_ON_SKIP=1` turns every skip into a failure in the Spark image, so the MERGE tests cannot be
+skipped silently ([tests/unit/conftest.py:9](../tests/unit/conftest.py)). CI found a test that held a
+fixed clock and failed after 2026-10-24 03:30 UTC, which local runs had not shown
+([evidence, CI and smoke](evidence.md#ci-and-smoke)).
+
+**34. What does your CI not prove?**
+
+Say it before the interviewer finds it. List what runs only against a live stack and how the project
+shows it instead.
+
+In this project: CI runs `dbt parse` and static checks of the SQL; `dbt build`, DAG runs, chaos and
+the dashboards are proven on the live stack only. The clean-clone run (`smoke.yml`) stops at silver;
+gold, the Asset chain, `dq_checks` and the dashboards are proven by dated manual runs
+([evidence, CI and smoke](evidence.md#ci-and-smoke); [tests/README.md](../tests/README.md)). Between
+runs, `make verify` and `make reconcile` compare Postgres with silver. GitHub also pauses scheduled
+workflows after 60 idle days, so the weekly smoke stops after the freeze and the last green run is the
+record.
+
+## Production
+
+**35. What would you change to run this in production?**
+
+Order the gaps by the damage they can do, not by effort: identities and secrets, then durability and
+recovery, then scale. Say what is already covered and what replaces it locally.
+
+In this project the local choices are written down with their production counterpart in one table:
+[ARCHITECTURE.md, Production gap](../ARCHITECTURE.md#production-gap). Examples the
+repository shows: Airflow runs with every user an admin and the scheduler holds the Docker socket;
+Spark, Trino and Lakekeeper share one S3 key pair; the Debezium password is readable in plain text
+through the Kafka Connect REST API, where production would use a config provider or a secret store;
+the MinIO tag of 2025-10-15 that fixes CVE-2025-62506 is not taken (accepted risk, ADR-026); there
+is no Alertmanager (ADR-023); Kafka is one broker; there is no regular backup and no restore from a
+copy has been rehearsed ([OPERATIONS.md, Backup](../OPERATIONS.md#backup)). My order: logins and
+per-service credentials first, because every other control assumes them; Kafka replication and a
+restore drill second.
+
+**36. What breaks first with a hundred times the data?**
+
+Name the step whose cost grows with total data rather than with new data, and say which numbers you
+measured and which you extrapolate.
+
+In this project (measured, 2026-11-21): bronze holds 559 742 rows in 41.7 MiB; the silver merge
+took a median of 28.5 s and at most 75.1 s ([evidence, Performance](evidence.md#performance-on-the-laptop)).
+The merge task has a limit of 10 minutes ([airflow/dags/silver_upsert.py:38](../airflow/dags/silver_upsert.py)),
+and the `AvailableNow` read walks every retained bronze snapshot on each run, which is why bronze is
+never expired ([ADR-021](../DECISIONS.md#adr-021-silver-upsert-one-availablenow-job-idempotent-merge-per-table)).
+My expectation, not measured: the merge reaches its limit first, then the single Kafka broker and the
+one Trino container; a run at that size has not been done.
+
+## Lessons from the failure runs
+
+Seven things the live runs taught, each with the record.
+
+1. A paused DAG loses the Asset event. Airflow 3.3 queues no event for a paused DAG, so the silver
+   commit of 2026-11-06 12:11:49 UTC created no `dbt_build` run and gold stayed behind silver; the
+   rule `GoldStaleAtRest` exists because of it ([evidence, Alerts](evidence.md#alerts-and-time-to-fire)).
+2. Cached metadata hides a stopped MinIO. Trino answered a `$manifests` query with MinIO down, so
+   `verify` probes the object store with `curl` instead
+   ([evidence, MinIO probe](evidence.md#probe-minio-stopped); [OPERATIONS.md, Daily commands](../OPERATIONS.md#daily-commands)).
+3. A killed Connect repeats events: 253 events arrived twice on 2026-10-07 and silver absorbed them
+   ([failure scenario 2b](failure-scenarios.md#2b-kafka-connect-killed); question 5).
+4. Kafka retention of 24 h against a downtime of 26 h turns the stream into a restart loop, by design
+   (`failOnDataLoss=true`); the fix was an incremental snapshot (question 3).
+5. `SparkNoBatch5m` stays silent in a crash loop: with Kafka down for 6 minutes Spark restarted 15
+   times and the alert did not fire, which is why `SparkRestartLoop` exists
+   ([failure scenario 8](failure-scenarios.md#8-kafka-down-for-6-minutes)).
+6. A test with a fixed clock fails on a later day: CI caught it after 2026-10-24 03:30 UTC
+   ([evidence, CI and smoke](evidence.md#ci-and-smoke)).
+7. Summing a count over a finer grain double counts: 96 650 orders against 96 163
+   ([evidence, Dashboard](evidence.md#dashboard); question 31).

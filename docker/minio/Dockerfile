@@ -1,7 +1,9 @@
-# ADR-026: MinIO and mc built from the source of the last community release tags, because no
-# registry serves the images any more. Flags are those of each tag's Makefile (CGO_ENABLED=0,
-# -tags kqueue, -trimpath). The release is set by explicit -ldflags: upstream gen-ldflags.go reads
-# it from git history and calls it DEVELOPMENT.<date> unless MINIO_RELEASE is set.
+# ADR-026: built from the source of a pinned community release (MinIO
+# RELEASE.2025-09-07T16-13-09Z; the later tag RELEASE.2025-10-15T17-29-55Z is not taken) and of
+# the last mc tag, because no registry serves the images any more. Flags are those of each tag's
+# Makefile (CGO_ENABLED=0, -tags kqueue, -trimpath). The release is set by explicit -ldflags:
+# upstream gen-ldflags.go reads it from git history and calls it DEVELOPMENT.<date> unless
+# MINIO_RELEASE is set.
 #
 # A host short of memory: --build-arg GOFLAGS=-p=2 limits the parallel compiles of MinIO.
 

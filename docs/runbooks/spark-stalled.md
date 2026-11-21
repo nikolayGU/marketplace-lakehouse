@@ -27,4 +27,4 @@ is unhealthy, exited or restarting.
    `bash -c '. scripts/chaos/lib.sh && bronze_offsets_report'`: no duplicates and no holes in any
    partition. The child shell matters: `lib.sh` sets `set -euo pipefail` and exports `.env`.
 5. Files written by a batch that never committed stay in MinIO as orphans until
-   `remove_orphan_files` (maintenance, week 5). They take space, not correctness.
+   `remove_orphan_files` (maintenance). They take space, not correctness.

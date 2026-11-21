@@ -3,7 +3,8 @@
 Debezium PostgreSQL connector for schema `shop`.
 
 - `shop-connector.json`: connector config; `${VAR}` placeholders are substituted from `.env`
-  by `register.sh` (week 1, W1-T05) before POSTing to `http://127.0.0.1:8083/connectors`.
+  by `register.sh`, which creates the topics, then PUTs the config to
+  `http://127.0.0.1:8083/connectors/shop-connector/config` (an upsert: re-run it to apply a change).
 - Topics `oltp.shop.<table>` are created explicitly with 3 partitions and 24 h retention
   before the connector starts (`KAFKA_AUTO_CREATE_TOPICS_ENABLE=false`).
 - `tombstones.on.delete=false`: deletes arrive as `op = "d"` envelopes with `before`; silver

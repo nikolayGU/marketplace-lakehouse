@@ -33,6 +33,7 @@ How it is kept:
 ## Not covered
 
 - the jars of `streaming/Dockerfile` are checked against a `.sha1` from the same origin;
+- there is no CVE scanning of the images;
 - pip installs have no `--require-hashes`, and the transitive dependencies of the dbt venv float;
 - `rev:` in `.pre-commit-config.yaml` is a tag;
 - the DockerOperator of `silver_upsert` pulls `lakehouse/spark:dev` from a registry when the image

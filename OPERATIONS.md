@@ -55,27 +55,27 @@ starts the container on purpose, for a continuous demo; stop it with
 
 ## Ports (all on 127.0.0.1)
 
-| Service | Profile | Port |
-|---|---|---|
-| postgres-oltp | `core` | 5432 |
-| postgres-meta | `core` | 5433 |
-| kafka | `core` | 9092 (host listener, see below) |
-| kafka-connect | `core` | 8083 |
-| minio S3 API | `core` | 9000 (a browser is redirected to the console) |
-| minio web console | `core` | 9001 |
-| lakekeeper (API and UI at `/ui/`) | `core` | 8181 |
-| spark-bronze UI | `core` | 4040 |
-| spark-bronze metrics | `core` | 4041 |
-| oltp-replayer `/metrics`, `/status` | `core`, only through `make replay-live` | 8000 |
-| spark-silver UI (while `make silver` runs) | `jobs` | 4042 |
-| spark-orders-per-minute UI | `stateful` | 4043 |
-| trino | `query` | 8080 |
-| airflow api-server | `orchestrate` | 8090 |
-| prometheus | `obs` | 9090 |
-| grafana | `obs` | 3000 |
-| superset | `bi` | 8088 |
-| superset-mcp | `bi` | 5008 |
-| kafka-ui | `tools` | 8085 |
+| Service | Profile | Port | Login |
+|---|---|---|---|
+| postgres-oltp | `core` | 5432 | from `.env` |
+| postgres-meta | `core` | 5433 | from `.env` |
+| kafka | `core` | 9092 (host listener, see below) | none |
+| kafka-connect | `core` | 8083 | none |
+| minio S3 API | `core` | 9000 (a browser is redirected to the console) | `S3_ACCESS_KEY`, `S3_SECRET_KEY` |
+| minio web console | `core` | 9001 | `S3_ACCESS_KEY`, `S3_SECRET_KEY` |
+| lakekeeper (API and UI at `/ui/`) | `core` | 8181 | none |
+| spark-bronze UI | `core` | 4040 | none |
+| spark-bronze metrics | `core` | 4041 | none |
+| oltp-replayer `/metrics`, `/status` | `core`, only through `make replay-live` | 8000 | none |
+| spark-silver UI (while `make silver` runs) | `jobs` | 4042 | none |
+| spark-orders-per-minute UI | `stateful` | 4043 | none |
+| trino | `query` | 8080 | none, the user name is a label |
+| airflow api-server | `orchestrate` | 8090 | none, every visitor is admin |
+| prometheus | `obs` | 9090 | none |
+| grafana | `obs` | 3000 | `admin`, `GRAFANA_ADMIN_PASSWORD` |
+| superset | `bi` | 8088 | `admin`, `SUPERSET_ADMIN_PASSWORD` |
+| superset-mcp | `bi` | 5008 | none, local only; runs as `admin` |
+| kafka-ui | `tools` | 8085 | none |
 
 Every profile except `core` is started on purpose with `make up PROFILE=<name>`, and `jobs`
 only runs when a make target starts its container, so most rows above answer nothing by default.
@@ -314,6 +314,8 @@ rules remain: (1) a Grafana admin creates a new Trino datasource in the UI with 
 `lake` network) can pass `--user dbt` and get all rights on `lake`. What stands in the way: the
 Grafana admin password and the ports bound to `BIND_IP`. The rules do not protect against a person
 with an admin login, a shell or network access; that needs authentication and a separate decision.
+
+The Debezium password is visible in `GET /connectors/shop-connector/config` and in the Kafka topic `connect-configs`, because `connect/register.sh` sends the substituted config. Accepted: ports are on loopback and there is one user (ADR-029). In production use `EnvVarConfigProvider` or a secret store.
 
 ## Lakekeeper (REST catalog)
 

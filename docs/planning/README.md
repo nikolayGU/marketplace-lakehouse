@@ -1,5 +1,11 @@
 # Планы и спеки: индекс
 
+> **About this folder.** The working history of the project, kept in Russian as it was written:
+> weekly specs and plans (`04`-`10`), the rules of the AI-agent process (`13-harness.md`), the
+> closing spec (`14`) and the audits and reviews (`15`-`21`). It is not needed to run or understand
+> the platform: see `ARCHITECTURE.md`, `DECISIONS.md` and `docs/evidence.md` (English); the process
+> in English: `docs/evidence.md#how-it-was-built`.
+
 Что здесь действует сейчас, а что история. Правила агента: `AGENTS.md` (грузится всегда);
 состояние сессии: верхний раздел `docs/HANDOFF.md` и `docs/NEXT_SESSION.md`. Закрытые документы
 не исполняются как задачи: их решения (`Dn`, `W<n>-Dn`) действуют, списки шагов нет.
