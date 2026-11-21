@@ -39,6 +39,7 @@ memory pressure, is not done (optional; the `make chaos-trino-memory` target is 
 | `iceberg_orphans` on its weekly schedule | not done (paused by decision, ADR-025) | [not proven yet](#not-proven-yet) |
 | `rewrite-position-deletes` on `silver.orders` | not done (failed on 2026-10-23, the scheduled run skipped it since) | [not proven yet](#not-proven-yet) |
 | 24 hour unattended run | not done (cancelled by the owner on 2026-11-04) | [not proven yet](#not-proven-yet) |
+| Stop and start of the whole stack (`make down` of every profile, `make start`, `make up`) | measured | 2026-11-21: 20 of 20 containers healthy by 3 min 13 s after `make down` began, volumes kept, `verify ok`, no alert left after 13 minutes: [OPERATIONS, Daily commands](../OPERATIONS.md#daily-commands) |
 | Interview notes: 36 questions, each with a project example and a link | done | [interview notes](interview-notes.md) |
 
 ## Performance on the laptop
@@ -877,9 +878,6 @@ Decision details:
 - A live schema change (migration 003, `sales_channel`): the owner's Modify gate, not done.
 - Trino authentication: not done. Access control limits the `grafana` user, but the user
   name is only a label ([OPERATIONS, Access control](../OPERATIONS.md#access-control)).
-- Full stop and start of the whole stack with `make down PROFILE=<all profiles>`: the command
-  follows from the Makefile (`make -n`) and was not run on the live stack. Per-profile
-  `make down PROFILE=obs` and a repeated `make start` were run.
 
 ## How it was built
 

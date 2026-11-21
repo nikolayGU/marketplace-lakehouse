@@ -173,8 +173,16 @@ Data lives in the named volumes (`postgres_oltp`, `postgres_meta`, `kafka`, `min
 `grafana`, `superset`) and the Spark checkpoints in MinIO. `make down` keeps the volumes; only
 `make nuke` removes them. After the start `spark-bronze` continues from its checkpoint
 (`Resuming at batch N`, see Bronze ingest), and the DAG pause state is kept in `postgres-meta`.
-With the profile list above `make -n down` prints one `docker compose ... down` with a
-`--profile` flag for each of the eight profiles (2026-11-21).
+Run on 2026-11-21 with 20 containers up: `make down` took 12 s and left the seven volumes,
+`make start` 30 s, `make up` 86 s; 20 of 20 containers were healthy by 3 minutes 13 seconds after
+`make down` began, `make verify-fast` ended `verify ok`, `spark-bronze` logged
+`Resuming at batch 183` and every DAG kept its pause state. After such a restart
+`ContainerRestarting` fires for every container until the rule's 15-minute window has passed,
+because each start time changed (`docs/runbooks/containers.md`): in this run for 13 minutes,
+then no alert was left. The gauges that `dq_checks` sends are gone until its next run
+(statsd-exporter starts empty), so the `absent` forms of `DqChecksStale` and `FreshnessAbove15m`
+stay pending until then: in this run for 8 minutes, without firing. They fire if that run ends
+more than 15 minutes after the start.
 
 ## Bronze ingest
 

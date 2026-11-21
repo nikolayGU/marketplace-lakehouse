@@ -525,11 +525,14 @@ No login on Kafka, Kafka Connect, Lakekeeper (`allow-all`), Trino, Prometheus, `
 (profile `tools`), the Spark UIs, Airflow (every user is admin) and Superset MCP; Superset UI and
 Grafana use generated passwords, the MinIO console the S3 root keys. Secrets live only in `.env`
 (git-ignored); `make secrets` replaces every `change_me` with a random value. One MinIO root key
-pair is shared by Spark, Trino and Lakekeeper, one `postgres-meta` superuser (`META_USER`) by
-Lakekeeper, Airflow and Superset. Lakekeeper encrypts the S3 keys it stores with
-`LAKEKEEPER_ENCRYPTION_KEY`, not the database password; the key never changes once a warehouse
-exists. The Airflow scheduler and container-exporter hold the Docker socket, root on the host in
-effect; `:ro` on the socket does not limit the API (the exporter only reads, by its code).
+pair is shared by Spark, Trino, Lakekeeper and the three Airflow containers (api-server,
+scheduler, dag-processor), one `postgres-meta` superuser (`META_USER`) by Lakekeeper, Airflow and
+Superset, and the source database superuser (`OLTP_USER`) by the replayer, postgres-exporter and
+Airflow. Lakekeeper encrypts the S3 keys it stores with `LAKEKEEPER_ENCRYPTION_KEY`, not the
+database password; the key never changes once a warehouse exists. The Airflow scheduler and
+container-exporter hold the Docker socket, root on the host in effect; `:ro` on the socket does
+not limit the API (the exporter only reads, by its code). MinIO and Lakekeeper run as root inside
+their containers; no container drops capabilities or sets `no-new-privileges`.
 
 Alternatives: Docker secrets; a socket proxy; per-service MinIO users and policies; OIDC
 (Keycloak) for Trino, Lakekeeper, Airflow and Superset.

@@ -601,8 +601,9 @@ recovery, then scale. Say what is already covered and what replaces it locally.
 In this project the local choices are written down with their production counterpart in one table:
 [ARCHITECTURE.md, Production gap](../ARCHITECTURE.md#production-gap). Examples the
 repository shows: Airflow runs with every user an admin and the scheduler holds the Docker socket;
-Spark, Trino and Lakekeeper share one S3 key pair; the Debezium password is readable in plain text
-through the Kafka Connect REST API, where production would use a config provider or a secret store;
+Spark, Trino, Lakekeeper and the three Airflow containers share the MinIO root key pair; the
+Debezium password is readable in plain text through the Kafka Connect REST API, where production
+would use a config provider or a secret store;
 the MinIO tag of 2025-10-15 that fixes CVE-2025-62506 is not taken (accepted risk, ADR-026); there
 is no Alertmanager (ADR-023); Kafka is one broker; there is no regular backup and no restore from a
 copy has been rehearsed ([OPERATIONS.md, Backup](../OPERATIONS.md#backup)). My order: logins and
