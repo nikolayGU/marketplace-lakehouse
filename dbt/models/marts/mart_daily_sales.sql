@@ -22,8 +22,8 @@ select
 from {{ ref('int_daily_sales') }} as d
 {% if is_incremental() %}
     -- Every purchase date with an order that changed since the last run, all its states at once:
-    -- delete+insert removes the date's old rows, so a group that has no rows any more goes too
-    -- (D7). A change arrives days after the purchase, so filtering by purchase_date would miss it.
+    -- delete+insert removes the date's old rows, so a group that has no rows any more goes too.
+    -- A change arrives days after the purchase, so filtering by purchase_date would miss it.
     where d.purchase_date in (
         select o.purchase_date
         from {{ ref('fct_orders') }} as o

@@ -48,7 +48,7 @@ orders_per_state as (
 ),
 
 -- GMV: live items of orders that are neither canceled nor unavailable. Canceled GMV: every item
--- of a canceled order, deleted ones included (D8).
+-- of a canceled order, deleted ones included.
 items_per_state as (
     select
         o.purchase_date,

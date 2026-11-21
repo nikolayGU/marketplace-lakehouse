@@ -16,7 +16,7 @@ flags:
 models:
   marketplace:
     # dbt-trino's default `rename` drops the backup table on every run; on Lakekeeper a drop is a
-    # soft delete that keeps the files for 7 days. `replace` is CREATE OR REPLACE TABLE (D6).
+    # soft delete that keeps the files for 7 days. `replace` is CREATE OR REPLACE TABLE.
     +on_table_exists: replace
     staging:
       +materialized: view

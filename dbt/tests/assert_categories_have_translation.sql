@@ -1,5 +1,5 @@
 -- Known in the source: pc_gamer and portateis_cozinha_e_preparadores_de_alimentos have no English
--- name in the translation file (2026-10-09); dim_products keeps the Portuguese one.
+-- name in the translation file; dim_products keeps the Portuguese one.
 {{
     config(
         warn_if='>0',

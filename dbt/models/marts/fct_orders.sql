@@ -25,7 +25,7 @@ select
         cast(order_purchase_timestamp as date),
         cast(order_delivered_customer_date as date)
     ) as delivery_days,
-    -- Null unless delivered: lateness is defined only for a delivered order (D8).
+    -- Null unless delivered: lateness is defined only for a delivered order.
     case
         when order_status = 'delivered'
             then

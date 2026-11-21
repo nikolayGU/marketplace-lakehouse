@@ -34,7 +34,7 @@ def _arg(name: str) -> str:
 
 
 def test_minio_and_mc_are_built_from_the_dockerfile_not_pulled() -> None:
-    # Putting a registry image back would bring the red smoke of 2026-10-26 back.
+    # Putting a registry image back would bring the red smoke back.
     services = _services()
 
     for name, target, image in (

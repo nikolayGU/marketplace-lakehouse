@@ -1,6 +1,6 @@
 {% test relationships_live(model, column_name, to, field) %}
 
-{# Staging keeps deleted rows (D4). A live row has to point at a live row: the built-in
+{# Staging keeps deleted rows (ADR-009). A live row has to point at a live row: the built-in
    relationships would accept a deleted parent, and a deleted row, whose parent is gone or deleted
    too, is not an error at all. #}
 select child.{{ column_name }}

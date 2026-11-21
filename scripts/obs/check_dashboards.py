@@ -1,4 +1,4 @@
-"""Runs every panel query of the Grafana dashboards against Prometheus and Trino (W4-T04, W6-T01).
+"""Runs every panel query of the Grafana dashboards against Prometheus and Trino.
 
 A panel with a typo in a metric name shows "No data" exactly like a metric with no data yet, so
 this prints each panel whose query returns nothing and exits 1. A query ending in `or vector(0)`

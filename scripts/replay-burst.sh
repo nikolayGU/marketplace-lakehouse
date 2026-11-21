@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # make replay-burst SECONDS=<n> [SPEED=720]: play <n> real seconds of the replay schedule on the
 # host, then stop. The virtual clock before and after shows what the burst spent of the replay
-# budget (D2 in docs/planning/07-w3-spec.md).
+# budget (ADR-016).
 set -euo pipefail
 seconds=${1:-}
 speed=${2:-720}

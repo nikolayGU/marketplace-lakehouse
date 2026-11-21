@@ -22,7 +22,7 @@ GOLD_STALE_RUNS = "dq_gold_stale_runs"
 SHOP_SLOT = "shop_slot"
 LAKE_WRITERS_POOL = "lake_writers"
 # Gold writers: dbt_build and the gold maintenance, so a CREATE OR REPLACE and an expire_snapshots
-# of one table never commit at once (W5-D11).
+# of one table never commit at once (ADR-025).
 GOLD_WRITERS_POOL = "gold_writers"
 
 # Primary keys of the silver tables, as contracts/silver/<table>.json declares them; quarantine
@@ -40,7 +40,7 @@ SILVER_KEYS: dict[str, tuple[str, ...]] = {
 SOURCE_TABLES = tuple(t for t in SILVER_KEYS if t != "quarantine")
 
 # Silver tables the maintenance DAGs treat: the contract tables, quarantine, and the streaming
-# aggregate (W5-D12). Snapshots are kept this many days (Trino refuses fewer than 7, ADR-025).
+# aggregate. Snapshots are kept this many days (Trino refuses fewer than 7, ADR-025).
 MAINTENANCE_TABLES = (*SILVER_KEYS, "orders_per_minute")
 RETENTION_DAYS = 7
 
@@ -78,7 +78,7 @@ class Settings(BaseSettings):
     oltp_user: str = "shop"
     oltp_password: str = ""
 
-    # statsd-exporter of profile obs; dq_checks sends its gauges there (W4-D2).
+    # statsd-exporter of profile obs; dq_checks sends its gauges there (ADR-023).
     statsd_host: str = "statsd-exporter"
     statsd_port: int = 9125
 

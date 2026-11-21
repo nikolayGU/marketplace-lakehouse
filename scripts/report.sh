@@ -16,7 +16,7 @@ for kind in verify check review; do
 done
 echo "== containers"
 docker ps --format '{{.Names}} {{.Status}}' 2>/dev/null || echo "docker unavailable"
-# REL-01: docker ps does not show a container that is down. After `docker kill` or `docker stop`
+# `docker ps` does not show a container that is down. After `docker kill` or `docker stop`
 # restart: unless-stopped leaves it down, and nothing else raises it. One-shot jobs (restart "no")
 # are meant to exit and are not listed. Only name, policy, state and exit code are read, no Env.
 # The stack is found by the directory of its compose file: docker compose labels every container

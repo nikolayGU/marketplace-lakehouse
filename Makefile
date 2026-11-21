@@ -128,9 +128,9 @@ airflow-init: ## pools lake_writers and gold_writers, 1 slot each (safe to re-ru
 	$(COMPOSE) exec airflow-scheduler airflow pools set lake_writers 1 \
 	  "silver writers: the silver_upsert merge and iceberg_maintenance optimize (ADR-010)"
 	$(COMPOSE) exec airflow-scheduler airflow pools set gold_writers 1 \
-	  "gold writers: dbt_build and the gold maintenance (W5-D11)"
+	  "gold writers: dbt_build and the gold maintenance (ADR-025)"
 
-# ---------------------------------------------------------------- chaos (week 2+)
+# ---------------------------------------------------------------- chaos
 chaos-%: ## run a failure scenario: make chaos-spark-kill
 	bash scripts/chaos/$*.sh
 

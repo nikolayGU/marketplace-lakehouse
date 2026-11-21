@@ -1,5 +1,5 @@
 """Prometheus metrics from the driver (ADR-013): Kafka lag from the progress offsets, and for
-stateful queries the state size, the watermark and the rows it dropped (W5-T01b)."""
+stateful queries the state size, the watermark and the rows it dropped (ADR-024)."""
 
 import time
 

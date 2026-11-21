@@ -31,7 +31,7 @@ WEBDRIVER_BASEURL = "http://superset:8088/"
 WEBDRIVER_BASEURL_USER_FRIENDLY = "http://127.0.0.1:8088/"
 
 # MCP service (profile bi, port 5008) runs every tool as this user. That is the local
-# single-user mode, like Airflow without a login (D12): the ports are bound to BIND_IP=127.0.0.1.
+# single-user mode, like Airflow without a login: the ports are bound to BIND_IP=127.0.0.1.
 # Any deployment reachable from outside the machine must set MCP_AUTH_ENABLED with a JWT
 # provider instead and drop this line.
 MCP_DEV_USERNAME = "admin"

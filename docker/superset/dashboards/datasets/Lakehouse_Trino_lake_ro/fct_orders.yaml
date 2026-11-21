@@ -27,7 +27,7 @@ metrics:
     verbose_name: GMV
     metric_type: null
     expression: "SUM(CASE WHEN order_status NOT IN ('canceled', 'unavailable') THEN items_value END)"
-    description: Value of live items of orders that are neither canceled nor unavailable (D8).
+    description: Value of live items of orders that are neither canceled nor unavailable.
     d3format: null
     extra: {}
     warning_text: null

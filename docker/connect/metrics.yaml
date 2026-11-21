@@ -1,4 +1,4 @@
-# JMX exporter rules for Kafka Connect and the Debezium PostgreSQL connector (W4-T01b).
+# JMX exporter rules for Kafka Connect and the Debezium PostgreSQL connector.
 # Beans no rule matches are dropped; JVM metrics (jvm_*) come from the agent itself.
 rules:
   # `status` is a string attribute: it becomes a label, the sample is 1.

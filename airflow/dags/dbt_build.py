@@ -1,4 +1,4 @@
-"""dbt_build: dbt build of lake.gold after every silver merge (Asset lake.silver, D10).
+"""dbt_build: dbt build of lake.gold after every silver merge (Asset lake.silver, ADR-011).
 
 No retries: a failed test stays failed. A manual run takes dbt vars from its conf, as
 {"dbt_vars": "{chaos_break_test: true}"} (chaos 9); a run from the Asset has an empty conf.

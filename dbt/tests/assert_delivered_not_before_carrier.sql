@@ -1,4 +1,4 @@
--- Known in the source: 23 orders reached the customer before the carrier got them (2026-10-09).
+-- Known in the source: 23 orders reached the customer before the carrier got them.
 {{
     config(
         warn_if='>0',

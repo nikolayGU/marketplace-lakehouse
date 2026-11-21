@@ -1,6 +1,6 @@
 -- mart_daily_sales, built incrementally, equals a full recompute over every date. Catches a wrong
 -- watermark or a group left behind by delete+insert; a rerun without changes only proves
--- idempotency (D7). Expected: no rows.
+-- idempotency. Expected: no rows.
 with
 
 mart as (

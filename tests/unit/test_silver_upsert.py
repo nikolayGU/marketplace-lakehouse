@@ -583,7 +583,7 @@ def test_existing_copy_on_write_orders_converges_once(
     assert partition_fields(spark, table) == {"months(order_purchase_timestamp)"}
 
 
-# Metadata files (W5-T05a): a table drops the metadata.json files that fell out of its log.
+# Metadata files: a table drops the metadata.json files that fell out of its log.
 
 CLEANUP_KEY = "write.metadata.delete-after-commit.enabled"
 WITH_CLEANUP = ", '" + CLEANUP_KEY + "' = 'true'"

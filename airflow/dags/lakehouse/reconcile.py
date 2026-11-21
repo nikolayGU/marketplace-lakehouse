@@ -1,5 +1,5 @@
-"""Reconciliation by value: source against silver, silver against gold (W5-T04, W5-D9), and the
-GMV of every day, source against gold, independent of the dbt model (audit MODEL-02).
+"""Reconciliation by value: source against silver, silver against gold (ADR-020), and the
+GMV of every day, source against gold, independent of the dbt model.
 
 A row fingerprint is the md5 of the column values in one canonical text, built the same way in
 Postgres and in Trino; a table fingerprint is the row count and the md5 of the sorted

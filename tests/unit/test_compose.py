@@ -1,4 +1,4 @@
-"""SEC-02: a published port is bound to BIND_IP, and compose refuses to start without one."""
+"""A published port is bound to BIND_IP, and compose refuses to start without one."""
 
 import json
 import os

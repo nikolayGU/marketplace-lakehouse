@@ -1,4 +1,4 @@
--- Grain: customer_unique_id, the person (D3). Only customers with an order in silver: the loader
+-- Grain: customer_unique_id, the person. Only customers with an order in silver: the loader
 -- puts every customer into shop.customers up front, including those of orders still to come.
 with
 

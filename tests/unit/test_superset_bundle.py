@@ -131,7 +131,7 @@ def _metrics(table: str) -> dict[str, dict[str, Any]]:
 
 
 def test_category_chart_counts_live_items_of_paid_orders() -> None:
-    """PF-42: GMV of items is the saved metric and excludes deleted items and unpaid orders."""
+    """GMV of items is the saved metric and excludes deleted items and unpaid orders."""
     expression = _metrics("fct_order_items")["gmv"]["expression"]
 
     assert "NOT is_deleted" in expression

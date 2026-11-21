@@ -1,6 +1,6 @@
-"""The Marketplace dashboard reads lake_ro.gold through the Trino datasource plugin (W6-D11, D17).
+"""The Marketplace dashboard reads lake_ro.gold through the Trino datasource plugin.
 
-`lake_ro` is the read-only twin of the catalog `lake` that the Grafana user may read (W6-D17).
+`lake_ro` is the read-only twin of the catalog `lake` that the Grafana user may read.
 """
 
 import json

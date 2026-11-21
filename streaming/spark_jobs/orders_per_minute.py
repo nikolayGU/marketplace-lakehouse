@@ -1,4 +1,4 @@
-"""Orders per minute, a stateful streaming job (W5-T01a, ADR-024).
+"""Orders per minute, a stateful streaming job (ADR-024).
 
 Reads the new-order events (`op = 'c'`) of `oltp.shop.orders` from Kafka and counts distinct
 orders per one-minute window of `order_purchase_timestamp`, with a watermark of five minutes.

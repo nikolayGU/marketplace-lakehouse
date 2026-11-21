@@ -44,8 +44,8 @@ _probe() {
 # lagging for its whole limit. The third is no query on a table: Trino caches table metadata
 # (manifest lists, manifests, row counts; `iceberg.metadata-cache.enabled`, true by default), and
 # `select 1 from bronze.cdc_events limit 1` reads no data file (`explain analyze` with MinIO up:
-# `Input: 70 rows (0B)`, no physical input). Seen: `$manifests` answered with MinIO down
-# (2026-11-04). What it shows: MinIO answers from the host of Trino by the endpoint of its
+# `Input: 70 rows (0B)`, no physical input). Seen: `$manifests` answered with MinIO down.
+# What it shows: MinIO answers from the host of Trino by the endpoint of its
 # catalog. What it does not: credentials, permissions, that the bucket or the files of a table
 # exist. It needs curl in the trino image (without it the refusal reads "object store (MinIO)
 # fails: ...curl: command not found"). curl gets the same limit (-m, passed as $1), since timeout
@@ -133,7 +133,7 @@ run_silver() {
 }
 
 # merge_silver [run id]: bring silver up to bronze with its one writer. While the Airflow scheduler
-# runs that is silver_upsert, triggered here (W4-D12; the DAG must not be paused: run_dag waits
+# runs that is silver_upsert, triggered here (the DAG must not be paused: run_dag waits
 # for a queued run until it times out); with the scheduler stopped it is `make silver`.
 merge_silver() {
   local ids
@@ -363,7 +363,7 @@ for entry in json.load(sys.stdin).get("content") or []:
 }
 
 # alert_firing <name> <seconds>: poll Prometheus every 5 s until the alert is firing, print
-# `alert <name> firing after <n> s`, 1 on a timeout (W4-D7). A pending alert does not count.
+# `alert <name> firing after <n> s`, 1 on a timeout. A pending alert does not count.
 alert_firing() {
   local name=$1 limit=$2 started=$SECONDS
   while :; do

@@ -1,4 +1,4 @@
-"""SEC-09: an image or an action is named by its content, not by a tag its publisher can move."""
+"""An image or an action is named by its content, not by a tag its publisher can move."""
 
 import re
 import shlex

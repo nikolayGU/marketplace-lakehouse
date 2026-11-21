@@ -2,9 +2,9 @@ models:
   - name: mart_daily_sales
     description: >
       Sales per purchase date and seller state, incremental: delete+insert of every purchase date
-      with an order changed since the last run (D7). An order counts in the state of each of its
+      with an order changed since the last run. An order counts in the state of each of its
       sellers, deleted items included; an order that never had an item counts in 'unknown'. So
-      orders_count summed over states can exceed the orders of the day. Known limit (D18): a
+      orders_count summed over states can exceed the orders of the day. Known limit: a
       soft-deleted order or a seller moved to another state leaves its old dates stale, since
       neither moves fct_orders.updated_at. The replayer does neither; if it happens, the full
       recompute test fails and `--full-refresh` rebuilds the mart. dq_checks, which compares

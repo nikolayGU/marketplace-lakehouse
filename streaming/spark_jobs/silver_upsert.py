@@ -123,7 +123,7 @@ def reason(contract: TableContract) -> Column:
 
 
 def unknown_fields(images: DataFrame, contract: TableContract) -> list[str]:
-    """Payload fields the contract does not declare: the source gained a column (W2-T07)."""
+    """Payload fields the contract does not declare: the source gained a column."""
     known = [c.name for c in contract.columns]
     keys = images.select(F.explode(F.map_keys("_fields")).alias("field"))
     return sorted(r["field"] for r in keys.where(~F.col("field").isin(*known)).distinct().collect())

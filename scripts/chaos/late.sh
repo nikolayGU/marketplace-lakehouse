@@ -77,7 +77,7 @@ wait_until 120 "bronze to take in the re-sent record" resent
 # too, so this run must report orders events merged. Kept in a file on failure, like run_silver.
 log=$(mktemp -t silver_upsert.XXXXXX.log)
 if [ -n "$("${COMPOSE[@]}" --profile '*' ps -q airflow-scheduler)" ]; then
-  # Airflow is the silver writer (W4-D12): the merge task's log carries the same lines.
+  # Airflow is the silver writer: the merge task's log carries the same lines.
   run="chaos-late-$(date -u +%Y%m%dT%H%M%S)"
   if ! run_dag silver_upsert "$run" || ! task_log silver_upsert "$run" merge >"$log" 2>&1; then
     tail -40 "$log" >&2

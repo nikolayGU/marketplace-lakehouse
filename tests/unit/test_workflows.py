@@ -24,7 +24,7 @@ def test_every_dockerfile_is_in_the_hadolint_matrix() -> None:
 
 
 def test_third_party_actions_are_pinned_to_a_commit() -> None:
-    # SEC-09: a tag moves, a commit does not. Every action counts, the old check saw only
+    # A tag moves, a commit does not. Every action counts, the old check saw only
     # docker/ and hadolint/. The version comment is checked in test_pinning.py.
     seen = 0
     for workflow in WORKFLOWS.glob("*.yml"):
@@ -44,7 +44,7 @@ def test_workflows_use_no_secret_but_the_github_token() -> None:
 
 
 def test_smoke_runs_on_demand_and_weekly_and_checks_verify_ok() -> None:
-    # W6-D2: the schedule came back after the first green run (2026-10-29, ADR-026).
+    # The schedule came back after the first green run (ADR-026).
     text = (WORKFLOWS / "smoke.yml").read_text()
     smoke = yaml.safe_load(text)
     triggers = smoke[True]  # PyYAML reads the key `on` as True
@@ -68,7 +68,7 @@ def test_ci_runs_the_checks_it_claims() -> None:
     assert "make test-spark" in runs["spark-tests"]
     assert "make dags-check AIRFLOW_IMAGE=lakehouse/airflow:ci" in runs["airflow-image"]
     assert "scripts/check-minio-images.sh" in runs["minio-images"]
-    # QA-01: promtool is in no other gate; a broken alert rule would reach main unnoticed.
+    # promtool is in no other gate; a broken alert rule would reach main unnoticed.
     assert "make alerts-test" in runs["alerts-test"]
 
 

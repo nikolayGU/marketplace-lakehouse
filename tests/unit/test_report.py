@@ -1,4 +1,4 @@
-"""REL-01, REL-02: `make report` shows a long-lived container that is down.
+"""`make report` shows a long-lived container that is down.
 
 `restart: unless-stopped` does not bring back a container that `docker kill` or `docker stop`
 marked as stopped by hand, and nothing else raises it. The script runs here against a fake
@@ -141,7 +141,7 @@ def test_no_containers_of_the_project_is_not_reported_as_all_running(tmp_path: P
 def test_the_stack_is_found_by_its_compose_directory_not_by_a_project_name(
     tmp_path: Path, project: str | None
 ) -> None:
-    # B11: .env may name the project (.env.example sets COMPOSE_PROJECT_NAME) and this shell never
+    # The .env may name the project (.env.example sets COMPOSE_PROJECT_NAME) and this shell never
     # sees it, since .env is not read. The working_dir label does not depend on the name.
     report, calls = _run_report(
         tmp_path, ["/renamed-prometheus-1 unless-stopped exited 255"], project=project

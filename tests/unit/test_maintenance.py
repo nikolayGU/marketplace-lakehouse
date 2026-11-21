@@ -1,4 +1,4 @@
-"""The maintenance job (W5-T05a): the rules run on the host without a JVM, the procedures against
+"""The maintenance job: the rules run on the host without a JVM, the procedures against
 a local Hadoop catalog in the image (`make test-spark`)."""
 
 import json
@@ -465,7 +465,7 @@ def test_expire_leaves_one_snapshot_and_reports_deleted_files(
     assert snapshots(spark, sandbox) == 1
     assert spark.table(sandbox).count() == rows_before
     # Every expired snapshot owns one manifest list and expire deletes it; the data files stay,
-    # the surviving snapshot still reads them (QA-06: the key alone was also there for a no-op).
+    # the surviving snapshot still reads them (the key alone was also there for a no-op).
     assert snapshots_before > 1
     assert result["deleted_manifest_lists_count"] == snapshots_before - 1
     assert result["deleted_data_files_count"] == 0

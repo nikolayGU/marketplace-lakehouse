@@ -1,4 +1,4 @@
-"""Iceberg maintenance of the lake (W5-T05a, ADR-025): expire snapshots, remove orphan files,
+"""Iceberg maintenance of the lake (ADR-025): expire snapshots, remove orphan files,
 rewrite position deletes, compact data files.
 
     run-job.sh maintenance expire --days 7 silver.sellers silver.orders

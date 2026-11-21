@@ -41,7 +41,7 @@ for topic in $topics; do
 done
 
 # Debezium publishes pg_logical_emit_message records to <topic.prefix>.message. Nothing in the
-# project emits them, but one from anyone stalls the stream without the topic (ADR-023, 23.10):
+# project emits them, but one from anyone stalls the stream without the topic (ADR-023):
 # one partition, kept an hour (segment.ms rolls the segment so retention can drop it), records up
 # to the Connect producer limit (CONNECT_PRODUCER_MAX_REQUEST_SIZE in docker/compose.yaml).
 message_topic=$(python3 -c '

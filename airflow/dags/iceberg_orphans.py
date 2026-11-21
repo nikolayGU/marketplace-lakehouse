@@ -1,4 +1,4 @@
-"""iceberg_orphans: weekly search for orphan files, a dry run unless told otherwise (W5-D13).
+"""iceberg_orphans: weekly search for orphan files, a dry run unless told otherwise (ADR-025).
 
 remove_orphan_files deletes files no snapshot references. A wrong `older_than` deletes files of
 a commit in flight, and on bronze that cannot be undone, so: the job refuses less than 7 days,

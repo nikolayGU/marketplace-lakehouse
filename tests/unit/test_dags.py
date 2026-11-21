@@ -776,7 +776,7 @@ def test_dbt_writes_only_to_tmp() -> None:
     assert "--log-path /tmp/dbt/logs" in command
 
 
-# Maintenance (W5-T05a).
+# Maintenance.
 
 
 def dag_keywords(dag_file: str, call: str) -> dict[str, ast.expr]:
@@ -969,7 +969,7 @@ def test_orphans_dag_is_a_weekly_dry_run_by_default() -> None:
 
 
 def test_maintenance_expires_and_compacts_only_when_asked() -> None:
-    # Unpausing the existing DAG must not start the W5-D13 ladder: expire and compaction wait
+    # Unpausing the existing DAG must not start the ADR-025 ladder: expire and compaction wait
     # for a run with {"expire_and_compact": true} or for a code change of the default.
     dag = dag_keywords("iceberg_maintenance.py", "dag")
 
@@ -1127,7 +1127,7 @@ def test_bronze_orphans_always_go_to_the_metadata_location() -> None:
         assert_accepted_by_the_job(rendered(orphans_command(["lake.bronze.cdc_events"])))
 
 
-# Timeouts and one writer of the silver checkpoint (REL-03, DATA-09). Airflow is not on the host,
+# Timeouts and one writer of the silver checkpoint. Airflow is not on the host,
 # so the DAG files are read; `make dags-check` repeats the timeout checks on the loaded DAGs.
 
 DAG_FILES = sorted(path.name for path in (REPO / "airflow" / "dags").glob("*.py"))
@@ -1328,8 +1328,9 @@ def test_a_failing_gmv_step_sends_the_finished_verdicts_then_fails_the_run(
     side: str,
     failing_query: str,
 ) -> None:
-    # The silver-gold verdicts and the B3 count are done when the GMV step breaks: they are
-    # printed, counted and sent, and the run still ends red (not green with a silence).
+    # The silver-gold verdicts and the count of runs that did not compare silver with gold are
+    # done when the GMV step breaks: they are printed, counted and sent, and the run still ends
+    # red (not green with a silence).
     dq.at_rest()
     dq.variables[GOLD_NOT_COMPARED_RUNS] = "23"
     if side == "trino":

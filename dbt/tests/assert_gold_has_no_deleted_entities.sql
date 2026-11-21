@@ -1,7 +1,7 @@
--- D4: staging keeps deleted rows and every consumer drops them. These models hold live entities
--- only; fct_order_items keeps deleted items on purpose (D8) and is not checked. The replayer
--- deletes items and reviews, never these entities, so a row here is a lost filter, not a race with
--- a silver merge that runs while dbt does. Expected: no rows.
+-- Soft deletes (ADR-009): staging keeps deleted rows and every consumer drops them. These models
+-- hold live entities only; fct_order_items keeps deleted items on purpose and is not checked.
+-- The replayer deletes items and reviews, never these entities, so a row here is a lost filter,
+-- not a race with a silver merge that runs while dbt does. Expected: no rows.
 select
     'fct_orders' as model,
     f.order_id as entity_key

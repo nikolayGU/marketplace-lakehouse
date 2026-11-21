@@ -1,5 +1,5 @@
 -- Grain: purchase_month, customer_state. On time: delivered no later than the estimated date,
--- by calendar date (D8). A delivered order without a delivery date is delivered, not on time.
+-- by calendar date. A delivered order without a delivery date is delivered, not on time.
 select
     date_trunc('month', purchase_date) as purchase_month,
     customer_state,

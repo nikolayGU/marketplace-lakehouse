@@ -88,7 +88,7 @@ def test_running_container_reports_memory_like_docker_stats() -> None:
 
     registry = scrape(api)
 
-    # docker stats shows usage minus inactive_file: 1.389GiB for trino on 2026-10-19.
+    # docker stats shows usage minus inactive_file: 1.389GiB for trino.
     assert (
         value(registry, "docker_container_memory_usage_bytes", "lakehouse-trino-1") == 1_490_788_352
     )

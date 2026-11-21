@@ -2,11 +2,11 @@
 # an error. Silver merges each table in a commit of its own, and in a batch `order_items` before
 # `orders` (merge_batch in streaming/spark_jobs/silver_upsert.py, ADR-021), so a child may reach
 # silver before its parent and be an orphan until the next run. Nothing in the source allows an
-# orphan, and the count was 0 on 2026-10-30, so a warning is a signal to look at, and a stopped
+# orphan, and the count was 0, so a warning is a signal to look at, and a stopped
 # `dbt build` would be a stop for a gap that closes by itself. `make reconcile` is the hard check.
 models:
   - name: stg_orders
-    description: One row per order in silver, deleted ones included (`is_deleted`, D4).
+    description: One row per order in silver, deleted ones included (`is_deleted`, ADR-009).
     columns:
       - name: order_id
         data_tests: [unique, not_null]
@@ -37,7 +37,7 @@ models:
   - name: stg_order_items
     description: >
       One row per order item, deleted ones included: the replayer deletes the items of an order
-      canceled before shipping, and canceled GMV is counted from them (D4, D8).
+      canceled before shipping, and canceled GMV is counted from them (ADR-009).
     data_tests:
       - unique_combination:
           arguments:
@@ -73,7 +73,7 @@ models:
       - name: price
         description: >
           Never negative, deleted items included: canceled GMV sums their price. The minimum in
-          the dataset is 0.85 (2026-10-30).
+          the dataset is 0.85.
         data_tests:
           - value_in_range:
               arguments:
@@ -104,8 +104,8 @@ models:
       - name: payment_type
         description: >
           The CHECK of shop.payments (oltp/migrations/001_schema.sql): a type outside the five is
-          an error. `not_defined` is allowed: data/raw has 3 such payments, silver had none on
-          2026-10-30 (the replay may not have reached them).
+          an error. `not_defined` is allowed: data/raw has 3 such payments, silver had none
+          (the replay may not have reached them).
         data_tests:
           - accepted_values:
               arguments:
@@ -146,7 +146,7 @@ models:
   - name: stg_customers
     description: >
       One row per customer_id. Olist issues a customer_id per order; the person is
-      customer_unique_id (D3).
+      customer_unique_id.
     columns:
       - name: customer_id
         data_tests: [unique, not_null]

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Watermark demo (W5-T01a, ADR-024): the same job code as the live service, on a lab topic, one
+# Watermark demo (ADR-024): the same job code as the live service, on a lab topic, one
 # availableNow run per batch on one checkpoint, into lake.demo.orders_per_minute.
 #
 #   run 1  orders at 10:00:10, 10:04:30, 10:10:20            watermark moves to 10:05:20
@@ -12,7 +12,7 @@
 # the topic that bronze reads and `reconcile` compares is not touched.
 . "$(dirname "$0")/../chaos/lib.sh"
 
-# `live`: the same two cases on the running service (W5-T01b). Two real inserts are sent again to
+# `live`: the same two cases on the running service. Two real inserts are sent again to
 # oltp.shop.orders: the oldest one far behind the watermark (it must be dropped, once) and the
 # newest one (inside the watermark, already counted, so nothing changes). Both also reach bronze
 # and silver, where the LSN guard absorbs them (as in chaos 4); lsn_repeats_last_hour grows by 2.

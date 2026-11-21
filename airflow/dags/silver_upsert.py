@@ -1,4 +1,4 @@
-"""silver_upsert: every 5 minutes, merge what bronze committed into silver (D10, ADR-021).
+"""silver_upsert: every 5 minutes, merge what bronze committed into silver (ADR-011, ADR-021).
 
 The merge is spark-silver, the same container as `make silver`, started by DockerOperator. A run
 without a new bronze snapshot skips the merge and publishes no Asset event, so dbt_build sleeps.

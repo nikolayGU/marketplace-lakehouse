@@ -1,4 +1,4 @@
-"""Every model that reads a staging model drops its deleted rows (D4).
+"""Every model that reads a staging model drops its deleted rows (ADR-009).
 
 Staging keeps every row with `is_deleted`; each model that reads it decides. The dbt test
 `dbt/tests/assert_gold_has_no_deleted_entities.sql` proves it on the data, but only on a live
@@ -6,7 +6,7 @@ stack, and it catches a lost filter only when a deleted entity exists. This read
 dropped `where not is_deleted` fails on the host.
 
 Scope: the models in `intermediate/` and `marts/` that `ref('stg_*')`. Readers of
-`fct_order_items` are not scanned: it keeps deleted items on purpose, and `canceled_gmv` (D8) in
+`fct_order_items` are not scanned: it keeps deleted items on purpose, and `canceled_gmv` in
 `int_daily_sales` sums them.
 """
 
@@ -124,7 +124,7 @@ def test_consumer_that_keeps_deleted_rows_aggregates_live_ones_only(
 
 
 def test_fct_order_items_keeps_the_deleted_items_with_their_flag() -> None:
-    # Canceled GMV is counted from them (D8): a filter here would zero it.
+    # Canceled GMV is counted from them: a filter here would zero it.
     sql = without_comments((MODELS / "marts" / f"{KEEPS_DELETED_ROWS}.sql").read_text())
 
     assert re.search(r"\bi\.is_deleted\b", sql), "fct_order_items does not expose is_deleted"

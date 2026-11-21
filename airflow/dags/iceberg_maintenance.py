@@ -1,4 +1,4 @@
-"""iceberg_maintenance: daily upkeep of the lake's Iceberg tables (D11 W3, W5-D11, W5-D12).
+"""iceberg_maintenance: daily upkeep of the lake's Iceberg tables (ADR-011, ADR-025).
 
 Silver: optimize through Trino, then the Spark job `maintenance` folds the position deletes of
 silver.orders and expires snapshots older than a week. Gold: expire_snapshots, one task per table
@@ -9,7 +9,7 @@ Orphan files are the weekly iceberg_orphans.
 
 Only optimize runs by default. The Spark steps wait for {"expire_and_compact": true} in the run's
 conf: the DAG existed before them, so "created paused" does not hold them back, and unpausing it
-is not the owner's ok for the W5-D13 ladder.
+is not the owner's ok for the ADR-025 ladder.
 """
 
 from datetime import datetime, timedelta

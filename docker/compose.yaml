@@ -122,7 +122,7 @@ services:
   kafka-connect:
     <<: *common
     build:
-      context: ./connect   # quay.io/debezium/connect:3.5 + JMX exporter agent (W4-D1)
+      context: ./connect   # quay.io/debezium/connect:3.5 + JMX exporter agent
     image: lakehouse/connect:dev
     pull_policy: never
     profiles: [core]
@@ -146,7 +146,7 @@ services:
       # Metrics on :9404 inside the network only; rules in docker/connect/metrics.yaml.
       ENABLE_JMX_EXPORTER: "true"
       # Debezium publishes pg_logical_emit_message records to oltp.message: the 4 MB padding of
-      # chaos 6 (23.10) stopped CDC at 1 MB. Kept so a message that size cannot stop it again.
+      # chaos 6 stopped CDC at 1 MB. Kept so a message that size cannot stop it again.
       CONNECT_PRODUCER_MAX_REQUEST_SIZE: "8388608"
     volumes:
       # /kafka/config is an anonymous volume of the base image: a recreated container keeps the
@@ -343,7 +343,7 @@ services:
         limits:
           memory: 2560M
 
-  # Stateful job (W5-T01b, ADR-024): distinct new orders per minute with a 5 minute watermark, from
+  # Stateful job (ADR-024): distinct new orders per minute with a 5 minute watermark, from
   # Kafka into silver.orders_per_minute. A service of its own so that its failure or OOM kill does
   # not take CDC ingest down with it. The image is built by spark-bronze; `core` is not a
   # dependency of the profile (required: false), like the obs exporters.
@@ -390,7 +390,7 @@ services:
           memory: 1792M
 
   # One-shot: AvailableNow reads what bronze committed since the last run, merges it, exits.
-  # `make silver` runs it by hand; Airflow schedules it from week 3. The exit code is the health
+  # `make silver` runs it by hand; Airflow schedules it. The exit code is the health
   # signal and a restart policy would loop it, so it has neither (same as minio-init).
   # `make silver` uses --no-deps, so Lakekeeper must already run (spark-bronze's up starts it).
   spark-silver:
@@ -469,7 +469,7 @@ services:
     command: ["/usr/lib/trino/bin/run-trino", "-J-Xmx${TRINO_XMX:?TRINO_XMX must be set}"]
     environment:
       # glibc gives each busy thread a malloc arena of up to 64 MB; with hundreds of Trino threads
-      # that grew RSS about 0.55 GiB past what the JVM tracks (NMT, 2026-10-18, D20).
+      # that grew RSS about 0.55 GiB past what the JVM tracks (NMT).
       MALLOC_ARENA_MAX: "4"
       LAKEKEEPER_URI: ${LAKEKEEPER_URI}
       LAKEKEEPER_WAREHOUSE: ${LAKEKEEPER_WAREHOUSE}
@@ -635,7 +635,7 @@ services:
     environment:
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
       GF_USERS_ALLOW_SIGN_UP: "false"
-      # Installed from the Grafana catalog on start into the grafana volume (W6-D11), synchronously:
+      # Installed from the Grafana catalog on start into the grafana volume, synchronously:
       # provisioning reads the datasource file before an async install is done. Pinned: an unpinned
       # id moves to the newest release on every start.
       GF_PLUGINS_PREINSTALL_SYNC: trino-datasource@1.4.1
@@ -662,10 +662,9 @@ services:
 
   kafka-exporter:
     <<: *common
-    # verified 2026-10-19
     image: danielqsj/kafka-exporter:v1.10.0@sha256:346a53c2489a3530790d01f7b96632496d0d58926662f4c35bb65f569db2ab42
     profiles: [obs]
-    # Pinned to the newest protocol sarama knows; 2.0.0 (default) also reads broker 4.3.1 (2026-10-19).
+    # Pinned to the newest protocol sarama knows; 2.0.0 (default) also reads broker 4.3.1.
     command: ["--kafka.server=kafka:9092", "--kafka.version=4.0.0"]
     # Without `required: false` a profile-obs service depending on a profile-core one makes the
     # project invalid under `make up PROFILE=obs`.
@@ -685,7 +684,6 @@ services:
 
   postgres-exporter:
     <<: *common
-    # verified 2026-10-19
     image: prometheuscommunity/postgres-exporter:v0.17.1@sha256:38606faa38c54787525fb0ff2fd6b41b4cfb75d455c1df294927c5f611699b17
     profiles: [obs]
     environment:
@@ -710,7 +708,7 @@ services:
 
   statsd-exporter:
     <<: *common
-    # verified 2026-10-19; Airflow and dq_checks metrics
+    # Airflow and dq_checks metrics
     image: prom/statsd-exporter:v0.28.0@sha256:4e7a1f00b9b23ef0c5b4fdbb7f4748bdc218cfdff04acc8033bc5b9f7c15009d
     profiles: [obs]
     volumes:
@@ -726,8 +724,8 @@ services:
         limits:
           memory: 64M
 
-  # cAdvisor cannot name containers on Docker Desktop with the containerd image store (2026-10-19,
-  # v0.52.1 and v0.55.1): this reads the Docker API instead (ADR-023).
+  # cAdvisor cannot name containers on Docker Desktop with the containerd image store
+  # (v0.52.1 and v0.55.1): this reads the Docker API instead (ADR-023).
   container-exporter:
     <<: *common
     build:

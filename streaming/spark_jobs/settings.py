@@ -35,7 +35,7 @@ class Settings(BaseSettings):
     # one, so changing it takes effect only with a new checkpoint.
     silver_shuffle_partitions: int = 4
 
-    # orders_per_minute (W5-T01a). An empty checkpoint means <checkpoint_root>/orders_per_minute.
+    # orders_per_minute (ADR-024). An empty checkpoint means <checkpoint_root>/orders_per_minute.
     opm_source_topic: str = "oltp.shop.orders"
     opm_target: str = "lake.silver.orders_per_minute"
     opm_checkpoint: str = ""

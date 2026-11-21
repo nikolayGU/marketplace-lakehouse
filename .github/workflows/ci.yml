@@ -99,7 +99,7 @@ jobs:
           failure-threshold: warning
 
   # promtool checks observability/prometheus/alerts.yml and runs alerts_test.yml in the pinned
-  # Prometheus image (QA-01: neither `make check` nor another job runs it).
+  # Prometheus image (neither `make check` nor another job runs it).
   alerts-test:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -184,4 +184,4 @@ jobs:
       - name: the images do what compose needs
         run: bash scripts/check-minio-images.sh lakehouse/minio:ci lakehouse/mc:ci
 
-# smoke: smoke.yml (W5-T03).
+# smoke: smoke.yml.

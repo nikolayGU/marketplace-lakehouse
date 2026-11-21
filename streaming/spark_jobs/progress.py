@@ -1,4 +1,4 @@
-"""Numbers out of a streaming progress report, without pyspark (W5-T01b)."""
+"""Numbers out of a streaming progress report, without pyspark (ADR-024)."""
 
 import calendar
 import re

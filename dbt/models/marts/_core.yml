@@ -8,7 +8,7 @@ models:
         description: Order identifier, the grain of the model.
         data_tests: [unique, not_null]
       - name: customer_unique_id
-        description: The person; customer_id is issued per order (D3).
+        description: The person; customer_id is issued per order.
         data_tests:
           - not_null
           - relationships:
@@ -92,7 +92,7 @@ models:
       - name: freight_value
         description: Freight of the item.
       - name: is_deleted
-        description: Soft-deleted item, kept for canceled GMV (D8); live metrics filter it (D4).
+        description: Soft-deleted item, kept for canceled GMV; live metrics filter it (ADR-009).
       - name: order_status
         description: Status of the order of the item; null if the order is missing.
       - name: purchase_date
@@ -109,7 +109,7 @@ models:
         description: State of the seller of the item. Null if the seller is missing.
   - name: dim_customers
     description: >
-      One row per person (customer_unique_id) with at least one order in silver (D3); the address
+      One row per person (customer_unique_id) with at least one order in silver; the address
       is the one of the latest order.
     columns:
       - name: customer_unique_id

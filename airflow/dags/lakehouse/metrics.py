@@ -1,4 +1,4 @@
-"""Gauges from dq_checks to statsd-exporter, as DogStatsD lines over UDP (W4-D2).
+"""Gauges from dq_checks to statsd-exporter, as DogStatsD lines over UDP (ADR-023).
 
 No airflow import, so the tests run on the host. UDP gives no delivery receipt: a lost packet
 shows only as a missing series in Prometheus, and the mapping's TTL removes a series that stops

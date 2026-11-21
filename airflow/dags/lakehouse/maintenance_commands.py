@@ -22,7 +22,7 @@ def dry_run_flag(params: Mapping[str, object]) -> str:
 
 def expire_and_compact_enabled(params: Mapping[str, object]) -> bool:
     """iceberg_maintenance runs its Spark steps (expire, position deletes, bronze compaction) only
-    for a real `true`: unpausing the DAG is not the owner's ok for the W5-D13 ladder."""
+    for a real `true`: unpausing the DAG is not the owner's ok for the ADR-025 ladder."""
     return params.get("expire_and_compact") is True
 
 

@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     # Share of the history bulk-loaded before the clock starts; the rest is replayed.
     replay_initial_share: float = 0.8
     # Share of delivery updates pushed back by replay_late_delay_seconds of VIRTUAL time: late in
-    # event time for the windowed job (W5-T01). The update still commits later, so it reaches
+    # event time for the windowed job (ADR-024). The update still commits later, so it reaches
     # Kafka in order with a higher LSN; out-of-order arrival is chaos 4 (scripts/chaos/late.sh).
     replay_late_ratio: float = 0.0
     replay_late_delay_seconds: int = 300

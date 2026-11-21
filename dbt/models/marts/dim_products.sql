@@ -1,4 +1,4 @@
--- 610 products have no category, and two categories have no English name (data/raw, 2026-10-09).
+-- 610 products have no category, and two categories have no English name (data/raw).
 select
     p.product_id,
     p.product_category_name,

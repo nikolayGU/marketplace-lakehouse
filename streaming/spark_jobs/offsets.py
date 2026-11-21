@@ -1,4 +1,4 @@
-"""Kafka offsets from a Structured Streaming progress, without pyspark (W4-T02)."""
+"""Kafka offsets from a Structured Streaming progress, without pyspark."""
 
 import json
 from typing import Any

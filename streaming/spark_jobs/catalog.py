@@ -7,7 +7,7 @@ from spark_jobs.settings import Settings
 CATALOG = "lake"
 
 # Lakekeeper writes a metadata.json per commit; with this property the table drops the ones that
-# fell out of its metadata log (W5-T05a). Metadata only: no rewrite, no checkpoint involved.
+# fell out of its metadata log. Metadata only: no rewrite, no checkpoint involved.
 METADATA_CLEANUP = {"write.metadata.delete-after-commit.enabled": "true"}
 
 

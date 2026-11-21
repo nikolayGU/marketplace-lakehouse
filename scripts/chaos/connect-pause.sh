@@ -2,7 +2,7 @@
 # Chaos 6: the connector is stopped for up to HOLD seconds (default 1800) while the source is
 # written. The slot, with no consumer, holds WAL back: the alert has to see it before the disk
 # does (OPERATIONS.md, scenario 6). STOP, not PAUSE: a paused task keeps the walsender, the slot
-# stays active and SlotWalRetainedHigh (inactive slot over 64 MiB) cannot fire (W4-D11).
+# stays active and SlotWalRetainedHigh (inactive slot over 64 MiB) cannot fire.
 . "$(dirname "$0")/lib.sh"
 
 hold=${HOLD:-1800}
@@ -29,12 +29,12 @@ echo "stopped the connector at $(date -u +%T), slot held $base bytes"
 
 inactive() { [ "$(psql_value "select active from pg_replication_slots where slot_name = 'shop_slot'")" = f ]; }
 wait_until 60 "the slot to turn inactive" inactive ||
-  fail "the slot stays active after a STOP: W4-D11 needs a rethink"
+  fail "the slot stays active after a STOP: the inactive-slot alert scenario needs a rethink"
 echo "slot inactive $((SECONDS - start)) s after the stop"
 alert_firing ConnectorNotRunning 180
 
 # Traffic while the consumer is gone, then WAL padding up to the threshold: the schedule yields
-# ~1.1 MB of WAL per virtual hour (13.6 MB for 60 s, W4-T02), so reaching 64 MiB by replay alone
+# ~1.1 MB of WAL per virtual hour (13.6 MB for 60 s), so reaching 64 MiB by replay alone
 # would spend days of the budget. Not pg_logical_emit_message: Debezium decodes those and publishes
 # them to oltp.message, a topic that does not exist; the first run of this scenario stopped CDC on
 # its 4 MB records. A transaction plus pg_switch_wal adds one 16 MB segment per round and produces

@@ -1,4 +1,4 @@
-"""The Postgres side of `reconcile` runs against a real Postgres, not only as text (audit b8, b16).
+"""The Postgres side of `reconcile` runs against a real Postgres, not only as text.
 
 The other reconcile tests compare SQL strings, so a query Postgres rejects, or one that returns a
 fingerprint that no longer follows from the rows, passes them. Here the schema `shop` is built by

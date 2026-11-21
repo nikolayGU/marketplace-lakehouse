@@ -1,4 +1,4 @@
--- Known in the source: 610 products have no category (2026-10-09). Products are loaded once and
+-- Known in the source: 610 products have no category. Products are loaded once and
 -- the replayer never changes them, so a different number means a broken load.
 {{
     config(

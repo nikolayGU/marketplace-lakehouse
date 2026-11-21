@@ -2,12 +2,12 @@
 
 Fails the run: a primary key twice in a silver table; live row counts that differ from Postgres
 while nothing is in flight (checks.at_rest) and CDC is not stalled; a value that differs between
-the source and silver, or silver and gold, at rest (reconcile_values, W5-T04), or a day whose GMV
-differs between the source and gold.mart_daily_sales (audit MODEL-02: the mart's own test compares
+the source and silver, or silver and gold, at rest (reconcile_values), or a day whose GMV
+differs between the source and gold.mart_daily_sales (the mart's own test compares
 it with int_daily_sales, the same logic; `lakehouse.dq.reconcile_gmv_compared` is 1 when a run did
 it). A CDC that stands (the source wrote and the slot moved no further, checks.cdc_state) is "in
 flight, no verdict" for the source-silver comparisons, the GMV comparison and the gauge
-`lakehouse.dq.cdc_stalled` (W6-D9). A CDC position that shifts during the check is "in flight,
+`lakehouse.dq.cdc_stalled`. A CDC position that shifts during the check is "in flight,
 no verdict" for the source comparisons too. The runs in a
 row that did not compare silver with gold are counted in `lakehouse.dq.gold_not_compared_runs`
 (alert SilverGoldNotCompared). The runs in a row at rest in which gold was not rebuilt after the
@@ -15,7 +15,7 @@ last data commit of silver, by Iceberg snapshots, are counted in `lakehouse.dq.g
 (alert GoldStaleAtRest, reconcile.gold_stale). Every value is logged as a `dq <name>=<value>` line
 and sent to statsd-exporter as a `lakehouse.*` gauge (lakehouse/metrics.py,
 observability/statsd/mapping.yml).
-Not exported: new quarantine rows, a Modify gate of the owner (W4-D8).
+Not exported: new quarantine rows, a Modify gate of the owner.
 """
 
 import json
@@ -221,7 +221,7 @@ def dq_checks() -> None:
 
     @task
     def reconcile_values(stalled: bool) -> None:
-        """Source against silver, and silver against gold, by value (W5-T04), and the GMV of each
+        """Source against silver, and silver against gold, by value, and the GMV of each
         day, source against gold. Only at rest: with work in flight the layers differ for a reason
         that is not an error. A CDC that stands leaves out the source pairs; silver-gold needs
         nothing from the source. The source pairs are dropped as "in flight" when the CDC position
