@@ -1,6 +1,0 @@
-[
- {"id": "O1", "what": "verify offsets check: holes no longer counted (only duplicates)",
-  "file": "scripts/chaos/lib.sh",
-  "old": "                       having count(*) > count(distinct kafka_offset)\n                          or max(kafka_offset) - min(kafka_offset) + 1\n                            > count(distinct kafka_offset))", "new": "                       having count(*) > count(distinct kafka_offset))",
-  "tests": ["tests/unit/test_chaos_silver_kill.py", "tests/unit/test_verify_script.py", "tests/unit/test_reconcile_shell.py", "tests/unit/test_makefile.py"]}
-]

@@ -34,7 +34,7 @@ Status of every component, with dates and sources: [docs/evidence.md](docs/evide
 
 The author set the architecture and the ADRs, approved every risky action and accepted each result
 against recorded evidence; AI coding agents wrote the code and the documentation under that
-process: [How it was built](docs/evidence.md#how-it-was-built).
+process: [the process page](docs/harness.md).
 
 ## Architecture
 

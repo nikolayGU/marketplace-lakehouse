@@ -880,63 +880,9 @@ Decision details:
 
 ## How it was built
 
-The project is built by AI agents working for one engineer. The agents wrote the code, the tests
-and the documentation; the owner decided the architecture, approved every risky action and
-accepted the results. This section lists the artifacts that show it, and counts only what the
-artifacts contain. The rules are in [AGENTS.md](../AGENTS.md) and
-[docs/planning/13-harness.md](planning/13-harness.md) (sections 1 to 6; written in Russian, like
-all of `docs/planning/`).
-
-**Roles.** One orchestrator session (Opus) plus five roles in
-[`.claude/agents/`](../.claude/agents): `Explore` (search), `scout` (analysis and read-only
-probes), `implementer` (code), `reviewer` (independent review in a fresh context), `docs-writer`
-(these documents). A task is a card in a spec with a "done when" line and a recorded result
-("Итог") naming who did what and the reviewer verdict.
-
-**Decisions.** Every decision of the closing block is a row in
-[the W6 spec](planning/14-closeout-spec.md), section 2, with a group: 17 decisions, 4 taken by the
-agent alone (group A), 5 by the agent after a `reviewer` verdict (group B), 8 by the owner
-(group C: pushes and delegation, replay budget, live changes, access rights, and whether these
-documents say how the project was built). The architecture
-decisions behind the code are ADR-001 to ADR-030 in [DECISIONS.md](../DECISIONS.md); code is not
-written against an ADR, a new ADR comes first.
-
-**Owner approvals.** Actions with a blast radius (live deletes, replay spending, pushes, changes to
-the source or the connector) stop until the owner says yes; a hook enforces part of it
-(`.claude/hooks/guard.py`), including a refusal to commit without a full `make verify`, `make check`
-and a `reviewer` verdict on the same tree. The approvals are logged in [HANDOFF](HANDOFF.md),
-"Журнал «ок»": 28 entries dated 2026-10-27 to 2026-10-29 (`git show 46f5282:docs/HANDOFF.md | grep
--c '^| 2[789]\.10'` prints 28). The same period holds 14 commits (`git log --oneline 8964292..HEAD |
-wc -l` at HEAD `46f5282`). The two numbers count different things: one approval can cover a live
-step, a decision or a push, not only a commit. No commit message carries an attribution line (`git
-log` has none).
-
-**What review found.** Review by a separate agent in a fresh context returned work before it was
-accepted. Examples, each with its record in [the W6 spec](planning/14-closeout-spec.md):
-
-- Dashboard (W6-T01), round 0 "return", 1 high: order counts doubled when summed over states
-  (96 650 against 96 163 real orders). Fixed by taking orders from `fct_orders`; see
-  [Dashboard](#dashboard).
-- `dq_checks` while CDC stands (W6-T07), round 0 "return", 2 high: the first version switched the
-  value reconciliation off on any source write, which weakened the check, and the DAG wiring had no
-  tests. The detector was redesigned to look at the replication slot, a difference at rest stays red
-  when the source is silent, and 25 mutations of the new code were killed by the tests. Live proof:
-  scenario 6 on 2026-10-29, above.
-- First live maintenance (W5-T05b), plan review round 0 "return", 1 high: the rows of the JDBC
-  catalog point to snapshots from before the catalog switch of 2026-10-08, and expire and orphan
-  removal delete those files, so the rollback point would have been lost silently. Result: a decision
-  to take a copy of `warehouse/` as the first step of the procedure.
-- Harness (v0.3), round 0 "return", 1 high: a late "return" verdict without a tree id left an
-  earlier "accept" valid. Accepted and fixed in round 1 ([HANDOFF](HANDOFF.md), 2026-10-29).
-- Not found by review: the fixed-clock test that broke CI (see [CI and smoke](#ci-and-smoke)).
-  It was caught by the pipeline after the push.
-
-**Limits of the process.** `implementer` and `reviewer` hit their 60 turn limit on a long task
-(about 22 and 29 minutes); the limit was raised to 100 and the owner asked the orchestrator to
-finish the first fix round itself ([HANDOFF](HANDOFF.md), "harness v0.3"). The approval log is
-kept by the agents with the owner's answer quoted or paraphrased, and it is not a signed record;
-the entries of 2026-10-23 and 2026-10-24 were written after the fact and say so.
-
-**These documents.** README, ARCHITECTURE, this page and the interview notes were drafted by the
-`docs-writer` role from the cards' recorded results, with the source next to each number. A
-fresh-context agent checks the result before it is accepted (`AGENTS.md`).
+AI agents wrote the code, tests and documents; one owner decided the architecture, approved every
+risky action and accepted each result. [docs/harness.md](harness.md) describes the roles, hooks,
+stamps and approvals, what review caught and what did not work. As of 2026-11-21 (commit `3bd4633`):
+180 commits from 2026-09-19 (`git rev-list --count HEAD`), 0 attribution lines in commit messages
+(`git log --format=%B | grep -ci 'co-authored-by'`), 126 owner approval rows (`grep -chE '^\| [0-9]{2}\.[0-9]{2}' docs/HANDOFF.md docs/planning/archive/HANDOFF-*.md`)
+and 893 hook tests passed (`uv run pytest tests/unit/test_agent_hooks.py -q | tail -1`).
